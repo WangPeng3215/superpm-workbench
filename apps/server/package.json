@@ -1,0 +1,27 @@
+{
+  "name": "@superpm/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "build": "tsup src/index.ts --format esm --platform node --target node22 --out-dir dist --external better-sqlite3 --external drizzle-orm",
+    "typecheck": "tsc -p tsconfig.json",
+    "db:migrate": "tsx src/db/migrate-cli.ts"
+  },
+  "dependencies": {
+    "@fastify/static": "^10.1.6",
+    "@superpm/shared": "0.1.0",
+    "better-sqlite3": "^12.4.1",
+    "dotenv": "^17.2.0",
+    "drizzle-orm": "^0.45.4",
+    "fastify": "^5.6.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "tsup": "^8.5.0",
+    "tsx": "^4.20.0"
+  }
+}

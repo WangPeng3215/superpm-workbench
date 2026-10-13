@@ -1,0 +1,35 @@
+{
+  "name": "superpm-workbench",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22.12.0 <25"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n server,web -c cyan,green \"npm run dev -w @superpm/server\" \"npm run dev -w @superpm/web\"",
+    "build": "npm run build -w @superpm/web && npm run build -w @superpm/server",
+    "start": "npm run start -w @superpm/server",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "vitest run",
+    "db:migrate": "npm run db:migrate -w @superpm/server",
+    "test:e2e": "npm run build -w @superpm/web && playwright test",
+    "format": "prettier --write apps packages tests scripts *.ts *.json",
+    "format:check": "prettier --check apps packages tests scripts *.ts *.json"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.0",
+    "@types/node": "^22.15.0",
+    "concurrently": "^9.2.0",
+    "prettier": "^3.9.10",
+    "typescript": "~5.9.3",
+    "vitest": "^5.0.4"
+  },
+  "overrides": {
+    "esbuild": "^0.28.1"
+  }
+}
