@@ -3,11 +3,13 @@ import fastifyStatic from "@fastify/static";
 import Database from "better-sqlite3";
 import { ZodError, z } from "zod";
 import { StageWorkspaceService } from "./services/stage-workspace.js";
+import { RequirementFileService } from "./services/requirement-files.js";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { defaultPaths, ensurePaths, projectRoot } from "./config/index.js";
 import { migrate, SCHEMA_VERSION } from "./db/migrate.js";
 import { RequirementService, DomainError } from "./services/requirements.js";
+import { stages } from "@superpm/shared";
 
 export interface CreateAppOptions {
   databasePath?: string;
@@ -46,6 +48,11 @@ export async function createApp(
   }
   const service = new RequirementService(db);
   const workspaceService = new StageWorkspaceService(
+    db,
+    paths.workspacePath,
+    service,
+  );
+  const fileService = new RequirementFileService(
     db,
     paths.workspacePath,
     service,
@@ -123,6 +130,84 @@ export async function createApp(
   app.get<{ Params: { id: string } }>(
     "/api/requirements/:id/history",
     async (request) => service.history(parseId(request.params.id)),
+  );
+  app.get<{ Params: { id: string } }>(
+    "/api/requirements/:id/relations",
+    async (request) => service.relations(parseId(request.params.id)),
+  );
+  const fileListQuery = z.object({
+    phase: z.enum(stages).default("analysis"),
+    all: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((value) => value === "true"),
+  });
+  app.get<{ Params: { id: string } }>(
+    "/api/requirements/:id/files",
+    async (request) => {
+      const query = fileListQuery.parse(request.query ?? {});
+      return fileService.list(
+        parseId(request.params.id),
+        query.phase,
+        query.all,
+      );
+    },
+  );
+  app.post<{ Params: { id: string } }>(
+    "/api/requirements/:id/files",
+    async (request, reply) =>
+      reply
+        .status(201)
+        .send(fileService.create(parseId(request.params.id), request.body)),
+  );
+  app.get<{ Params: { id: string; fileId: string } }>(
+    "/api/requirements/:id/files/:fileId/content",
+    async (request) =>
+      fileService.content(
+        parseId(request.params.id),
+        parseId(request.params.fileId),
+      ),
+  );
+  app.put<{ Params: { id: string; fileId: string } }>(
+    "/api/requirements/:id/files/:fileId/content",
+    async (request) =>
+      fileService.saveContent(
+        parseId(request.params.id),
+        parseId(request.params.fileId),
+        request.body,
+      ),
+  );
+  app.get<{ Params: { id: string; fileId: string } }>(
+    "/api/requirements/:id/files/:fileId/raw",
+    async (request, reply) => {
+      const raw = fileService.raw(
+        parseId(request.params.id),
+        parseId(request.params.fileId),
+      );
+      return reply
+        .header("X-Content-Type-Options", "nosniff")
+        .type(raw.mime)
+        .send(raw.data);
+    },
+  );
+  app.patch<{ Params: { id: string; fileId: string } }>(
+    "/api/requirements/:id/files/:fileId",
+    async (request) =>
+      fileService.update(
+        parseId(request.params.id),
+        parseId(request.params.fileId),
+        request.body,
+      ),
+  );
+  app.delete<{ Params: { id: string; fileId: string } }>(
+    "/api/requirements/:id/files/:fileId",
+    async (request, reply) => {
+      fileService.remove(
+        parseId(request.params.id),
+        parseId(request.params.fileId),
+      );
+      return reply.status(204).send();
+    },
   );
   const webRoot = join(projectRoot, "apps", "web", "dist");
   app.get<{ Params: { id: string } }>(

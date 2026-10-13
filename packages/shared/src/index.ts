@@ -169,6 +169,72 @@ export interface RequirementListResult {
   pageSize: number;
   matchedCount: number;
 }
+export interface RequirementRelations {
+  parent: Requirement | null;
+  children: Requirement[];
+}
+export const fileCategories = ["record", "prototype", "prd", "other"] as const;
+export type FileCategory = (typeof fileCategories)[number];
+export const fileCategoryLabels: Record<FileCategory, string> = {
+  record: "需求分析文档",
+  prototype: "原型图",
+  prd: "PRD",
+  other: "其他",
+};
+export const fileCategoryFolders: Record<FileCategory, string> = {
+  record: "分析记录",
+  prototype: "原型图",
+  prd: "PRD",
+  other: "其他",
+};
+export const analysisRecordName = "分析记录";
+export const requirementFileCreateSchema = z
+  .object({
+    phase: z.enum(stages),
+    category: z.enum(fileCategories),
+    name: z.string().trim().min(1, "请输入文件名称").max(200),
+    mime: z.string().trim().max(200).default("application/octet-stream"),
+    data: z
+      .string()
+      .min(1, "文件内容不能为空")
+      .max(7 * 1024 * 1024),
+    isFinal: z.boolean().default(false),
+  })
+  .strict();
+export const requirementFileUpdateSchema = z
+  .object({
+    name: z.string().trim().min(1, "请输入文件名称").max(200).optional(),
+    isFinal: z.boolean().optional(),
+  })
+  .strict()
+  .refine((value) => Object.keys(value).length > 0, "请提交需要更新的字段");
+export const requirementFileContentSchema = z
+  .object({ content: z.string().max(200000) })
+  .strict();
+export type RequirementFileCreate = z.input<typeof requirementFileCreateSchema>;
+export interface RequirementFile {
+  id: number;
+  requirementId: number;
+  phase: Stage;
+  category: FileCategory;
+  name: string;
+  fileName: string;
+  isFinal: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface RequirementFileGroup {
+  category: FileCategory;
+  label: string;
+  total: number;
+  files: RequirementFile[];
+}
+export interface RequirementFileList {
+  phase: Stage;
+  all: boolean;
+  groups: RequirementFileGroup[];
+  editorFile: RequirementFile | null;
+}
 export interface StageHistory {
   id: number;
   requirementId: number;

@@ -10,6 +10,11 @@ export const router = createRouter({
       meta: { title: "需求工作台" },
     },
     {
+      path: "/requirements/:id",
+      component: () => import("../pages/RequirementDetailPage.vue"),
+      meta: { title: "需求详情" },
+    },
+    {
       path: "/tasks",
       component: () => import("../pages/PlannedPage.vue"),
       meta: { title: "每日任务历史", module: "tasks" },

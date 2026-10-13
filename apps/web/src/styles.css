@@ -51,15 +51,11 @@ a:focus-visible {
   font-size: 22px;
   letter-spacing: -0.7px;
 }
-.brand-symbol {
-  display: grid;
-  place-items: center;
-  background: #4e6ef2;
-  color: #fff;
+.brand-logo {
   width: 38px;
   height: 38px;
-  border-radius: 10px;
-  font-size: 24px;
+  flex: none;
+  object-fit: contain;
 }
 .brand small {
   display: block;
@@ -134,8 +130,8 @@ a:focus-visible {
   min-width: 0;
 }
 .topbar {
-  height: 66px;
-  padding: 0 32px;
+  height: 56px;
+  padding: 0 24px;
   background: #fff;
   border-bottom: 1px solid #e7ebf1;
   display: flex;
@@ -166,7 +162,7 @@ a:focus-visible {
   color: #bd7956;
 }
 .page-content {
-  padding: 32px;
+  padding: 20px 24px;
   max-width: 1700px;
   margin: 0 auto;
 }
@@ -203,6 +199,56 @@ h2 {
   font-size: 12px;
   color: #8994a6;
   line-height: 1.8;
+}
+.enum-tag {
+  flex: none;
+  height: 21px;
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 500;
+  border-width: 1px;
+  border-style: solid;
+  --el-tag-border-radius: 4px;
+}
+.enum-tag.tone-blue {
+  color: #3c66dd;
+  background: #eef3ff;
+  border-color: #d9e3fe;
+}
+.enum-tag.tone-teal {
+  color: #2f8f81;
+  background: #eaf7f4;
+  border-color: #cfebe5;
+}
+.enum-tag.tone-green {
+  color: #3f8f6a;
+  background: #ecf7f1;
+  border-color: #d2ebdf;
+}
+.enum-tag.tone-amber {
+  color: #ab7a2a;
+  background: #fdf5e6;
+  border-color: #f4e3c2;
+}
+.enum-tag.tone-red {
+  color: #cc5566;
+  background: #fdeef0;
+  border-color: #f7d7dc;
+}
+.enum-tag.tone-purple {
+  color: #7b5ec4;
+  background: #f2eeff;
+  border-color: #e1d9fb;
+}
+.enum-tag.tone-slate {
+  color: #69737f;
+  background: #f1f4f8;
+  border-color: #e1e6ec;
+}
+.enum-tag.tone-gray {
+  color: #7d8a9c;
+  background: #f4f6f9;
+  border-color: #e6eaf0;
 }
 .error-alert {
   margin-bottom: 16px;

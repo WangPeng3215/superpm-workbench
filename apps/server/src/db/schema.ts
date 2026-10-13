@@ -4,7 +4,7 @@ import {
   text,
   type AnySQLiteColumn,
 } from "drizzle-orm/sqlite-core";
-import type { Requirement, Stage } from "@superpm/shared";
+import type { Requirement, RequirementFile, Stage } from "@superpm/shared";
 export const requirements = sqliteTable("requirements", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   requirementNo: text("requirement_no").notNull().unique(),
@@ -38,6 +38,19 @@ export const stageHistory = sqliteTable("requirement_history", {
   actor: text("actor").notNull(),
   note: text("note").notNull(),
   createdAt: text("created_at").notNull(),
+});
+export const requirementFiles = sqliteTable("requirement_files", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  requirementId: integer("requirement_id")
+    .notNull()
+    .references(() => requirements.id),
+  phase: text("phase").$type<Stage>().notNull(),
+  category: text("category").$type<RequirementFile["category"]>().notNull(),
+  name: text("name").notNull(),
+  fileName: text("file_name").notNull(),
+  isFinal: integer("is_final", { mode: "boolean" }).notNull().default(false),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
 });
 export const requirementAudit = sqliteTable("requirement_audit", {
   id: integer("id").primaryKey({ autoIncrement: true }),

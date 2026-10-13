@@ -95,6 +95,9 @@ test("four stage workspace persists documents, links and issue resolution", asyn
   await page.goto("/requirements");
   const row = await addRequirement(page, name);
   await row.locator(".requirement-no").click();
+  await expect(page).toHaveURL(/\/requirements\/\d+$/);
+  await expect(page.getByRole("tab", { name: "需求详情" })).toBeVisible();
+  await page.getByRole("button", { name: "阶段工作台", exact: true }).click();
   const drawer = page.locator(".xly-drawer");
   await expect(drawer).toBeVisible();
   await drawer.locator("textarea").fill("# 分析记录\n\n阶段验收内容");
@@ -143,17 +146,11 @@ test("four stage workspace persists documents, links and issue resolution", asyn
   expect(workspace.testing[0].status).toBe("resolved");
   await drawer.locator(".progress-stage").nth(2).click();
   await drawer.getByRole("button", { name: /从问题创建子需求/ }).click();
-  await expect(
-    page.locator("tr.editing-row").getByRole("textbox", { name: "需求名称" }),
-  ).toHaveValue("开发阻塞");
-  await page
-    .locator("tr.editing-row")
-    .getByRole("button", { name: "保存", exact: true })
-    .click();
-  await page.reload();
+  await expect(page.getByText(/子需求已创建/)).toBeVisible();
   const updated = await (
     await request.get(`/api/requirements?q=${encodeURIComponent(name)}`)
   ).json();
+  expect(updated.items[0].children[0].name).toBe("开发阻塞");
   expect(updated.items[0].children[0].description).toContain(
     "需要支持批量上传",
   );

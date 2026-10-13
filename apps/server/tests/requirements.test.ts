@@ -114,6 +114,25 @@ describe("requirements API with real SQLite", () => {
       200,
     );
   });
+  it("returns the parent and children used for relationship rendering", async () => {
+    const parent = await create(input("父需求"));
+    const child = await create({ ...input("子需求"), parentId: parent.id });
+    const parentRelations = (
+      await app.inject(`/api/requirements/${parent.id}/relations`)
+    ).json();
+    expect(parentRelations.parent).toBeNull();
+    expect(
+      parentRelations.children.map((item: Requirement) => item.id),
+    ).toEqual([child.id]);
+    const childRelations = (
+      await app.inject(`/api/requirements/${child.id}/relations`)
+    ).json();
+    expect(childRelations.parent.id).toBe(parent.id);
+    expect(childRelations.children).toEqual([]);
+    expect(
+      (await app.inject("/api/requirements/999/relations")).statusCode,
+    ).toBe(404);
+  });
   it("soft deletes children, excludes them from queries, never reuses numbers", async () => {
     const parent = await create();
     const child = await create({ ...input("子需求"), parentId: parent.id });
@@ -205,7 +224,7 @@ describe("requirements API with real SQLite", () => {
       status: "ok",
     });
     expect((await app.inject("/api/system")).json()).toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 3,
       workspacePath: join(directory, "workspace"),
     });
     expect((await app.inject("/api/requirements")).json().total).toBe(0);

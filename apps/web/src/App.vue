@@ -33,8 +33,9 @@ onMounted(async () => {
   <div class="app-layout">
     <aside class="sidebar">
       <RouterLink to="/requirements" class="brand" aria-label="superPM 首页"
-        ><span class="brand-symbol">S</span
-        ><span>superPM<small>workbench</small></span></RouterLink
+        ><img class="brand-logo" src="/logo-mark.png" alt="superPM" /><span
+          >superPM<small>workbench</small></span
+        ></RouterLink
       >
       <div class="workspace-label">个人工作空间</div>
       <nav class="navigation" aria-label="主导航">

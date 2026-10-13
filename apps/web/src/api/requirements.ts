@@ -3,6 +3,7 @@ import type {
   RequirementCreate,
   RequirementListQuery,
   RequirementListResult,
+  RequirementRelations,
   RequirementUpdate,
   StageHistory,
   StageWorkspace,
@@ -31,6 +32,8 @@ export const requirementApi = {
     request<void>(`/requirements/${id}`, { method: "DELETE" }),
   history: (id: number) =>
     request<StageHistory[]>(`/requirements/${id}/history`),
+  relations: (id: number) =>
+    request<RequirementRelations>(`/requirements/${id}/relations`),
   workspace: (id: number) =>
     request<StageWorkspace>(`/requirements/${id}/workspace`),
   saveWorkspace: (id: number, data: StageWorkspace) =>

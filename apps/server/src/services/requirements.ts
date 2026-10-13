@@ -71,6 +71,13 @@ export class RequirementService {
     this.get(id);
     return this.repo.history(id);
   }
+  relations(id: number) {
+    const item = this.get(id);
+    return {
+      parent: item.parentId === null ? null : (this.repo.get(item.parentId) ?? null),
+      children: this.repo.children(id),
+    };
+  }
   private checkParent(parentId: number | null, id?: number) {
     if (parentId === null) return;
     const parent = this.get(parentId);

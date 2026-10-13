@@ -1,14 +1,13 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
+import { useRouter } from "vue-router";
 import {
   Plus,
   Search,
-  Refresh,
   Setting,
   ArrowDown,
   ArrowUp,
   Document,
-  MoreFilled,
 } from "@element-plus/icons-vue";
 import {
   dateFields,
@@ -21,9 +20,10 @@ import {
 } from "@superpm/shared";
 import XlyButton from "../components/ease-ui/xly-button/index.vue";
 import XlyEmpty from "../components/ease-ui/xly-empty/index.vue";
-import RequirementDetail from "../features/requirements/RequirementDetail.vue";
 import RichTextEditor from "../features/requirements/RichTextEditor.vue";
+import { isEnumField, tagTone } from "../features/requirements/enum-tags";
 import { useEditableTable } from "../features/requirements/useEditableTable";
+const router = useRouter();
 const {
   list,
   loading,
@@ -51,13 +51,6 @@ const {
   save,
   rows,
   isEditing,
-  selected,
-  history,
-  showDrawer,
-  viewingStage,
-  stageSaving,
-  openDetail,
-  changeStage,
   remove,
 } = useEditableTable();
 const richOpen = ref(false),
@@ -145,155 +138,142 @@ function sortable(key: string) {
     "updatedAt",
   ].includes(key);
 }
-async function childFromDetail(
-  parentId: number,
-  name: string,
-  description: string,
-  descriptionHtml: string,
-) {
-  showDrawer.value = false;
-  await create(parentId, { name, description, descriptionHtml });
+function openDetailPage(row: Requirement) {
+  router.push(`/requirements/${row.id}`);
 }
-const activeFilters = computed(
-  () =>
-    Object.entries(filters).filter(
-      ([key, value]) =>
-        !["page", "pageSize", "sortBy", "sortOrder"].includes(key) && value,
-    ).length,
-);
 </script>
 <template>
-  <div class="page-heading compact-heading">
-    <div>
-      <div class="eyebrow">需求管理 / REQUIREMENTS</div>
-      <h1>
-        需求工作台 <span class="heading-count">{{ list.total }}</span>
-      </h1>
-      <p>直接编辑需求，沿着分析、设计、开发与测试推进。</p>
-    </div>
-    <div class="heading-actions">
-      <span class="workspace-hint">本地保存 · 两级需求</span
-      ><XlyButton type="primary" :disabled="saving" @click="create()"
-        ><template #icon><Plus /></template>新增需求</XlyButton
-      >
-    </div>
-  </div>
   <section class="surface filter-panel">
-    <div class="filter-panel-heading">
-      <strong>筛选需求</strong
-      ><span v-if="activeFilters" class="filter-count"
-        >{{ activeFilters }} 个条件</span
-      ><el-button link @click="expandedDates = !expandedDates"
-        >{{ expandedDates ? "收起时间条件" : "更多时间条件"
-        }}<el-icon><ArrowUp v-if="expandedDates" /><ArrowDown v-else /></el-icon
-      ></el-button>
-    </div>
     <el-form
       label-position="top"
       class="filter-form"
       @submit.prevent="applyFilters"
     >
-      <el-form-item label="需求名称"
-        ><el-input
-          v-model="filters.q"
-          clearable
-          placeholder="输入名称或编号搜索"
-          :prefix-icon="Search"
-          @keyup.enter="applyFilters"
-      /></el-form-item>
-      <el-form-item label="需求类型"
-        ><el-select v-model="filters.type" placeholder="全部类型" clearable
-          ><el-option
-            v-for="(label, value) in typeLabels"
-            :key="value"
-            :label="label"
-            :value="value" /></el-select
-      ></el-form-item>
-      <el-form-item label="状态"
-        ><el-select v-model="filters.status" placeholder="全部状态" clearable
-          ><el-option
-            v-for="(label, value) in statusLabels"
-            :key="value"
-            :label="label"
-            :value="value" /></el-select
-      ></el-form-item>
-      <el-form-item label="优先级"
-        ><el-select
-          v-model="filters.priority"
-          placeholder="全部优先级"
-          clearable
-          ><el-option
-            v-for="value in priorities"
-            :key="value"
-            :label="value"
-            :value="value" /></el-select
-      ></el-form-item>
-      <el-form-item label="提出时间" class="date-filter"
-        ><el-date-picker
-          v-model="dateRanges.proposedAt"
-          type="daterange"
-          value-format="YYYY-MM-DD"
-          start-placeholder="开始日期"
-          end-placeholder="结束日期"
-          range-separator="至"
-      /></el-form-item>
-      <div class="filter-buttons">
-        <el-button type="primary" @click="applyFilters">查询</el-button
-        ><el-button @click="clearFilters">重置</el-button>
-      </div>
-      <template v-if="expandedDates"
-        ><el-form-item
-          v-for="key in dateFields.filter((key) => key !== 'proposedAt')"
-          :key="key"
-          :label="dateLabels[key]"
-          class="date-filter extra-date"
+      <div class="filter-fields">
+        <el-form-item label="需求名称"
+          ><el-input
+            v-model="filters.q"
+            clearable
+            placeholder="输入名称或编号搜索"
+            :prefix-icon="Search"
+            @keyup.enter="applyFilters"
+        /></el-form-item>
+        <el-form-item label="需求类型"
+          ><el-select v-model="filters.type" placeholder="全部类型" clearable
+            ><template #label="{ label, value }"
+              ><el-tag
+                size="small"
+                class="enum-tag"
+                :class="tagTone('type', value)"
+                >{{ label }}</el-tag
+              ></template
+            ><el-option
+              v-for="(label, value) in typeLabels"
+              :key="value"
+              :label="label"
+              :value="value"
+              ><el-tag
+                size="small"
+                class="enum-tag"
+                :class="tagTone('type', value)"
+                >{{ label }}</el-tag
+              ></el-option
+            ></el-select
+          ></el-form-item
+        >
+        <el-form-item label="状态"
+          ><el-select v-model="filters.status" placeholder="全部状态" clearable
+            ><template #label="{ label, value }"
+              ><el-tag
+                size="small"
+                class="enum-tag"
+                :class="tagTone('status', value)"
+                >{{ label }}</el-tag
+              ></template
+            ><el-option
+              v-for="(label, value) in statusLabels"
+              :key="value"
+              :label="label"
+              :value="value"
+              ><el-tag
+                size="small"
+                class="enum-tag"
+                :class="tagTone('status', value)"
+                >{{ label }}</el-tag
+              ></el-option
+            ></el-select
+          ></el-form-item
+        >
+        <el-form-item label="优先级"
+          ><el-select
+            v-model="filters.priority"
+            placeholder="全部优先级"
+            clearable
+            ><template #label="{ label, value }"
+              ><el-tag
+                size="small"
+                class="enum-tag"
+                :class="tagTone('priority', value)"
+                >{{ label }}</el-tag
+              ></template
+            ><el-option
+              v-for="value in priorities"
+              :key="value"
+              :label="value"
+              :value="value"
+              ><el-tag
+                size="small"
+                class="enum-tag"
+                :class="tagTone('priority', value)"
+                >{{ value }}</el-tag
+              ></el-option
+            ></el-select
+          ></el-form-item
+        >
+        <el-form-item label="提出时间" class="date-filter"
           ><el-date-picker
-            v-model="dateRanges[key]"
+            v-model="dateRanges.proposedAt"
             type="daterange"
             value-format="YYYY-MM-DD"
             start-placeholder="开始日期"
             end-placeholder="结束日期"
-            range-separator="至" /></el-form-item
-      ></template>
+            range-separator="至"
+        /></el-form-item>
+        <template v-if="expandedDates"
+          ><el-form-item
+            v-for="key in dateFields.filter((key) => key !== 'proposedAt')"
+            :key="key"
+            :label="dateLabels[key]"
+            class="date-filter extra-date"
+            ><el-date-picker
+              v-model="dateRanges[key]"
+              type="daterange"
+              value-format="YYYY-MM-DD"
+              start-placeholder="开始日期"
+              end-placeholder="结束日期"
+              range-separator="至" /></el-form-item
+        ></template>
+        <el-button
+          class="date-toggle"
+          link
+          @click="expandedDates = !expandedDates"
+          >{{ expandedDates ? "收起时间条件" : "更多时间条件"
+          }}<el-icon
+            ><ArrowUp v-if="expandedDates" /><ArrowDown v-else /></el-icon
+        ></el-button>
+      </div>
+      <div class="filter-actions">
+        <el-button type="primary" @click="applyFilters">查询</el-button
+        ><el-button @click="clearFilters">重置</el-button
+        ><span class="action-divider" /><el-button
+          :icon="Setting"
+          @click="showColumns = true"
+          >列设置</el-button
+        >
+      </div>
     </el-form>
   </section>
   <section class="surface requirement-surface">
-    <div class="workspace-toolbar">
-      <div class="toolbar-title">
-        <h2>全部需求</h2>
-        <el-tag size="small" effect="plain">表格视图</el-tag
-        ><span class="toolbar-note">点击单元格编辑 · 点击编号打开详情</span>
-      </div>
-      <div class="toolbar-actions">
-        <el-select
-          v-model="filters.sortBy"
-          style="width: 155px"
-          aria-label="排序字段"
-          @change="load"
-          ><el-option label="最近更新" value="updatedAt" /><el-option
-            v-for="column in columns.filter(
-              (c) => sortable(c.key) && c.key !== 'updatedAt',
-            )"
-            :key="column.key"
-            :label="column.label"
-            :value="column.key" /></el-select
-        ><el-button
-          aria-label="切换排序方向"
-          @click="
-            filters.sortOrder = filters.sortOrder === 'desc' ? 'asc' : 'desc';
-            load();
-          "
-          >{{ filters.sortOrder === "desc" ? "降序" : "升序" }}</el-button
-        ><el-button :icon="Setting" @click="showColumns = true"
-          >列设置</el-button
-        ><el-button
-          :icon="Refresh"
-          circle
-          aria-label="刷新需求"
-          @click="load"
-        />
-      </div>
-    </div>
     <el-alert
       v-if="loadError || formError"
       :title="loadError || formError"
@@ -354,7 +334,7 @@ const activeFilters = computed(
             ><button
               v-else
               class="link-button requirement-no"
-              @click="openDetail(row)"
+              @click="openDetailPage(row)"
             >
               {{ row.requirementNo }}
             </button>
@@ -371,12 +351,28 @@ const activeFilters = computed(
             v-else-if="isEditing(row) && column.kind === 'select'"
             v-model="(form as any)[column.key]"
             :aria-label="column.label"
+            ><template #label="{ label, value }"
+              ><el-tag
+                v-if="isEnumField(String(column.key))"
+                size="small"
+                class="enum-tag"
+                :class="tagTone(String(column.key), value)"
+                >{{ label }}</el-tag
+              ><span v-else>{{ label }}</span></template
             ><el-option
               v-for="(label, value) in options(column.key)"
               :key="value"
               :label="label"
               :value="value"
-          /></el-select>
+              ><el-tag
+                v-if="isEnumField(String(column.key))"
+                size="small"
+                class="enum-tag"
+                :class="tagTone(String(column.key), value)"
+                >{{ label }}</el-tag
+              ><template v-else>{{ label }}</template></el-option
+            ></el-select
+          >
           <el-date-picker
             v-else-if="isEditing(row) && column.kind === 'date'"
             v-model="(form as any)[column.key]"
@@ -402,25 +398,28 @@ const activeFilters = computed(
           <button
             v-else-if="column.kind !== 'readonly'"
             class="cell-value"
-            :class="[
-              column.key === 'name' ? 'name-cell' : '',
-              column.key === 'status' ? 'status-' + row.status : '',
-              column.key === 'priority' ? 'priority-' + row.priority : '',
-            ]"
+            :class="column.key === 'name' ? 'name-cell' : ''"
             @click="edit(row)"
           >
-            <i v-if="column.key === 'status'" class="status-dot"></i
-            >{{ valueLabel(row, column.key)
-            }}<span
-              v-if="column.key === 'name' && row.parentId"
-              class="child-mark"
-              >子需求</span
+            <el-tag
+              v-if="isEnumField(String(column.key))"
+              size="small"
+              class="enum-tag"
+              :class="tagTone(String(column.key), row[column.key])"
+              >{{ valueLabel(row, column.key) }}</el-tag
+            ><template v-else
+              >{{ valueLabel(row, column.key)
+              }}<span
+                v-if="column.key === 'name' && row.parentId"
+                class="child-mark"
+                >子需求</span
+              ></template
             >
           </button>
           <span v-else>{{ valueLabel(row, column.key) }}</span>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="178" fixed="right"
+      <el-table-column label="操作" width="195" fixed="right"
         ><template #default="{ row }"
           ><div v-if="isEditing(row)" class="row-actions">
             <el-button link type="primary" :loading="saving" @click="save"
@@ -431,6 +430,7 @@ const activeFilters = computed(
             <el-button link type="primary" @click="edit(row)">编辑</el-button
             ><el-button
               v-if="!row.parentId"
+              class="child-action"
               link
               type="primary"
               @click="
@@ -438,24 +438,9 @@ const activeFilters = computed(
                 create(row.id);
               "
               >子需求</el-button
-            ><el-dropdown
-              @command="
-                (command: string) =>
-                  command === 'detail' ? openDetail(row) : remove(row)
-              "
-              ><el-button
-                link
-                :icon="MoreFilled"
-                aria-label="更多操作"
-              /><template #dropdown
-                ><el-dropdown-menu
-                  ><el-dropdown-item command="detail">打开详情</el-dropdown-item
-                  ><el-dropdown-item command="delete" divided
-                    >删除需求</el-dropdown-item
-                  ></el-dropdown-menu
-                ></template
-              ></el-dropdown
-            >
+            ><el-button link type="primary" @click="openDetailPage(row)"
+              >详情</el-button
+            ><el-button link type="danger" @click="remove(row)">删除</el-button>
           </div></template
         ></el-table-column
       >
@@ -535,22 +520,6 @@ const activeFilters = computed(
     :text="form.description"
     :requirement-id="richTarget?.id"
     @save="saveRich"
-  />
-  <RequirementDetail
-    v-if="showDrawer"
-    v-model="showDrawer"
-    v-model:viewing-stage="viewingStage"
-    :selected="selected"
-    :history="history"
-    :stage-saving="stageSaving"
-    @edit="
-      showDrawer = false;
-      edit($event);
-    "
-    @remove="remove"
-    @change-stage="changeStage"
-    @create-child="childFromDetail"
-    @updated="load"
   />
 </template>
 <style scoped src="../features/requirements/workbench.css"></style>
