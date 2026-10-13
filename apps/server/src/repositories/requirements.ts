@@ -1,4 +1,15 @@
-import { and, asc, desc, eq, isNull, inArray, type SQL } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  isNull,
+  inArray,
+  gte,
+  lte,
+  type SQL,
+} from "drizzle-orm";
+import { dateFields } from "@superpm/shared";
 import {
   drizzle,
   type BetterSQLite3Database,
@@ -13,7 +24,11 @@ import { decodeDescription, encodeDescription } from "./description.js";
 
 type MutableFields = Partial<RequirementCreateParsed>;
 function decodeRequirement(row: typeof requirements.$inferSelect) {
-  return { ...row, description: decodeDescription(row.description) };
+  return {
+    ...row,
+    description: decodeDescription(row.description),
+    descriptionHtml: row.descriptionHtml ?? "",
+  };
 }
 export class RequirementsRepository {
   private readonly orm: BetterSQLite3Database;
@@ -51,6 +66,7 @@ export class RequirementsRepository {
       .values({
         ...data,
         description: encodeDescription(data.description),
+        descriptionHtml: data.descriptionHtml,
         requirementNo: `REQ-${String(next).padStart(4, "0")}`,
         createdAt: now,
         updatedAt: now,
@@ -86,6 +102,12 @@ export class RequirementsRepository {
     const filters: SQL[] = [isNull(requirements.deletedAt)];
     for (const key of ["type", "priority", "status", "currentStage"] as const) {
       if (query[key]) filters.push(eq(requirements[key], query[key]!));
+    }
+    for (const key of dateFields) {
+      const from = query[`${key}From`];
+      const to = query[`${key}To`];
+      if (from) filters.push(gte(requirements[key], from));
+      if (to) filters.push(lte(requirements[key], to));
     }
     const candidates = this.orm
       .select()
@@ -133,7 +155,7 @@ export class RequirementsRepository {
               isNull(requirements.deletedAt),
             ),
           )
-          .orderBy(asc(requirements.id))
+          .orderBy(order(requirements[query.sortBy]), asc(requirements.id))
           .all()
       : [];
     const items = roots.map((root) => ({

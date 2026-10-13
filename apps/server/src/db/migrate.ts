@@ -3,7 +3,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { projectRoot } from "../config/index.js";
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 const migrationsDir = join(projectRoot, "apps/server/drizzle");
 
 export function migrate(db: Database.Database) {

@@ -12,6 +12,7 @@ export const requirements = sqliteTable("requirements", {
   type: text("type").$type<Requirement["type"]>().notNull(),
   priority: text("priority").$type<Requirement["priority"]>().notNull(),
   description: text("description").notNull(),
+  descriptionHtml: text("description_html").notNull().default(""),
   status: text("status").$type<Requirement["status"]>().notNull(),
   currentStage: text("current_stage").$type<Stage>().notNull(),
   parentId: integer("parent_id").references(

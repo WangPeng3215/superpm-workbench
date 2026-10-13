@@ -1,7 +1,8 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import fastifyStatic from "@fastify/static";
 import Database from "better-sqlite3";
-import { ZodError } from "zod";
+import { ZodError, z } from "zod";
+import { StageWorkspaceService } from "./services/stage-workspace.js";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { defaultPaths, ensurePaths, projectRoot } from "./config/index.js";
@@ -44,7 +45,15 @@ export async function createApp(
     throw error;
   }
   const service = new RequirementService(db);
-  const app = Fastify({ logger: options.logger ?? true });
+  const workspaceService = new StageWorkspaceService(
+    db,
+    paths.workspacePath,
+    service,
+  );
+  const app = Fastify({
+    logger: options.logger ?? true,
+    bodyLimit: 8 * 1024 * 1024,
+  });
   app.addHook("onClose", async () => db.close());
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof ZodError) {
@@ -116,6 +125,39 @@ export async function createApp(
     async (request) => service.history(parseId(request.params.id)),
   );
   const webRoot = join(projectRoot, "apps", "web", "dist");
+  app.get<{ Params: { id: string } }>(
+    "/api/requirements/:id/workspace",
+    async (request) => workspaceService.get(parseId(request.params.id)),
+  );
+  app.put<{ Params: { id: string } }>(
+    "/api/requirements/:id/workspace",
+    async (request) =>
+      workspaceService.save(parseId(request.params.id), request.body),
+  );
+  app.post<{ Params: { id: string } }>(
+    "/api/requirements/:id/images",
+    async (request) =>
+      workspaceService.upload(
+        parseId(request.params.id),
+        z
+          .object({ data: z.string().max(7 * 1024 * 1024), mime: z.string() })
+          .strict()
+          .parse(request.body),
+      ),
+  );
+  app.get<{ Params: { id: string; filename: string } }>(
+    "/api/requirements/:id/images/:filename",
+    async (request, reply) => {
+      const image = workspaceService.image(
+        parseId(request.params.id),
+        request.params.filename,
+      );
+      return reply
+        .header("X-Content-Type-Options", "nosniff")
+        .type(image.mime)
+        .send(image.data);
+    },
+  );
   const webAvailable =
     options.serveWeb && existsSync(join(webRoot, "index.html"));
   try {

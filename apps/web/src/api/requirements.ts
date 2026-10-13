@@ -5,6 +5,7 @@ import type {
   RequirementListResult,
   RequirementUpdate,
   StageHistory,
+  StageWorkspace,
 } from "@superpm/shared";
 import { request } from "./client";
 
@@ -30,4 +31,16 @@ export const requirementApi = {
     request<void>(`/requirements/${id}`, { method: "DELETE" }),
   history: (id: number) =>
     request<StageHistory[]>(`/requirements/${id}/history`),
+  workspace: (id: number) =>
+    request<StageWorkspace>(`/requirements/${id}/workspace`),
+  saveWorkspace: (id: number, data: StageWorkspace) =>
+    request<StageWorkspace>(`/requirements/${id}/workspace`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+  uploadImage: (id: number, data: string, mime: string) =>
+    request<{ url: string }>(`/requirements/${id}/images`, {
+      method: "POST",
+      body: JSON.stringify({ data, mime }),
+    }),
 };

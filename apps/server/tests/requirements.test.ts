@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, existsSync } from "node:fs";
+import { dateFields } from "@superpm/shared";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
@@ -204,7 +205,7 @@ describe("requirements API with real SQLite", () => {
       status: "ok",
     });
     expect((await app.inject("/api/system")).json()).toMatchObject({
-      schemaVersion: 1,
+      schemaVersion: 2,
       workspacePath: join(directory, "workspace"),
     });
     expect((await app.inject("/api/requirements")).json().total).toBe(0);
@@ -308,5 +309,136 @@ describe("requirements API with real SQLite", () => {
       (await app.inject(`/api/requirements/${requirement.id}`)).json()
         .description,
     ).toBe("旧版纯文本");
+  });
+  it("filters inclusive ranges and sorts every business date field", async () => {
+    const early = await create({
+      ...input("较早需求"),
+      ...Object.fromEntries(dateFields.map((key) => [key, "2026-01-10"])),
+    });
+    const later = await create({
+      ...input("较晚需求"),
+      ...Object.fromEntries(dateFields.map((key) => [key, "2026-02-10"])),
+    });
+    for (const key of dateFields) {
+      const range = await app.inject(
+        `/api/requirements?${key}From=2026-02-10&${key}To=2026-02-10`,
+      );
+      expect(range.statusCode).toBe(200);
+      expect(range.json().items.map((item: Requirement) => item.id)).toEqual([
+        later.id,
+      ]);
+      const ascending = await app.inject(
+        `/api/requirements?sortBy=${key}&sortOrder=asc`,
+      );
+      expect(
+        ascending.json().items.map((item: Requirement) => item.id),
+      ).toEqual([early.id, later.id]);
+    }
+  });
+  it("roundtrips rich descriptions and versioned stage content with local Markdown files", async () => {
+    const requirement = await create({
+      ...input(),
+      descriptionHtml: "<h2>目标</h2><p><strong>支持行内编辑</strong></p>",
+    });
+    expect(requirement.descriptionHtml).toContain("<strong>");
+    const initial = (
+      await app.inject(`/api/requirements/${requirement.id}/workspace`)
+    ).json();
+    const payload = {
+      ...initial,
+      designUrl: "https://www.figma.com/design/example",
+      analysis: { analysisText: "# 背景\n范围", prdText: "# PRD" },
+      testing: [
+        {
+          id: crypto.randomUUID(),
+          title: "保存异常",
+          bodyHtml: "<p>问题</p>",
+          answerHtml: "<p>已修复</p>",
+          status: "resolved",
+          createdAt: new Date().toISOString(),
+          linkedChildId: null,
+        },
+      ],
+    };
+    const saved = await app.inject({
+      method: "PUT",
+      url: `/api/requirements/${requirement.id}/workspace`,
+      payload,
+    });
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json().version).toBe(1);
+    expect(
+      readFileSync(
+        join(
+          directory,
+          "workspace",
+          "requirements",
+          String(requirement.id),
+          "analysis",
+          "analysis.md",
+        ),
+        "utf8",
+      ),
+    ).toBe(payload.analysis.analysisText);
+    const conflict = await app.inject({
+      method: "PUT",
+      url: `/api/requirements/${requirement.id}/workspace`,
+      payload,
+    });
+    expect(conflict.statusCode).toBe(409);
+    const reloaded = (
+      await app.inject(`/api/requirements/${requirement.id}/workspace`)
+    ).json();
+    expect(reloaded.testing[0]).toMatchObject({
+      title: "保存异常",
+      status: "resolved",
+    });
+    expect(
+      (await app.inject(`/api/requirements/${requirement.id}`)).json()
+        .descriptionHtml,
+    ).toBe(requirement.descriptionHtml);
+  });
+  it("stores supported image bytes locally and rejects invalid image payloads and names", async () => {
+    const requirement = await create();
+    const data =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jfEsAAAAASUVORK5CYII=";
+    const image = await app.inject({
+      method: "POST",
+      url: `/api/requirements/${requirement.id}/images`,
+      payload: { mime: "image/png", data },
+    });
+    expect(image.statusCode).toBe(200);
+    const url = image.json().url;
+    expect(
+      existsSync(
+        join(
+          directory,
+          "workspace",
+          "requirements",
+          String(requirement.id),
+          "images",
+          url.split("/").pop(),
+        ),
+      ),
+    ).toBe(true);
+    const download = await app.inject(url);
+    expect(download.headers["content-type"]).toBe("image/png");
+    expect(download.rawPayload).toEqual(Buffer.from(data, "base64"));
+    const invalid = await app.inject({
+      method: "POST",
+      url: `/api/requirements/${requirement.id}/images`,
+      payload: {
+        mime: "image/png",
+        data: Buffer.from("html").toString("base64"),
+      },
+    });
+    expect(invalid.statusCode).toBe(400);
+    expect(
+      (
+        await app.inject(
+          `/api/requirements/${requirement.id}/images/invalid.png`,
+        )
+      ).statusCode,
+    ).toBe(404);
   });
 });

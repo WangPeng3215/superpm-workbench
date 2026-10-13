@@ -57,6 +57,23 @@ export const dateSchema = z
     );
   }, "无效日期");
 const nullableDate = dateSchema.nullable();
+export const dateFields = [
+  "proposedAt",
+  "startedAt",
+  "expectedAt",
+  "completedAt",
+  "plannedReleaseAt",
+  "releasedAt",
+] as const;
+export type DateField = (typeof dateFields)[number];
+export const dateLabels: Record<DateField, string> = {
+  proposedAt: "提出时间",
+  startedAt: "开始时间",
+  expectedAt: "预计完成时间",
+  completedAt: "实际完成时间",
+  plannedReleaseAt: "计划上线时间",
+  releasedAt: "实际上线时间",
+};
 export const requirementCreateSchema = z
   .object({
     name: z
@@ -67,6 +84,7 @@ export const requirementCreateSchema = z
     type: z.enum(requirementTypes).default("feature"),
     priority: z.enum(priorities).default("P2"),
     description: z.string().max(50000, "描述最多 50000 字").default(""),
+    descriptionHtml: z.string().max(200000).default(""),
     status: z.enum(requirementStatuses).default("not_started"),
     currentStage: z.enum(stages).default("analysis"),
     parentId: z.number().int().positive().nullable().default(null),
@@ -93,6 +111,18 @@ export const requirementListSchema = z
     priority: z.enum(priorities).optional(),
     status: z.enum(requirementStatuses).optional(),
     currentStage: z.enum(stages).optional(),
+    proposedAtFrom: dateSchema.optional(),
+    proposedAtTo: dateSchema.optional(),
+    startedAtFrom: dateSchema.optional(),
+    startedAtTo: dateSchema.optional(),
+    expectedAtFrom: dateSchema.optional(),
+    expectedAtTo: dateSchema.optional(),
+    completedAtFrom: dateSchema.optional(),
+    completedAtTo: dateSchema.optional(),
+    plannedReleaseAtFrom: dateSchema.optional(),
+    plannedReleaseAtTo: dateSchema.optional(),
+    releasedAtFrom: dateSchema.optional(),
+    releasedAtTo: dateSchema.optional(),
     page: z.coerce.number().int().min(1).default(1),
     pageSize: z.coerce.number().int().min(1).max(100).default(20),
     sortBy: z
@@ -105,6 +135,11 @@ export const requirementListSchema = z
         "currentStage",
         "proposedAt",
         "expectedAt",
+        "startedAt",
+        "completedAt",
+        "plannedReleaseAt",
+        "releasedAt",
+        "createdAt",
         "updatedAt",
       ])
       .default("updatedAt"),
@@ -153,3 +188,38 @@ export interface SystemInfo {
 export interface ApiErrorResponse {
   error: { code: string; message: string; details?: unknown };
 }
+export const workspaceRecordSchema = z
+  .object({
+    id: z.string().uuid(),
+    title: z.string().trim().min(1).max(200),
+    bodyHtml: z.string().max(200000),
+    answerHtml: z.string().max(200000).default(""),
+    status: z.enum(["open", "processing", "resolved"]).default("open"),
+    createdAt: z.string().datetime(),
+    linkedChildId: z.number().int().positive().nullable().default(null),
+  })
+  .strict();
+export type WorkspaceRecord = z.infer<typeof workspaceRecordSchema>;
+export const stageWorkspaceSchema = z
+  .object({
+    version: z.number().int().nonnegative(),
+    designUrl: z
+      .string()
+      .max(2000)
+      .refine(
+        (value) => !value || /^https?:\/\//i.test(value),
+        "设计稿链接应以 http 或 https 开头",
+      )
+      .default(""),
+    analysis: z
+      .object({
+        analysisText: z.string().max(200000).default(""),
+        prdText: z.string().max(200000).default(""),
+      })
+      .strict(),
+    design: z.array(workspaceRecordSchema).max(500),
+    development: z.array(workspaceRecordSchema).max(500),
+    testing: z.array(workspaceRecordSchema).max(500),
+  })
+  .strict();
+export type StageWorkspace = z.infer<typeof stageWorkspaceSchema>;
