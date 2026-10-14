@@ -20,6 +20,17 @@ const emit = defineEmits<{
 const uploading = ref(false);
 const input = ref<HTMLInputElement>();
 const lastEmitted = ref("");
+async function waitForUpload() {
+  if (!uploading.value) return;
+  await new Promise<void>((resolve) => {
+    const stop = watch(uploading, (busy) => {
+      if (busy) return;
+      stop();
+      resolve();
+    });
+  });
+}
+defineExpose({ waitForUpload });
 function toHtml(source: string, text: string) {
   if (source) return DOMPurify.sanitize(source);
   return text

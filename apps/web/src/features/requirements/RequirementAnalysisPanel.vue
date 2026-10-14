@@ -16,15 +16,23 @@ const props = defineProps<{ requirementId: number }>();
 const all = ref(false);
 const list = ref<RequirementFileList>();
 const loading = ref(false);
+const opening = ref(false);
 const uploading = ref(false);
 const activeCategory = ref<string>("record");
 const recordHtml = ref("");
 const savedHtml = ref("");
 const recordText = ref("");
-const recordFileId = ref<number>();
+const recordFile = ref<RequirementFile>();
 const autoState = ref<"saved" | "pending" | "saving" | "failed">("saved");
 const input = ref<HTMLInputElement>();
+const recordEditor = ref<InstanceType<typeof InlineRichTextEditor>>();
+let disposed = false;
+let restoreDefault = false;
+let filesRevision = 0;
+let saveTimer: ReturnType<typeof setTimeout> | undefined;
+let saveTask: Promise<boolean> | undefined;
 const autoLabel = computed(() => {
+  if (opening.value) return "正在同步文件…";
   if (autoState.value === "pending") return "有未保存的修改";
   if (autoState.value === "saving") return "保存中…";
   if (autoState.value === "failed") return "保存失败，请重试";
@@ -40,18 +48,28 @@ const hiddenCount = computed(() =>
 const imageExtensions = ["png", "jpg", "jpeg", "gif", "webp", "svg"];
 const isImage = (file: RequirementFile) =>
   imageExtensions.includes(file.name.split(".").pop()?.toLowerCase() ?? "");
+const isMarkdown = (file: RequirementFile) =>
+  /\.(md|markdown)$/i.test(file.fileName);
 async function loadFiles() {
+  const revision = ++filesRevision;
+  const requirementId = props.requirementId;
   loading.value = true;
   try {
-    list.value = await requirementFileApi.list(
-      props.requirementId,
+    const result = await requirementFileApi.list(
+      requirementId,
       "analysis",
       all.value,
     );
+    if (disposed || revision !== filesRevision) return false;
+    list.value = result;
+    if (restoreDefault && !opening.value) await loadEditor(result.editorFile);
+    return true;
   } catch (error) {
-    ElMessage.error(errorMessage(error));
+    if (!disposed && revision === filesRevision)
+      ElMessage.error(errorMessage(error));
+    return false;
   } finally {
-    loading.value = false;
+    if (revision === filesRevision) loading.value = false;
   }
 }
 function toEditorHtml(content: string) {
@@ -60,61 +78,111 @@ function toEditorHtml(content: string) {
   if (trimmed.startsWith("<")) return trimmed;
   return String(marked.parse(content, { async: false }));
 }
-async function loadEditor() {
-  const file = list.value?.editorFile;
+function clearSaveTimer() {
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = undefined;
+}
+function clearEditor() {
+  clearSaveTimer();
+  recordFile.value = undefined;
+  recordHtml.value = "";
+  savedHtml.value = "";
+  recordText.value = "";
+  autoState.value = "saved";
+}
+async function loadEditor(file = list.value?.editorFile) {
+  if (disposed || opening.value) return;
   if (!file) {
-    recordFileId.value = undefined;
-    recordHtml.value = "";
-    savedHtml.value = "";
-    recordText.value = "";
+    clearEditor();
     return;
   }
+  if (!isMarkdown(file) || file.id === recordFile.value?.id) return;
+  opening.value = true;
   try {
+    if (!(await flushEditor()) || disposed) return;
     const result = await requirementFileApi.content(
-      props.requirementId,
+      file.requirementId,
       file.id,
     );
+    if (disposed || file.requirementId !== props.requirementId) return;
+    if (!(await flushEditor()) || disposed) return;
     const html = toEditorHtml(result.content);
     recordHtml.value = html;
     savedHtml.value = html;
-    recordText.value = "";
+    recordText.value =
+      new DOMParser().parseFromString(html, "text/html").body.textContent ?? "";
     autoState.value = "saved";
-    recordFileId.value = file.id;
+    recordFile.value = result.file;
+    restoreDefault = false;
   } catch (error) {
-    ElMessage.error(errorMessage(error));
+    if (!disposed) ElMessage.error(errorMessage(error));
+  } finally {
+    opening.value = false;
   }
 }
 async function load() {
-  await loadFiles();
-  await loadEditor();
+  if (await loadFiles()) await loadEditor();
 }
 watch(() => props.requirementId, load, { immediate: true });
 watch(all, loadFiles);
-let saveTimer: ReturnType<typeof setTimeout> | undefined;
 watch(recordHtml, (value) => {
-  if (value === savedHtml.value) return;
+  clearSaveTimer();
+  if (value === savedHtml.value) {
+    if (autoState.value !== "saving") autoState.value = "saved";
+    return;
+  }
   autoState.value = "pending";
-  if (saveTimer) clearTimeout(saveTimer);
-  saveTimer = setTimeout(saveRecord, 800);
+  saveTimer = setTimeout(() => void saveRecord(), 800);
 });
-async function saveRecord() {
-  const fileId = recordFileId.value;
-  const payload = recordHtml.value;
-  if (!fileId || payload === savedHtml.value) return;
-  autoState.value = "saving";
+async function persistRecord() {
+  while (recordFile.value && recordHtml.value !== savedHtml.value) {
+    const file = recordFile.value;
+    const payload = recordHtml.value;
+    autoState.value = "saving";
+    try {
+      const updated = await requirementFileApi.saveContent(
+        file.requirementId,
+        file.id,
+        payload,
+      );
+      savedHtml.value = payload;
+      recordFile.value.updatedAt = updated.updatedAt;
+      for (const group of groups.value) {
+        const listedFile = group.files.find((item) => item.id === file.id);
+        if (listedFile) listedFile.updatedAt = updated.updatedAt;
+      }
+      autoState.value = payload === recordHtml.value ? "saved" : "pending";
+    } catch (error) {
+      autoState.value = "failed";
+      if (!disposed) ElMessage.error(errorMessage(error));
+      return false;
+    }
+  }
+  return true;
+}
+function saveRecord() {
+  clearSaveTimer();
+  if (!saveTask) {
+    saveTask = persistRecord().finally(() => {
+      saveTask = undefined;
+    });
+  }
+  return saveTask;
+}
+async function flushEditor() {
+  await recordEditor.value?.waitForUpload();
+  return saveRecord();
+}
+async function flush() {
+  if (opening.value) return false;
+  opening.value = true;
   try {
-    await requirementFileApi.saveContent(
-      props.requirementId,
-      fileId,
-      payload,
-    );
-    savedHtml.value = payload;
-    autoState.value = payload === recordHtml.value ? "saved" : "pending";
-  } catch (error) {
-    autoState.value = "failed";
-    ElMessage.error(errorMessage(error));
+    return await flushEditor();
+  } finally {
+    opening.value = false;
   }
 }
+defineExpose({ flush });
 function onRecordHtml(html: string) {
   recordHtml.value = html;
 }
@@ -122,12 +190,9 @@ function onRecordText(text: string) {
   recordText.value = text;
 }
 onBeforeUnmount(() => {
-  if (saveTimer) clearTimeout(saveTimer);
-  const fileId = recordFileId.value;
-  if (!fileId || recordHtml.value === savedHtml.value) return;
-  requirementFileApi
-    .saveContent(props.requirementId, fileId, recordHtml.value)
-    .catch(() => undefined);
+  disposed = true;
+  filesRevision += 1;
+  void saveRecord();
 });
 async function upload(event: Event) {
   const target = event.target as HTMLInputElement;
@@ -161,9 +226,15 @@ async function upload(event: Event) {
 }
 async function toggleFinal(file: RequirementFile) {
   try {
-    await requirementFileApi.update(props.requirementId, file.id, {
-      isFinal: !file.isFinal,
-    });
+    const updated = await requirementFileApi.update(
+      file.requirementId,
+      file.id,
+      {
+        isFinal: !file.isFinal,
+      },
+    );
+    if (recordFile.value?.id === file.id)
+      recordFile.value.isFinal = updated.isFinal;
     await loadFiles();
     ElMessage.success(file.isFinal ? "已取消确认版本" : "已标记为确认版本");
   } catch (error) {
@@ -184,9 +255,14 @@ async function rename(file: RequirementFile) {
     return;
   }
   try {
-    await requirementFileApi.update(props.requirementId, file.id, {
-      name: value,
-    });
+    const updated = await requirementFileApi.update(
+      file.requirementId,
+      file.id,
+      {
+        name: value,
+      },
+    );
+    if (recordFile.value?.id === file.id) recordFile.value.name = updated.name;
     await loadFiles();
     ElMessage.success("文件已重命名");
   } catch (error) {
@@ -194,6 +270,7 @@ async function rename(file: RequirementFile) {
   }
 }
 async function removeFile(file: RequirementFile) {
+  if (opening.value) return;
   try {
     await ElMessageBox.confirm(`确定删除「${file.name}」吗？`, "删除文件", {
       confirmButtonText: "确认删除",
@@ -203,32 +280,68 @@ async function removeFile(file: RequirementFile) {
   } catch {
     return;
   }
+  if (disposed || opening.value) return;
+  opening.value = true;
+  let removedCurrent = false;
+  let refreshed = false;
   try {
-    await requirementFileApi.remove(props.requirementId, file.id);
-    await loadFiles();
+    if (file.id === recordFile.value?.id && !(await flushEditor())) return;
+    await requirementFileApi.remove(file.requirementId, file.id);
+    if (disposed) return;
+    removedCurrent = recordFile.value?.id === file.id;
+    if (removedCurrent) {
+      clearEditor();
+      restoreDefault = true;
+    }
+    for (const group of groups.value) {
+      const remaining = group.files.filter((item) => item.id !== file.id);
+      group.total -= group.files.length - remaining.length;
+      group.files = remaining;
+    }
+    if (list.value?.editorFile?.id === file.id) list.value.editorFile = null;
+    refreshed = await loadFiles();
     ElMessage.success("文件已删除");
   } catch (error) {
     ElMessage.error(errorMessage(error));
+  } finally {
+    opening.value = false;
   }
+  if (removedCurrent && refreshed) await loadEditor();
 }
 </script>
 <template>
   <div class="analysis-page" v-loading="loading">
-    <section class="md-panel">
+    <section class="md-panel" v-loading="opening" :inert="opening">
       <header class="panel-head">
         <h3>需求分析记录</h3>
+        <span v-if="recordFile" class="current-file"
+          >当前文件：{{ recordFile.name }}</span
+        >
       </header>
       <InlineRichTextEditor
-        v-if="recordFileId"
+        v-if="recordFile"
+        ref="recordEditor"
+        :key="recordFile.id"
         :html="recordHtml"
         :requirement-id="requirementId"
         label="需求分析记录内容"
         @update:html="onRecordHtml"
         @update:text="onRecordText"
       />
-      <p v-else class="muted">尚未创建分析记录文件。</p>
+      <p v-else class="muted">
+        请选择文件，或
+        <el-button link type="primary" @click="load">重新加载文件</el-button>
+      </p>
       <div class="md-footer">
         <span>{{ recordText.length }} 字符 · {{ autoLabel }}</span>
+        <el-button
+          v-if="autoState === 'failed'"
+          link
+          type="primary"
+          size="small"
+          @click="saveRecord"
+          >重试保存</el-button
+        >
       </div>
     </section>
     <section class="files-panel">
@@ -236,11 +349,12 @@ async function removeFile(file: RequirementFile) {
         <h3>分析产物文件夹</h3>
         <div class="files-actions">
           <span class="switch-label">展示全部文件</span>
-          <el-switch v-model="all" />
+          <el-switch v-model="all" :disabled="opening" />
           <el-button
             size="small"
             :icon="Upload"
             :loading="uploading"
+            :disabled="opening"
             @click="input?.click()"
             >上传文件</el-button
           >
@@ -268,7 +382,12 @@ async function removeFile(file: RequirementFile) {
             }}文件，可上传文件后标记为确认版本。
           </p>
           <div v-else class="file-list">
-            <div v-for="file in group.files" :key="file.id" class="file-row">
+            <div
+              v-for="file in group.files"
+              :key="file.id"
+              class="file-row"
+              :class="{ 'is-selected': recordFile?.id === file.id }"
+            >
               <img
                 v-if="isImage(file)"
                 class="file-thumb"
@@ -276,7 +395,18 @@ async function removeFile(file: RequirementFile) {
                 :alt="file.name"
               />
               <div class="file-main">
-                <strong class="file-name">{{ file.name }}</strong>
+                <button
+                  v-if="isMarkdown(file)"
+                  type="button"
+                  class="file-name file-open"
+                  :aria-pressed="recordFile?.id === file.id"
+                  :disabled="opening"
+                  title="在左侧编辑器中打开"
+                  @click="loadEditor(file)"
+                >
+                  {{ file.name }}
+                </button>
+                <strong v-else class="file-name">{{ file.name }}</strong>
                 <span class="file-meta"
                   >更新于
                   {{ new Date(file.updatedAt).toLocaleString("zh-CN") }}</span
@@ -304,6 +434,7 @@ async function removeFile(file: RequirementFile) {
                   link
                   type="primary"
                   size="small"
+                  :disabled="opening"
                   @click="toggleFinal(file)"
                   >{{ file.isFinal ? "取消确认" : "标记确认" }}</el-button
                 >
@@ -312,6 +443,7 @@ async function removeFile(file: RequirementFile) {
                   type="primary"
                   size="small"
                   :icon="EditPen"
+                  :disabled="opening"
                   @click="rename(file)"
                   >重命名</el-button
                 >
@@ -320,6 +452,7 @@ async function removeFile(file: RequirementFile) {
                   type="danger"
                   size="small"
                   :icon="Delete"
+                  :disabled="opening"
                   @click="removeFile(file)"
                   >删除</el-button
                 >
@@ -358,6 +491,12 @@ async function removeFile(file: RequirementFile) {
   font-size: 14px;
   color: #344761;
 }
+.current-file {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  color: #7a879b;
+}
 .files-actions {
   display: flex;
   align-items: center;
@@ -369,6 +508,9 @@ async function removeFile(file: RequirementFile) {
   color: #7a879b;
 }
 .md-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin-top: 10px;
   font-size: 11px;
   color: #99a7bd;
@@ -401,6 +543,10 @@ async function removeFile(file: RequirementFile) {
   border-radius: 6px;
   background: #fbfcfe;
 }
+.file-row.is-selected {
+  border-color: #bac8fb;
+  background: #f0f4ff;
+}
 .file-thumb {
   width: 40px;
   height: 40px;
@@ -419,6 +565,30 @@ async function removeFile(file: RequirementFile) {
   font-size: 13px;
   color: #3b4d67;
   overflow-wrap: anywhere;
+}
+.file-open {
+  justify-self: start;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-family: inherit;
+  font-weight: 600;
+  line-height: 1.5;
+  text-align: left;
+  cursor: pointer;
+}
+.file-open:hover,
+.file-open[aria-pressed="true"] {
+  color: #4e6ef2;
+}
+.file-open:focus-visible {
+  outline: 2px solid #4e6ef2;
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+.file-open:disabled {
+  cursor: wait;
+  opacity: 0.6;
 }
 .file-meta {
   font-size: 11px;

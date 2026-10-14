@@ -1,6 +1,11 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { useRoute, useRouter } from "vue-router";
+import {
+  onBeforeRouteLeave,
+  onBeforeRouteUpdate,
+  useRoute,
+  useRouter,
+} from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { ArrowLeft, Delete, Document } from "@element-plus/icons-vue";
 import {
@@ -56,6 +61,22 @@ const loading = ref(false),
 const activeTab = ref<"detail" | "progress">("detail");
 const viewingStage = ref<Stage>("analysis");
 const stageSaving = ref(false);
+const stageSwitching = ref(false);
+const analysisPanel = ref<InstanceType<typeof RequirementAnalysisPanel>>();
+async function flushAnalysis() {
+  return (await analysisPanel.value?.flush()) ?? true;
+}
+onBeforeRouteLeave(flushAnalysis);
+onBeforeRouteUpdate(flushAnalysis);
+async function viewStage(stage: Stage) {
+  if (stage === viewingStage.value || stageSwitching.value) return;
+  stageSwitching.value = true;
+  try {
+    if (await flushAnalysis()) viewingStage.value = stage;
+  } finally {
+    stageSwitching.value = false;
+  }
+}
 const dirty = computed(
   () => Boolean(draft.value) && JSON.stringify(draft.value) !== initial.value,
 );
@@ -204,6 +225,7 @@ async function remove() {
     return;
   }
   try {
+    if (!(await flushAnalysis())) return;
     await requirementApi.remove(item.value.id);
     ElMessage.success("需求已删除");
     router.push("/requirements");
@@ -485,7 +507,7 @@ function go(target: Requirement) {
                   v-for="stage in stages"
                   :key="stage"
                   :status="statusOf(stage)"
-                  @click="viewingStage = stage"
+                  @click="viewStage(stage)"
                 >
                   <span class="stage-name">{{ stageLabels[stage] }}</span>
                 </XlyTimelineItem>
@@ -505,6 +527,8 @@ function go(target: Requirement) {
             </div>
             <RequirementAnalysisPanel
               v-if="viewingStage === 'analysis'"
+              ref="analysisPanel"
+              :key="item.id"
               :requirement-id="item.id"
             />
             <div v-else class="stage-placeholder">

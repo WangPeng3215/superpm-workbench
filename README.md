@@ -71,7 +71,11 @@ SUPERPM_DATA_DIR=./data
 SUPERPM_WORKSPACE_DIR=./workspace
 ```
 
-路径相对于项目根目录；变更后重启服务。开发端口代理固定为 3001，若修改 API 端口需同步 `apps/web/vite.config.ts`。工作区文件读写/上传接口尚未开放；现有路径校验是后续文件模块的入口，文件模块还需增加真实路径/符号链接、大小和类型校验。
+路径相对于项目根目录；变更后重启服务。开发端口代理固定为 3001，若修改 API 端口需同步 `apps/web/vite.config.ts`。
+
+需求分析正文来自工作区文件，不是数据库正文记录。`requirement_files` 表只保存所属需求、分类、文件名、确认状态等元数据；默认分析记录位于 `workspace/requirements/<需求 ID>/analysis/分析记录/analysis-record.md`，上传文件按分类保存并使用独立的实际文件名。
+
+在「需求进展 → 需求分析」右侧点击 Markdown 文件名，即可在左侧回显并编辑该文件。修改自动保存回当前文件；切换前等待保存完成，保存失败保留草稿并支持重试。图片、PDF 等文件仍使用「预览」。现有编辑器为富文本编辑器：Markdown 在读取时转为 HTML，编辑后的正文沿用现有 HTML 保存格式；仅打开文件不会改写原文。
 
 数据库启用外键、WAL，启动自动执行 `apps/server/drizzle/*.sql` 中未应用迁移。也可运行 `npm run db:migrate`。新迁移应新增版本文件，避免修改已经应用的迁移。
 
