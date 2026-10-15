@@ -103,9 +103,10 @@ $color-text-placeholder: var(--text-muted);
     flex-direction: column;
     align-items: center;
     flex: 1;
+    padding-bottom: 0;
 
     .xly-timeline-item__content {
-      margin-top: 12px;
+      margin-top: 8px;
       text-align: center;
     }
   }
@@ -150,17 +151,17 @@ $color-text-placeholder: var(--text-muted);
   background-color: $color-default;
 
   .xly-timeline-item--vertical & {
-    left: 11px;
-    top: 24px;
+    left: 9px;
+    top: 20px;
     bottom: 0;
     width: 2px;
   }
 
   /* 横向：节点居中，连接线从本节点连到下一个节点 */
   .xly-timeline-item--horizontal & {
-    top: 11px;
-    left: calc(50% + 14px);
-    right: calc(-50% + 14px);
+    top: 9px;
+    left: calc(50% + 12px);
+    right: calc(-50% + 12px);
     height: 2px;
   }
 
@@ -191,8 +192,8 @@ $color-text-placeholder: var(--text-muted);
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 20px;
+  height: 20px;
   border-radius: 50%;
   border: 2px solid;
   background-color: var(--bg-surface);

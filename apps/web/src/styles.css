@@ -66,6 +66,11 @@
   --tone-gray-fg: #7d8a9c;
   --tone-gray-bg: #f4f6f9;
   --tone-gray-bd: #e6eaf0;
+  /* 语义别名：状态类（成功/危险），跟随上方色板自动适配深色 */
+  --tone-success: var(--tone-green-fg);
+  --tone-success-border: var(--tone-green-bd);
+  --tone-danger: var(--tone-red-fg);
+  --tone-danger-border: var(--tone-red-bd);
 
   color-scheme: light;
 }

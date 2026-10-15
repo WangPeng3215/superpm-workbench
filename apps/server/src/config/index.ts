@@ -19,6 +19,8 @@ function findProjectRoot() {
 }
 export const projectRoot = findProjectRoot();
 config({ path: join(projectRoot, ".env"), quiet: true });
+// 本地默认程序打开总开关（补充文档 5.4）：默认关闭，SUPERPM_ALLOW_SYSTEM_OPEN=1 显式开启
+export const allowSystemOpen = process.env.SUPERPM_ALLOW_SYSTEM_OPEN === "1";
 export function defaultPaths() {
   return {
     databasePath: resolve(

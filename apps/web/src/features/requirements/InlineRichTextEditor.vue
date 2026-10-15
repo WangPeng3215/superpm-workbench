@@ -15,6 +15,7 @@ const props = defineProps<{
   requirementId?: number;
   label?: string;
   fillHeight?: boolean;
+  fillCard?: boolean;
 }>();
 const emit = defineEmits<{
   "update:html": [html: string];
@@ -186,7 +187,11 @@ function errorMessage(error: unknown) {
 }
 </script>
 <template>
-  <div class="inline-rich" :class="{ 'fill-height': fillHeight }" v-if="editor">
+  <div
+    class="inline-rich"
+    :class="{ 'fill-height': fillHeight, 'fill-card': fillCard }"
+    v-if="editor"
+  >
     <div class="rich-toolbar">
       <div class="toolbar-group">
         <button
@@ -195,7 +200,18 @@ function errorMessage(error: unknown) {
           title="撤销 (Ctrl+Z)"
           @click="editor.chain().focus().undo().run()"
         >
-          撤销
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M9 14 4 9l5-5" />
+            <path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11" />
+          </svg>
         </button>
         <button
           :disabled="!editor.can().redo()"
@@ -203,7 +219,18 @@ function errorMessage(error: unknown) {
           title="重做 (Ctrl+Shift+Z)"
           @click="editor.chain().focus().redo().run()"
         >
-          重做
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="m15 14 5-5-5-5" />
+            <path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13" />
+          </svg>
         </button>
       </div>
       <span class="toolbar-divider"></span>
@@ -256,8 +283,8 @@ function errorMessage(error: unknown) {
           清除格式
         </button>
       </div>
-      <span class="toolbar-divider"></span>
-      <div class="toolbar-group">
+      <span class="toolbar-divider toolbar-divider--heading"></span>
+      <div class="toolbar-group toolbar-group--heading">
         <button
           :class="{ active: editor.isActive('paragraph') }"
           aria-label="正文"
@@ -285,7 +312,22 @@ function errorMessage(error: unknown) {
           title="项目列表"
           @click="editor.chain().focus().toggleBulletList().run()"
         >
-          项目列表
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M8 6h13" />
+            <path d="M8 12h13" />
+            <path d="M8 18h13" />
+            <path d="M3 6h.01" />
+            <path d="M3 12h.01" />
+            <path d="M3 18h.01" />
+          </svg>
         </button>
         <button
           :class="{ active: editor.isActive('orderedList') }"
@@ -293,7 +335,49 @@ function errorMessage(error: unknown) {
           title="编号列表"
           @click="editor.chain().focus().toggleOrderedList().run()"
         >
-          编号列表
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M10 6h11" />
+            <path d="M10 12h11" />
+            <path d="M10 18h11" />
+            <text
+              x="2.5"
+              y="8.5"
+              fill="currentColor"
+              stroke="none"
+              font-size="7"
+              font-weight="600"
+            >
+              1
+            </text>
+            <text
+              x="2.5"
+              y="14.5"
+              fill="currentColor"
+              stroke="none"
+              font-size="7"
+              font-weight="600"
+            >
+              2
+            </text>
+            <text
+              x="2.5"
+              y="20.5"
+              fill="currentColor"
+              stroke="none"
+              font-size="7"
+              font-weight="600"
+            >
+              3
+            </text>
+          </svg>
         </button>
         <button
           :class="{ active: editor.isActive('taskList') }"
@@ -301,21 +385,61 @@ function errorMessage(error: unknown) {
           title="任务清单"
           @click="toggleListTask"
         >
-          任务清单
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="m3 7 2 2 4-4" />
+            <path d="m3 17 2 2 4-4" />
+            <path d="M13 6h8" />
+            <path d="M13 12h8" />
+            <path d="M13 18h8" />
+          </svg>
         </button>
         <button
           aria-label="减少缩进"
           title="减少缩进"
           @click="indentList(true)"
         >
-          减少缩进
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M13 6h8" />
+            <path d="M13 12h8" />
+            <path d="M13 18h8" />
+            <path d="m9 8-4 4 4 4" />
+          </svg>
         </button>
         <button
           aria-label="增加缩进"
           title="增加缩进"
           @click="indentList(false)"
         >
-          增加缩进
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M13 6h8" />
+            <path d="M13 12h8" />
+            <path d="M13 18h8" />
+            <path d="m7 8 4 4-4 4" />
+          </svg>
         </button>
       </div>
       <span class="toolbar-divider"></span>
@@ -326,7 +450,20 @@ function errorMessage(error: unknown) {
           title="引用"
           @click="editor.chain().focus().toggleBlockquote().run()"
         >
-          引用
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M7 5.5v13" stroke-width="2.6" />
+            <path d="M12 7h8" />
+            <path d="M12 12h8" />
+            <path d="M12 17h6" />
+          </svg>
         </button>
         <button
           :class="{ active: editor.isActive('codeBlock') }"
@@ -334,14 +471,37 @@ function errorMessage(error: unknown) {
           title="代码块"
           @click="editor.chain().focus().toggleCodeBlock().run()"
         >
-          代码块
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="m16 18 6-6-6-6" />
+            <path d="m8 6-6 6 6 6" />
+          </svg>
         </button>
         <button
           aria-label="分割线"
           title="分割线"
           @click="editor.chain().focus().setHorizontalRule().run()"
         >
-          分割线
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M8 5.5h8" />
+            <path d="M3 12h18" stroke-width="2.4" />
+            <path d="M8 18.5h8" />
+          </svg>
         </button>
       </div>
       <span class="toolbar-divider"></span>
@@ -352,17 +512,48 @@ function errorMessage(error: unknown) {
           title="插入或编辑链接"
           @click="setLink"
         >
-          链接
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path
+              d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"
+            />
+            <path
+              d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"
+            />
+          </svg>
         </button>
         <button
           :disabled="uploading || !requirementId"
           :title="
-            !requirementId ? '先保存需求后可插入图片' : '图片保存在本地工作区'
+            uploading
+              ? '图片上传中…'
+              : !requirementId
+                ? '先保存需求后可插入图片'
+                : '插入图片（保存在本地工作区）'
           "
           aria-label="插入图片"
           @click="input?.click()"
         >
-          {{ uploading ? "上传中…" : "插入图片" }}
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <rect x="3" y="3" width="18" height="18" rx="2" />
+            <circle cx="9" cy="9" r="2" />
+            <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
+          </svg>
         </button>
         <input
           ref="input"
@@ -382,14 +573,16 @@ function errorMessage(error: unknown) {
   border-radius: 8px;
   overflow: hidden;
   background: var(--bg-surface);
+  /* 容器查询锚点：空间不足时自动隐藏正文/标题组 */
+  container-type: inline-size;
 }
 .inline-rich .rich-toolbar {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 3px;
   row-gap: 6px;
   flex-wrap: wrap;
-  padding: 8px 10px;
+  padding: 7px 10px;
   max-height: 84px;
   overflow: auto;
   background: var(--bg-subtle);
@@ -403,13 +596,22 @@ function errorMessage(error: unknown) {
 .inline-rich .rich-toolbar button {
   border: 0;
   background: transparent;
-  padding: 6px 8px;
+  padding: 5px 6px;
   border-radius: 4px;
   font-size: 12px;
   line-height: 1.2;
   color: var(--text-secondary);
   cursor: pointer;
   white-space: nowrap;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.inline-rich .rich-toolbar button svg {
+  width: 15px;
+  height: 15px;
+  display: block;
+  flex: none;
 }
 .inline-rich .rich-toolbar button:hover,
 .inline-rich .rich-toolbar button.active {
@@ -426,6 +628,13 @@ function errorMessage(error: unknown) {
   flex: none;
   background: var(--border-strong);
   margin: 0 2px;
+}
+/* 工具栏放不下时隐藏正文/H1/H2/H3，保证其余按钮一行展示 */
+@container (max-width: 740px) {
+  .inline-rich .toolbar-group--heading,
+  .inline-rich .toolbar-divider--heading {
+    display: none;
+  }
 }
 .inline-rich :deep(.rich-document) {
   padding: 16px 18px;
@@ -448,6 +657,18 @@ function errorMessage(error: unknown) {
 .inline-rich.fill-height :deep(.rich-document) {
   flex: 1 1 auto;
   min-height: calc(100vh - 330px);
+  max-height: none;
+}
+/* 占满所在卡片高度模式：随卡片高度伸缩，正文区域撑满并自行滚动。
+   EditorContent 会多渲染一层无名包装 div，用 grid 行高分配绕开对它的选择器 */
+.inline-rich.fill-card {
+  display: grid;
+  grid-template-rows: auto minmax(200px, 1fr);
+  flex: 1 1 auto;
+}
+.inline-rich.fill-card :deep(.rich-document) {
+  height: 100%;
+  min-height: 0;
   max-height: none;
 }
 .inline-rich :deep(.rich-document p) {

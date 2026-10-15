@@ -1,3 +1,4 @@
+<!-- TODO(待删除): 孤儿组件，富文本方案落地后已无任何引用，与其他待删项汇总后一并清理 -->
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { basicSetup } from "codemirror";

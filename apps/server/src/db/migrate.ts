@@ -3,10 +3,13 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { projectRoot } from "../config/index.js";
 
-export const SCHEMA_VERSION = 3;
-const migrationsDir = join(projectRoot, "apps/server/drizzle");
+export const SCHEMA_VERSION = 5;
+const defaultMigrationsDir = join(projectRoot, "apps/server/drizzle");
 
-export function migrate(db: Database.Database) {
+export function migrate(
+  db: Database.Database,
+  migrationsDir: string = defaultMigrationsDir,
+) {
   db.pragma("busy_timeout = 5000");
   db.pragma("foreign_keys = ON");
   db.pragma("journal_mode = WAL");

@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+﻿﻿﻿﻿#Requires -Version 5.1
 <#
   superPM workbench 启动脚本
 

@@ -48,9 +48,80 @@ export const requirementFiles = sqliteTable("requirement_files", {
   category: text("category").$type<RequirementFile["category"]>().notNull(),
   name: text("name").notNull(),
   fileName: text("file_name").notNull(),
+  // 过渡列：语义已由 resource_type/status 承接，阶段 9 清理迁移中移除
+  kind: text("kind").notNull().default("file"),
+  linkUrl: text("link_url"),
   isFinal: integer("is_final", { mode: "boolean" }).notNull().default(false),
+  resourceType: text("resource_type")
+    .$type<"file" | "link" | "text">()
+    .notNull()
+    .default("file"),
+  storageType: text("storage_type")
+    .$type<"local" | "database" | "external">()
+    .notNull()
+    .default("local"),
+  relativePath: text("relative_path"),
+  textContent: text("text_content"),
+  mimeType: text("mime_type"),
+  // 数据库列名为 description；JS 标识符加前缀避免与需求表同名概念混淆
+  assetDescription: text("description"),
+  // 数据库列名为 status（与 requirements.status 无冲突，分属不同表）
+  assetStatus: text("status").$type<"draft" | "final" | "archived" | "missing">().notNull().default("draft"),
+  isDeleted: integer("is_deleted", { mode: "boolean" }).notNull().default(false),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
+});
+// 问题表：phase 限定 design/development/testing
+export const issues = sqliteTable("issues", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  requirementId: integer("requirement_id")
+    .notNull()
+    .references(() => requirements.id),
+  phase: text("phase").$type<"design" | "development" | "testing">().notNull(),
+  issueKey: text("issue_key"),
+  title: text("title").notNull(),
+  description: text("description").notNull().default(""),
+  issueType: text("issue_type"),
+  status: text("status")
+    .$type<"open" | "in_progress" | "resolved" | "closed">()
+    .notNull()
+    .default("open"),
+  solution: text("solution"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+  resolvedAt: text("resolved_at"),
+  closedAt: text("closed_at"),
+  isDeleted: integer("is_deleted", { mode: "boolean" }).notNull().default(false),
+});
+// 问题处理记录：追加式历史，禁止更新/删除
+export const issueActivities = sqliteTable("issue_activities", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  issueId: integer("issue_id")
+    .notNull()
+    .references(() => issues.id),
+  activityType: text("activity_type")
+    .$type<"comment" | "solution" | "status_change" | "system">()
+    .notNull(),
+  content: text("content").notNull().default(""),
+  oldStatus: text("old_status"),
+  newStatus: text("new_status"),
+  actorType: text("actor_type").$type<"user" | "ai" | "system">(),
+  actorName: text("actor_name"),
+  createdAt: text("created_at").notNull(),
+});
+// 问题与产出物关联：同问题同产出物唯一，删除实体仅清索引行不碰物理文件
+export const issueAssets = sqliteTable("issue_assets", {
+  issueId: integer("issue_id")
+    .notNull()
+    .references(() => issues.id),
+  assetId: integer("asset_id")
+    .notNull()
+    .references(() => requirementFiles.id),
+  relationType: text("relation_type")
+    .$type<"evidence" | "solution_material" | "reference" | "other">()
+    .notNull()
+    .default("reference"),
+  createdAt: text("created_at").notNull(),
 });
 export const requirementAudit = sqliteTable("requirement_audit", {
   id: integer("id").primaryKey({ autoIncrement: true }),

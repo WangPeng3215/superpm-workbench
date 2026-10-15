@@ -4,9 +4,10 @@ import Database from "better-sqlite3";
 import { ZodError, z } from "zod";
 import { StageWorkspaceService } from "./services/stage-workspace.js";
 import { RequirementFileService } from "./services/requirement-files.js";
+import { IssueService } from "./services/issues.js";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { defaultPaths, ensurePaths, projectRoot } from "./config/index.js";
+import { defaultPaths, ensurePaths, projectRoot, allowSystemOpen } from "./config/index.js";
 import { migrate, SCHEMA_VERSION } from "./db/migrate.js";
 import { RequirementService, DomainError } from "./services/requirements.js";
 import { stages } from "@superpm/shared";
@@ -57,6 +58,7 @@ export async function createApp(
     paths.workspacePath,
     service,
   );
+  const issueService = new IssueService(db, service);
   const app = Fastify({
     logger: options.logger ?? true,
     bodyLimit: 8 * 1024 * 1024,
@@ -97,13 +99,21 @@ export async function createApp(
     version,
     ...paths,
     schemaVersion: SCHEMA_VERSION,
+    systemOpenAvailable: allowSystemOpen,
     modules: [
       { key: "requirements", name: "需求管理", status: "available" },
-      ...Object.entries(roadmap).map(([key, name]) => ({
-        key,
-        name,
-        status: "planned",
-      })),
+      {
+        key: "issues",
+        name: roadmap.issues,
+        status: "available",
+      },
+      ...Object.entries(roadmap)
+        .filter(([key]) => key !== "issues")
+        .map(([key, name]) => ({
+          key,
+          name,
+          status: "planned",
+        })),
     ],
   }));
   app.get("/api/requirements", async (request) =>
@@ -136,7 +146,9 @@ export async function createApp(
     async (request) => service.relations(parseId(request.params.id)),
   );
   const fileListQuery = z.object({
-    phase: z.enum(stages).default("analysis"),
+    phase: z
+      .union([z.enum(stages), z.literal("all")])
+      .default("analysis"),
     all: z
       .enum(["true", "false"])
       .default("false")
@@ -190,6 +202,24 @@ export async function createApp(
         .send(raw.data);
     },
   );
+  // 本地默认程序打开（补充文档 5.4）：路由层与服务层双重开关约束
+  app.post<{ Params: { id: string; fileId: string } }>(
+    "/api/requirements/:id/files/:fileId/open",
+    async (request, reply) => {
+      if (!allowSystemOpen)
+        return reply.status(403).send({
+          error: {
+            code: "FORBIDDEN",
+            message: "本地程序打开功能未启用（需设置 SUPERPM_ALLOW_SYSTEM_OPEN=1）",
+          },
+        });
+      fileService.openAsset(
+        parseId(request.params.id),
+        parseId(request.params.fileId),
+      );
+      return reply.status(204).send();
+    },
+  );
   app.patch<{ Params: { id: string; fileId: string } }>(
     "/api/requirements/:id/files/:fileId",
     async (request) =>
@@ -205,6 +235,99 @@ export async function createApp(
       fileService.remove(
         parseId(request.params.id),
         parseId(request.params.fileId),
+      );
+      return reply.status(204).send();
+    },
+  );
+  const issueListQuery = z.object({
+    phase: z.enum(["design", "development", "testing"]).optional(),
+    status: z
+      .enum(["open", "in_progress", "resolved", "closed"])
+      .optional(),
+  });
+  app.get<{ Params: { id: string } }>(
+    "/api/requirements/:id/issues",
+    async (request) => {
+      const query = issueListQuery.parse(request.query ?? {});
+      return issueService.list(
+        parseId(request.params.id),
+        query.phase,
+        query.status,
+      );
+    },
+  );
+  app.post<{ Params: { id: string } }>(
+    "/api/requirements/:id/issues",
+    async (request, reply) =>
+      reply
+        .status(201)
+        .send(issueService.create(parseId(request.params.id), request.body)),
+  );
+  app.get<{ Params: { id: string; issueId: string } }>(
+    "/api/requirements/:id/issues/:issueId",
+    async (request) =>
+      issueService.detail(
+        parseId(request.params.id),
+        parseId(request.params.issueId),
+      ),
+  );
+  app.patch<{ Params: { id: string; issueId: string } }>(
+    "/api/requirements/:id/issues/:issueId",
+    async (request) =>
+      issueService.update(
+        parseId(request.params.id),
+        parseId(request.params.issueId),
+        request.body,
+      ),
+  );
+  app.post<{ Params: { id: string; issueId: string } }>(
+    "/api/requirements/:id/issues/:issueId/activities",
+    async (request) =>
+      issueService.comment(
+        parseId(request.params.id),
+        parseId(request.params.issueId),
+        request.body,
+      ),
+  );
+  app.delete<{ Params: { id: string; issueId: string } }>(
+    "/api/requirements/:id/issues/:issueId",
+    async (request, reply) => {
+      issueService.remove(
+        parseId(request.params.id),
+        parseId(request.params.issueId),
+      );
+      return reply.status(204).send();
+    },
+  );
+  // 问题与产出物关联
+  app.get<{ Params: { id: string; issueId: string } }>(
+    "/api/requirements/:id/issues/:issueId/assets",
+    async (request) =>
+      issueService.listAssets(
+        parseId(request.params.id),
+        parseId(request.params.issueId),
+      ),
+  );
+  app.post<{ Params: { id: string; issueId: string } }>(
+    "/api/requirements/:id/issues/:issueId/assets",
+    async (request, reply) =>
+      reply
+        .status(201)
+        .send(
+          issueService.linkAsset(
+            parseId(request.params.id),
+            parseId(request.params.issueId),
+            request.body,
+          ),
+        ),
+  );
+  app.delete<{ Params: { id: string; issueId: string; assetId: string } }>(
+    "/api/requirements/:id/issues/:issueId/assets/:assetId",
+    async (request, reply) => {
+      issueService.unlinkAsset(
+        parseId(request.params.id),
+        parseId(request.params.issueId),
+        parseId(request.params.assetId),
       );
       return reply.status(204).send();
     },

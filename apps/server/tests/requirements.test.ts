@@ -4,7 +4,12 @@ import { dateFields } from "@superpm/shared";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
-import type { Requirement, RequirementListResult } from "@superpm/shared";
+import type {
+  Requirement,
+  RequirementFile,
+  RequirementFileList,
+  RequirementListResult,
+} from "@superpm/shared";
 import Database from "better-sqlite3";
 import { createApp } from "../src/app";
 
@@ -224,7 +229,7 @@ describe("requirements API with real SQLite", () => {
       status: "ok",
     });
     expect((await app.inject("/api/system")).json()).toMatchObject({
-      schemaVersion: 3,
+      schemaVersion: 5,
       workspacePath: join(directory, "workspace"),
     });
     expect((await app.inject("/api/requirements")).json().total).toBe(0);
@@ -459,5 +464,384 @@ describe("requirements API with real SQLite", () => {
         )
       ).statusCode,
     ).toBe(404);
+  });
+  it("creates link entries and enforces per-category entry kinds", async () => {
+    const requirement = await create();
+    const link = await app.inject({
+      method: "POST",
+      url: `/api/requirements/${requirement.id}/files`,
+      payload: {
+        phase: "design",
+        category: "designLink",
+        name: "Figma 设计稿",
+        resourceType: "link",
+        linkUrl: "https://www.figma.com/design/example",
+      },
+    });
+    expect(link.statusCode).toBe(201);
+    expect(link.json()).toMatchObject({
+      kind: "link",
+      resourceType: "link",
+      storageType: "external",
+      status: "draft",
+      isFinal: false,
+      linkUrl: "https://www.figma.com/design/example",
+      fileName: "",
+    });
+    // 仅链接分类不接受文件条目
+    const rejected = await app.inject({
+      method: "POST",
+      url: `/api/requirements/${requirement.id}/files`,
+      payload: {
+        phase: "design",
+        category: "designLink",
+        name: "原型",
+        data: Buffer.from("html").toString("base64"),
+      },
+    });
+    expect(rejected.statusCode).toBe(400);
+    expect(rejected.json().error.code).toBe("VALIDATION_ERROR");
+    // 链接条目没有文件内容可读写
+    const fileId = link.json().id;
+    const content = await app.inject(
+      `/api/requirements/${requirement.id}/files/${fileId}/content`,
+    );
+    expect(content.statusCode).toBe(400);
+    // 删除为软删除：列表消失，索引行保留
+    expect(
+      (
+        await app.inject({
+          method: "DELETE",
+          url: `/api/requirements/${requirement.id}/files/${fileId}`,
+        })
+      ).statusCode,
+    ).toBe(204);
+    const inspection = new Database(join(directory, "test.sqlite"));
+    const row = inspection
+      .prepare("SELECT is_deleted, resource_type FROM requirement_files WHERE id=?")
+      .get(fileId) as { is_deleted: number; resource_type: string };
+    inspection.close();
+    expect(row).toMatchObject({ is_deleted: 1, resource_type: "link" });
+    const groups = (
+      await app.inject(`/api/requirements/${requirement.id}/files?phase=design`)
+    ).json<RequirementFileList>().groups;
+    expect(
+      groups.find((group) => group.category === "designLink")!.files,
+    ).toHaveLength(0);
+  });
+  it("creates text assets stored in the database with full content roundtrip", async () => {
+    const requirement = await create();
+    const created = await app.inject({
+      method: "POST",
+      url: `/api/requirements/${requirement.id}/files`,
+      payload: {
+        phase: "testing",
+        category: "testReport",
+        name: "冒烟测试记录",
+        resourceType: "text",
+        textContent: "# 冒烟测试\n\n全部通过。",
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    expect(created.json()).toMatchObject({
+      resourceType: "text",
+      storageType: "database",
+      textContent: null,
+      fileName: "",
+    });
+    const fileId = created.json().id;
+    const content = await app.inject(
+      `/api/requirements/${requirement.id}/files/${fileId}/content`,
+    );
+    expect(content.statusCode).toBe(200);
+    expect(content.json().content).toContain("全部通过");
+    // 文本保存更新库内容而非磁盘
+    const saved = await app.inject({
+      method: "PUT",
+      url: `/api/requirements/${requirement.id}/files/${fileId}/content`,
+      payload: { content: "# 冒烟测试\n\n更新后的记录。" },
+    });
+    expect(saved.statusCode).toBe(200);
+    const reread = await app.inject(
+      `/api/requirements/${requirement.id}/files/${fileId}/content`,
+    );
+    expect(reread.json().content).toContain("更新后的记录");
+    // 超长文本被拒绝（200KB 上限）
+    const tooLong = await app.inject({
+      method: "POST",
+      url: `/api/requirements/${requirement.id}/files`,
+      payload: {
+        phase: "testing",
+        category: "testReport",
+        name: "超长记录",
+        resourceType: "text",
+        textContent: "a".repeat(200001),
+      },
+    });
+    expect(tooLong.statusCode).toBe(400);
+    // raw 接口对文本资源拒绝
+    expect(
+      (
+        await app.inject(
+          `/api/requirements/${requirement.id}/files/${fileId}/raw`,
+        )
+      ).statusCode,
+    ).toBe(400);
+  });
+  it("archives assets via status and projects isFinal from status", async () => {
+    const requirement = await create();
+    const created = await app.inject({
+      method: "POST",
+      url: `/api/requirements/${requirement.id}/files`,
+      payload: {
+        phase: "development",
+        category: "technicalDoc",
+        name: "联调说明",
+        resourceType: "text",
+        textContent: "接口约定。",
+        isFinal: true,
+      },
+    });
+    const fileId = created.json().id;
+    // isFinal 输入兼容：映射为 status=final
+    expect(created.json()).toMatchObject({ status: "final", isFinal: true });
+    // 归档：isFinal 投影随之变为 false
+    const archived = await app.inject({
+      method: "PATCH",
+      url: `/api/requirements/${requirement.id}/files/${fileId}`,
+      payload: { status: "archived" },
+    });
+    expect(archived.statusCode).toBe(200);
+    expect(archived.json()).toMatchObject({ status: "archived", isFinal: false });
+    // 同时提交 isFinal 与 status 被拒绝
+    const conflict = await app.inject({
+      method: "PATCH",
+      url: `/api/requirements/${requirement.id}/files/${fileId}`,
+      payload: { isFinal: true, status: "draft" },
+    });
+    expect(conflict.statusCode).toBe(400);
+    // missing 不可手工设置
+    const missing = await app.inject({
+      method: "PATCH",
+      url: `/api/requirements/${requirement.id}/files/${fileId}`,
+      payload: { status: "missing" },
+    });
+    expect(missing.statusCode).toBe(400);
+  });
+  it("soft-deletes files keeping them on disk and hides them from lists", async () => {
+    const requirement = await create();
+    const created = await app.inject({
+      method: "POST",
+      url: `/api/requirements/${requirement.id}/files`,
+      payload: {
+        phase: "analysis",
+        category: "other",
+        name: "参考资料.pdf",
+        data: Buffer.from("pdf-bytes").toString("base64"),
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const file = created.json() as RequirementFile;
+    // 新文件统一落 files/ 目录并记录相对路径
+    expect(file.relativePath).toBe(
+      `requirements/${requirement.id}/files/${file.fileName}`,
+    );
+    const absolute = join(directory, "workspace", ...file.relativePath!.split("/"));
+    expect(existsSync(absolute)).toBe(true);
+    expect(
+      (
+        await app.inject({
+          method: "DELETE",
+          url: `/api/requirements/${requirement.id}/files/${file.id}`,
+        })
+      ).statusCode,
+    ).toBe(204);
+    // 列表中消失，磁盘文件保留
+    const groups = (
+      await app.inject(`/api/requirements/${requirement.id}/files?phase=analysis&all=true`)
+    ).json<RequirementFileList>().groups;
+    expect(
+      groups.find((group) => group.category === "other")!.files,
+    ).toHaveLength(0);
+    expect(existsSync(absolute)).toBe(true);
+    // 二次删除：软删后的行不再可见，返回 404
+    expect(
+      (
+        await app.inject({
+          method: "DELETE",
+          url: `/api/requirements/${requirement.id}/files/${file.id}`,
+        })
+      ).statusCode,
+    ).toBe(404);
+  });
+  it("roundtrips text content near the 200KB limit", async () => {
+    const requirement = await create();
+    const content = "测".repeat(200000);
+    const created = await app.inject({
+      method: "POST",
+      url: `/api/requirements/${requirement.id}/files`,
+      payload: {
+        phase: "testing",
+        category: "testReport",
+        name: "大容量测试记录",
+        resourceType: "text",
+        textContent: content,
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const fileId = created.json().id;
+    const fetched = await app.inject(
+      `/api/requirements/${requirement.id}/files/${fileId}/content`,
+    );
+    expect(fetched.statusCode).toBe(200);
+    expect(fetched.json().content).toBe(content);
+    // 再次写入同样长度的新内容仍成功（更新路径同样在上限内）
+    const next = "更".repeat(200000);
+    const saved = await app.inject({
+      method: "PUT",
+      url: `/api/requirements/${requirement.id}/files/${fileId}/content`,
+      payload: { content: next },
+    });
+    expect(saved.statusCode).toBe(200);
+    expect(
+      (
+        await app.inject(
+          `/api/requirements/${requirement.id}/files/${fileId}/content`,
+        )
+      ).json().content,
+    ).toBe(next);
+  });
+  it("marks local files as missing and returns 404 once the disk file disappears", async () => {
+    const requirement = await create();
+    const created = await app.inject({
+      method: "POST",
+      url: `/api/requirements/${requirement.id}/files`,
+      payload: {
+        phase: "analysis",
+        category: "other",
+        name: "丢失的文件.pdf",
+        mime: "application/pdf",
+        data: Buffer.from("%PDF-1.4").toString("base64"),
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const file = created.json() as RequirementFile;
+    const absolute = join(
+      directory,
+      "workspace",
+      ...file.relativePath!.split("/"),
+    );
+    expect(existsSync(absolute)).toBe(true);
+    rmSync(absolute);
+    // raw 与 content 均返回 404
+    expect(
+      (
+        await app.inject(
+          `/api/requirements/${requirement.id}/files/${file.id}/raw`,
+        )
+      ).statusCode,
+    ).toBe(404);
+    expect(
+      (
+        await app.inject(
+          `/api/requirements/${requirement.id}/files/${file.id}/content`,
+        )
+      ).statusCode,
+    ).toBe(404);
+    // 行被标记 status=missing（不删行、不重复标记）
+    const inspection = new Database(join(directory, "test.sqlite"));
+    const row = inspection
+      .prepare("SELECT status, is_deleted FROM requirement_files WHERE id=?")
+      .get(file.id) as { status: string; is_deleted: number };
+    inspection.close();
+    expect(row).toMatchObject({ status: "missing", is_deleted: 0 });
+    // 列表可见且带 missing 状态
+    const groups = (
+      await app.inject(`/api/requirements/${requirement.id}/files?phase=analysis&all=true`)
+    ).json<RequirementFileList>().groups;
+    const listed = groups
+      .find((group) => group.category === "other")!
+      .files.find((item) => item.id === file.id);
+    expect(listed).toMatchObject({ status: "missing", isFinal: false });
+  });
+  it("returns the full category skeleton with empty groups when nothing is stored", async () => {
+    const requirement = await create();
+    const all = (
+      await app.inject(`/api/requirements/${requirement.id}/files?phase=all&all=true`)
+    ).json<RequirementFileList>();
+    expect(all.groups).toHaveLength(7);
+    expect(all.groups.map((group) => group.category)).toEqual([
+      "record",
+      "prototype",
+      "prd",
+      "mindMap",
+      "flowchart",
+      "uiAssets",
+      "other",
+    ]);
+    expect(all.groups.every((group) => group.total === 0 && group.files.length === 0)).toBe(true);
+    expect(all.editorFile).toBeNull();
+  });
+  it("rejects file payloads just above the 5MB limit", async () => {
+    const requirement = await create();
+    const oversized = Buffer.alloc(5 * 1024 * 1024 + 1, 7).toString("base64");
+    const rejected = await app.inject({
+      method: "POST",
+      url: `/api/requirements/${requirement.id}/files`,
+      payload: {
+        phase: "analysis",
+        category: "other",
+        name: "超大文件.zip",
+        mime: "application/zip",
+        data: oversized,
+      },
+    });
+    expect(rejected.statusCode).toBe(400);
+    expect(rejected.json().error.code).toBe("VALIDATION_ERROR");
+    // 恰好 5MB 仍被接受
+    const exact = await app.inject({
+      method: "POST",
+      url: `/api/requirements/${requirement.id}/files`,
+      payload: {
+        phase: "analysis",
+        category: "other",
+        name: "恰好上限.zip",
+        mime: "application/zip",
+        data: Buffer.alloc(5 * 1024 * 1024, 7).toString("base64"),
+      },
+    });
+    expect(exact.statusCode).toBe(201);
+  });
+  it("keeps stage groups aligned with the new category catalog", async () => {
+    const requirement = await create();
+    const design = (
+      await app.inject(`/api/requirements/${requirement.id}/files?phase=design`)
+    ).json<RequirementFileList>();
+    expect(design.groups.map((group) => group.category)).toEqual([
+      "designLink",
+      "uiAssets",
+      "designNote",
+      "prototype",
+      "other",
+    ]);
+    const testing = (
+      await app.inject(`/api/requirements/${requirement.id}/files?phase=testing`)
+    ).json<RequirementFileList>();
+    expect(testing.groups.map((group) => group.category)).toEqual([
+      "testReport",
+      "testData",
+      "testEvidence",
+      "other",
+    ]);
+    // 分析记录仍是 analysis 阶段的默认编辑器文件
+    const analysis = (
+      await app.inject(`/api/requirements/${requirement.id}/files?phase=analysis`)
+    ).json<RequirementFileList>();
+    expect(analysis.editorFile).toMatchObject({
+      name: "分析记录",
+      fileName: "analysis-record.md",
+      status: "final",
+      isFinal: true,
+    });
   });
 });

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import {
   onBeforeRouteLeave,
   onBeforeRouteUpdate,
@@ -7,10 +7,11 @@ import {
   useRouter,
 } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { ArrowLeft, Delete, Document } from "@element-plus/icons-vue";
+import { ArrowLeft, Delete } from "@element-plus/icons-vue";
 import {
   dateFields,
   dateLabels,
+  issuePhases,
   priorities,
   requirementStatuses,
   requirementTypes,
@@ -18,15 +19,18 @@ import {
   stages,
   statusLabels,
   typeLabels,
+  type IssuePhase,
   type Requirement,
+  type RequirementFile,
   type RequirementRelations,
   type RequirementUpdate,
   type Stage,
-  type StageHistory,
 } from "@superpm/shared";
 import { requirementApi } from "../api/requirements";
 import { errorMessage } from "../api/client";
 import RequirementAnalysisPanel from "../features/requirements/RequirementAnalysisPanel.vue";
+import RequirementAssetsPanel from "../features/requirements/RequirementAssetsPanel.vue";
+import RequirementIssuesPanel from "../features/requirements/RequirementIssuesPanel.vue";
 import InlineRichTextEditor from "../features/requirements/InlineRichTextEditor.vue";
 import XlyTimeline from "../components/ease-ui/xly-timeline/index.vue";
 import XlyTimelineItem from "../components/ease-ui/xly-timeline/timeline-item.vue";
@@ -52,7 +56,6 @@ const router = useRouter();
 const id = computed(() => Number(route.params.id));
 const item = ref<Requirement>();
 const relations = ref<RequirementRelations>();
-const history = ref<StageHistory[]>([]);
 const draft = ref<Editable>();
 const initial = ref("");
 const loading = ref(false),
@@ -60,9 +63,39 @@ const loading = ref(false),
   error = ref("");
 const activeTab = ref<"detail" | "progress">("detail");
 const viewingStage = ref<Stage>("analysis");
+// 左栏视图：文档编辑器 / 问题面板（仅在问题阶段可切到问题视图）
+const viewMode = ref<"doc" | "issues">("doc");
 const stageSaving = ref(false);
 const stageSwitching = ref(false);
 const analysisPanel = ref<InstanceType<typeof RequirementAnalysisPanel>>();
+const assetsPanel = ref<InstanceType<typeof RequirementAssetsPanel>>();
+// 当前查看阶段是否为问题阶段（UI 设计/开发跟进/需求测试）
+const activeIssuePhase = computed<IssuePhase | null>(() =>
+  (issuePhases as readonly string[]).includes(viewingStage.value)
+    ? (viewingStage.value as IssuePhase)
+    : null,
+);
+// 阶段变化自动切换左栏视图：问题阶段展示问题面板，其余回到文档编辑器
+watch(viewingStage, (stage) => {
+  viewMode.value = (issuePhases as readonly string[]).includes(stage)
+    ? "issues"
+    : "doc";
+});
+// 右栏点开 markdown 文档：编辑器常驻左栏，任意阶段直接加载（补充文档 5.1）
+async function onOpenDoc(file: RequirementFile) {
+  if (file.phase !== "analysis" && viewingStage.value !== file.phase) {
+    // 先保存当前编辑内容，再切换查看阶段（右侧产物区跟随刷新）
+    await viewStage(file.phase);
+  }
+  // 强制回到文档视图：编辑器即将打开
+  viewMode.value = "doc";
+  await nextTick();
+  void analysisPanel.value?.loadEditor(file);
+}
+// 右栏删除文档后，左栏若正编辑该文档则回退默认分析记录
+async function onDocRemoved(file: RequirementFile) {
+  await analysisPanel.value?.reloadIfCurrent(file.id);
+}
 async function flushAnalysis() {
   return (await analysisPanel.value?.flush()) ?? true;
 }
@@ -93,7 +126,9 @@ function statusOf(stage: Stage): "finish" | "process" | "wait" {
   if (target === current) return "process";
   return "wait";
 }
-const extraDates = dateFields.filter((key) => key !== "proposedAt");
+// 提出时间与开始时间并排一行，其余日期字段两列排布
+const leadDates: string[] = ["proposedAt", "startedAt"];
+const extraDates = dateFields.filter((key) => !leadDates.includes(key));
 function snapshot(source: Requirement): Editable {
   const {
     name,
@@ -140,14 +175,12 @@ async function load() {
   loading.value = true;
   error.value = "";
   try {
-    const [detail, records, related] = await Promise.all([
+    const [detail, related] = await Promise.all([
       requirementApi.get(id.value),
-      requirementApi.history(id.value),
       requirementApi.relations(id.value),
     ]);
     if (token !== revision) return;
     item.value = detail;
-    history.value = records;
     relations.value = related;
     viewingStage.value = detail.currentStage;
     resetDraft(detail);
@@ -203,7 +236,6 @@ async function changeStage(stage: Stage) {
     const updated = await requirementApi.update(item.value.id, {
       currentStage: stage,
     });
-    history.value = await requirementApi.history(item.value.id);
     item.value = updated;
     viewingStage.value = stage;
     resetDraft(updated);
@@ -266,27 +298,6 @@ function go(target: Requirement) {
             <span class="hero-no">{{ item.requirementNo }}</span>
             <h1 class="head-title">{{ item.name }}</h1>
           </div>
-          <div class="head-tags">
-            <el-tag class="enum-tag" :class="tagTone('type', item.type)">{{
-              typeLabels[item.type]
-            }}</el-tag>
-            <el-tag
-              class="enum-tag"
-              :class="tagTone('priority', item.priority)"
-              >{{ item.priority }}</el-tag
-            >
-            <el-tag class="enum-tag" :class="tagTone('status', item.status)">{{
-              statusLabels[item.status]
-            }}</el-tag>
-            <el-tag
-              class="enum-tag"
-              :class="tagTone('currentStage', item.currentStage)"
-              >{{ stageLabels[item.currentStage] }}</el-tag
-            >
-            <el-tag v-if="item.parentId" size="small" effect="plain"
-              >子需求</el-tag
-            >
-          </div>
           <div class="head-actions">
             <el-button
               v-if="viewingStage !== item.currentStage"
@@ -324,14 +335,9 @@ function go(target: Requirement) {
           <el-tab-pane label="需求详情" name="detail">
             <div class="detail-grid">
               <article class="detail-desc">
-                <header class="panel-head">
-                  <h2>需求描述</h2>
-                  <span class="panel-note"
-                    >直接编辑内容，保存后写入需求描述</span
-                  >
-                </header>
                 <InlineRichTextEditor
                   v-if="draft"
+                  fill-card
                   :html="draft.descriptionHtml"
                   :text="draft.description"
                   :requirement-id="item.id"
@@ -445,16 +451,28 @@ function go(target: Requirement) {
                       >
                     </label>
                   </div>
-                  <label class="field">
-                    <span>{{ dateLabels.proposedAt }}</span>
-                    <el-date-picker
-                      v-model="draft.proposedAt"
-                      type="date"
-                      value-format="YYYY-MM-DD"
-                      placeholder="选择日期"
-                      :clearable="false"
-                    />
-                  </label>
+                  <div class="field-row">
+                    <label class="field">
+                      <span>{{ dateLabels.proposedAt }}</span>
+                      <el-date-picker
+                        v-model="draft.proposedAt"
+                        type="date"
+                        value-format="YYYY-MM-DD"
+                        placeholder="选择日期"
+                        :clearable="false"
+                      />
+                    </label>
+                    <label class="field">
+                      <span>{{ dateLabels.startedAt }}</span>
+                      <el-date-picker
+                        v-model="draft.startedAt"
+                        type="date"
+                        value-format="YYYY-MM-DD"
+                        placeholder="未设置"
+                        clearable
+                      />
+                    </label>
+                  </div>
                   <div class="field-row">
                     <label v-for="key in extraDates" :key="key" class="field">
                       <span>{{ dateLabels[key] }}</span>
@@ -531,45 +549,51 @@ function go(target: Requirement) {
             </div>
           </el-tab-pane>
           <el-tab-pane label="需求进展" name="progress">
-            <RequirementAnalysisPanel
-              v-if="viewingStage === 'analysis'"
-              ref="analysisPanel"
-              :key="item.id"
-              :requirement-id="item.id"
-            />
-            <div v-else class="stage-placeholder">
-              <el-icon><Document /></el-icon>
-              <strong
-                >{{
-                  stageLabels[viewingStage]
-                }}页面将在后续批次迁移到此处</strong
-              >
-              <p>
-                当前批次只迁移了「需求分析」，其余阶段将在后续批次逐步完成。
-              </p>
-            </div>
-            <el-collapse class="stage-history">
-              <el-collapse-item title="阶段历史" name="history">
-                <div v-for="key in extraDates" :key="key" class="history-date">
-                  <span>{{ dateLabels[key] }}</span>
-                  <strong>{{ item[key] || "未设置" }}</strong>
-                </div>
-                <p v-if="!history.length" class="muted">尚未发生阶段切换。</p>
-                <div
-                  v-for="record in history"
-                  :key="record.id"
-                  class="stage-history-row"
-                >
-                  <span
-                    >{{ stageLabels[record.fromStage] }} →
-                    {{ stageLabels[record.toStage] }}</span
+            <div class="progress-layout">
+              <div class="progress-main">
+                <!-- 左栏视图切换：文档 / 问题（问题视图仅在问题阶段可用） -->
+                <div class="view-switch" role="group" aria-label="左栏视图切换">
+                  <button
+                    type="button"
+                    :class="{ active: viewMode === 'doc' }"
+                    @click="viewMode = 'doc'"
                   >
-                  <time>{{
-                    new Date(record.createdAt).toLocaleString("zh-CN")
-                  }}</time>
+                    文档
+                  </button>
+                  <button
+                    type="button"
+                    :class="{ active: viewMode === 'issues' }"
+                    :disabled="!activeIssuePhase"
+                    @click="viewMode = 'issues'"
+                  >
+                    问题
+                  </button>
                 </div>
-              </el-collapse-item>
-            </el-collapse>
+                <!-- 问题面板：问题阶段的问题视图下渲染 -->
+                <RequirementIssuesPanel
+                  v-if="activeIssuePhase && viewMode === 'issues'"
+                  :key="item.id"
+                  :requirement-id="item.id"
+                  :phase="activeIssuePhase"
+                />
+                <!-- 编辑器常驻左栏：跨阶段打开文档不再切换宿主（补充文档 5.1）；
+                     问题视图下隐藏但保持挂载，冲刷未保存内容不中断 -->
+                <RequirementAnalysisPanel
+                  v-show="!activeIssuePhase || viewMode === 'doc'"
+                  ref="analysisPanel"
+                  :key="item.id"
+                  :requirement-id="item.id"
+                />
+              </div>
+              <RequirementAssetsPanel
+                ref="assetsPanel"
+                class="progress-side"
+                :requirement-id="item.id"
+                :active-phase="viewingStage"
+                @open-doc="onOpenDoc"
+                @doc-removed="onDocRemoved"
+              />
+            </div>
           </el-tab-pane>
         </el-tabs>
       </section>
@@ -577,6 +601,55 @@ function go(target: Requirement) {
   </div>
 </template>
 <style scoped>
+.progress-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+  gap: 14px;
+  align-items: stretch;
+}
+.progress-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* 左栏视图切换条：文档 / 问题（segmented 风格） */
+.view-switch {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border-base);
+  border-radius: 8px;
+  background: var(--bg-surface);
+  flex: none;
+  align-self: flex-start;
+  margin-bottom: 8px;
+}
+.view-switch button {
+  padding: 3px 14px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.view-switch button:hover:not(:disabled):not(.active) {
+  color: var(--brand);
+  background: var(--bg-hover);
+}
+.view-switch button.active {
+  background: var(--bg-brand-soft);
+  color: var(--brand);
+  font-weight: 600;
+}
+.view-switch button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+  color: var(--text-faint);
+}
+.progress-side {
+  min-width: 0;
+}
 .detail-page {
   display: grid;
   gap: 10px;
@@ -599,19 +672,21 @@ function go(target: Requirement) {
 }
 .detail-head {
   display: grid;
-  gap: 12px;
-  padding: 10px 18px 14px;
+  gap: 8px;
+  padding: 10px 18px 12px;
 }
 .head-row {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 12px;
   flex-wrap: wrap;
+  min-width: 0;
 }
 .head-identity {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 10px;
+  flex: 1 1 auto;
   min-width: 0;
 }
 .head-title {
@@ -619,18 +694,19 @@ function go(target: Requirement) {
   font-size: 17px;
   font-weight: 650;
   letter-spacing: -0.2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .hero-no {
   font-family: Consolas, monospace;
-  font-size: 13px;
-  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 2px 9px;
+  border-radius: 999px;
+  color: var(--brand);
+  background: var(--bg-brand-soft);
   flex: none;
-}
-.head-tags {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
 }
 .head-actions {
   margin-left: auto;
@@ -652,25 +728,13 @@ function go(target: Requirement) {
   padding-top: 6px;
 }
 .detail-desc {
-  border: 1px solid var(--border-base);
-  border-radius: 8px;
-  padding: 16px 18px;
-  background: var(--bg-subtle);
-  align-self: start;
+  /* 高度跟随右侧表单列：编辑器绝对定位铺满本格，内容超出时内部滚动 */
+  position: relative;
+  min-height: 360px;
 }
-.panel-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-.panel-head h2 {
-  margin: 0;
-}
-.panel-note {
-  font-size: 11px;
-  color: var(--text-faint);
+.detail-desc > .inline-rich {
+  position: absolute;
+  inset: 0;
 }
 .field-form {
   display: grid;
@@ -752,6 +816,7 @@ function go(target: Requirement) {
 }
 .stage-name {
   font-size: 13px;
+  line-height: 1.4;
   color: var(--text-muted);
 }
 .stage-timeline :deep(.xly-timeline-item--finish) .stage-name {
@@ -760,56 +825,6 @@ function go(target: Requirement) {
 .stage-timeline :deep(.xly-timeline-item--process) .stage-name {
   color: var(--brand-strong);
   font-weight: 600;
-}
-.stage-placeholder {
-  padding: 42px 22px;
-  background: var(--bg-subtle);
-  border: 1px dashed var(--border-strong);
-  border-radius: 8px;
-  text-align: center;
-}
-.stage-placeholder > .el-icon {
-  font-size: 26px;
-  color: var(--text-faint);
-}
-.stage-placeholder > strong {
-  display: block;
-  font-size: 13px;
-  color: var(--text-muted);
-  margin-top: 12px;
-}
-.stage-placeholder > p {
-  font-size: 12px;
-  color: var(--text-faint);
-  margin: 8px 0 18px;
-}
-.stage-history {
-  margin-top: 26px;
-  border-top: 1px solid var(--border-base);
-}
-.history-date {
-  display: inline-flex;
-  flex-direction: column;
-  gap: 4px;
-  margin: 4px 18px 12px 0;
-  font-size: 11px;
-  color: var(--text-faint);
-}
-.history-date strong {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text-secondary);
-}
-.stage-history-row {
-  display: flex;
-  justify-content: space-between;
-  font-size: 12px;
-  color: var(--text-muted);
-  line-height: 2.4;
-}
-.stage-history-row time {
-  font-size: 10px;
-  color: var(--text-faint);
 }
 @media (max-width: 1100px) {
   .detail-grid {
