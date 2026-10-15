@@ -185,7 +185,7 @@ onBeforeUnmount(() => editor.value?.destroy());
 </template>
 <style>
 .rich-shell {
-  border: 1px solid #dfe5ee;
+  border: 1px solid var(--border-strong);
   border-radius: 8px;
   overflow: hidden;
 }
@@ -195,21 +195,21 @@ onBeforeUnmount(() => editor.value?.destroy());
   gap: 4px;
   flex-wrap: wrap;
   padding: 10px;
-  background: #f7f9fc;
-  border-bottom: 1px solid #e5eaf1;
+  background: var(--bg-subtle);
+  border-bottom: 1px solid var(--border-base);
 }
 .rich-toolbar button {
   border: 0;
   background: transparent;
   padding: 6px 10px;
   border-radius: 4px;
-  color: #536079;
+  color: var(--text-secondary);
   cursor: pointer;
 }
 .rich-toolbar button:hover,
 .rich-toolbar button.active {
-  background: #e8edff;
-  color: #4e6ef2;
+  background: var(--bg-brand-soft);
+  color: var(--brand);
 }
 .rich-toolbar button:disabled {
   opacity: 0.4;
@@ -218,7 +218,7 @@ onBeforeUnmount(() => editor.value?.destroy());
 .toolbar-divider {
   height: 18px;
   width: 1px;
-  background: #dfe5ee;
+  background: var(--border-strong);
   margin: 0 4px;
 }
 .rich-document {
@@ -229,7 +229,7 @@ onBeforeUnmount(() => editor.value?.destroy());
   outline: 0;
   font-size: 14px;
   line-height: 1.8;
-  color: #34445d;
+  color: var(--text-body);
 }
 .rich-document p {
   margin: 0 0 10px;
@@ -241,22 +241,22 @@ onBeforeUnmount(() => editor.value?.destroy());
 }
 .rich-document blockquote,
 .rich-render blockquote {
-  border-left: 3px solid #8b9aea;
+  border-left: 3px solid var(--brand);
   padding-left: 14px;
   margin-left: 0;
-  color: #77849b;
+  color: var(--text-muted);
 }
 .rich-document pre,
 .rich-render pre {
-  background: #f0f3f8;
+  background: var(--bg-code);
   padding: 14px;
   white-space: pre-wrap;
 }
 .rich-footer {
-  border-top: 1px solid #edf0f5;
+  border-top: 1px solid var(--border-base);
   padding: 10px 16px;
   font-size: 11px;
-  color: #96a2b4;
+  color: var(--text-faint);
 }
 .rich-render {
   font-size: 13px;

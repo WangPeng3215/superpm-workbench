@@ -77,6 +77,11 @@ async function viewStage(stage: Stage) {
     stageSwitching.value = false;
   }
 }
+// 顶部步骤条点击：切到「需求进展」页签并跟随该阶段刷新
+async function goStage(stage: Stage) {
+  activeTab.value = "progress";
+  await viewStage(stage);
+}
 const dirty = computed(
   () => Boolean(draft.value) && JSON.stringify(draft.value) !== initial.value,
 );
@@ -255,13 +260,13 @@ function go(target: Requirement) {
       class="error-alert"
     />
     <template v-if="item">
-      <section class="surface detail-hero">
-        <div class="hero-main">
-          <div class="hero-title">
+      <section class="surface detail-head">
+        <div class="head-row">
+          <div class="head-identity">
             <span class="hero-no">{{ item.requirementNo }}</span>
-            <h1>{{ item.name }}</h1>
+            <h1 class="head-title">{{ item.name }}</h1>
           </div>
-          <div class="hero-tags">
+          <div class="head-tags">
             <el-tag class="enum-tag" :class="tagTone('type', item.type)">{{
               typeLabels[item.type]
             }}</el-tag>
@@ -282,12 +287,37 @@ function go(target: Requirement) {
               >子需求</el-tag
             >
           </div>
+          <div class="head-actions">
+            <el-button
+              v-if="viewingStage !== item.currentStage"
+              type="primary"
+              plain
+              size="small"
+              :loading="stageSaving"
+              @click="changeStage(viewingStage)"
+              >设为当前阶段</el-button
+            >
+            <el-tag v-else effect="plain" size="small">当前阶段</el-tag>
+            <el-button
+              type="danger"
+              plain
+              size="small"
+              :icon="Delete"
+              @click="remove"
+              >删除</el-button
+            >
+          </div>
         </div>
-        <div class="hero-actions">
-          <el-button type="danger" plain :icon="Delete" @click="remove"
-            >删除</el-button
+        <XlyTimeline direction="horizontal" class="stage-timeline">
+          <XlyTimelineItem
+            v-for="stage in stages"
+            :key="stage"
+            :status="statusOf(stage)"
+            @click="goStage(stage)"
           >
-        </div>
+            <span class="stage-name">{{ stageLabels[stage] }}</span>
+          </XlyTimelineItem>
+        </XlyTimeline>
       </section>
       <section class="surface detail-body">
         <el-tabs v-model="activeTab">
@@ -501,30 +531,6 @@ function go(target: Requirement) {
             </div>
           </el-tab-pane>
           <el-tab-pane label="需求进展" name="progress">
-            <div class="stage-header">
-              <XlyTimeline direction="horizontal" class="stage-timeline">
-                <XlyTimelineItem
-                  v-for="stage in stages"
-                  :key="stage"
-                  :status="statusOf(stage)"
-                  @click="viewStage(stage)"
-                >
-                  <span class="stage-name">{{ stageLabels[stage] }}</span>
-                </XlyTimelineItem>
-              </XlyTimeline>
-              <div class="stage-switch">
-                <el-button
-                  v-if="viewingStage !== item.currentStage"
-                  type="primary"
-                  plain
-                  size="small"
-                  :loading="stageSaving"
-                  @click="changeStage(viewingStage)"
-                  >设为当前阶段</el-button
-                >
-                <el-tag v-else effect="plain" size="small">当前阶段</el-tag>
-              </div>
-            </div>
             <RequirementAnalysisPanel
               v-if="viewingStage === 'analysis'"
               ref="analysisPanel"
@@ -573,7 +579,7 @@ function go(target: Requirement) {
 <style scoped>
 .detail-page {
   display: grid;
-  gap: 16px;
+  gap: 10px;
   align-content: start;
 }
 .back-link {
@@ -584,46 +590,57 @@ function go(target: Requirement) {
   background: none;
   padding: 0;
   font-size: 12px;
-  color: #7a879b;
+  color: var(--text-muted);
   cursor: pointer;
   justify-self: start;
 }
 .back-link:hover {
-  color: #4e6ef2;
+  color: var(--brand);
 }
-.detail-hero {
-  position: sticky;
-  top: 0;
-  z-index: 5;
+.detail-head {
+  display: grid;
+  gap: 12px;
+  padding: 10px 18px 14px;
+}
+.head-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 18px;
-  padding: 16px 22px;
-  box-shadow: 0 6px 18px rgba(37, 50, 73, 0.06);
+  gap: 14px;
+  flex-wrap: wrap;
 }
-.hero-title {
+.head-identity {
   display: flex;
   align-items: baseline;
-  gap: 12px;
-  flex-wrap: wrap;
+  gap: 10px;
+  min-width: 0;
+}
+.head-title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: -0.2px;
 }
 .hero-no {
   font-family: Consolas, monospace;
   font-size: 13px;
-  color: #7d8a9c;
+  color: var(--text-muted);
+  flex: none;
 }
-.hero-tags {
+.head-tags {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.head-actions {
+  margin-left: auto;
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
-  margin-top: 10px;
-}
-.hero-actions {
-  display: flex;
-  gap: 8px;
   flex: none;
+}
+.detail-head .stage-timeline {
+  min-width: 0;
 }
 .detail-body {
   padding: 12px 22px 22px;
@@ -635,10 +652,10 @@ function go(target: Requirement) {
   padding-top: 6px;
 }
 .detail-desc {
-  border: 1px solid #e7ebf1;
+  border: 1px solid var(--border-base);
   border-radius: 8px;
   padding: 16px 18px;
-  background: #fbfcfe;
+  background: var(--bg-subtle);
   align-self: start;
 }
 .panel-head {
@@ -653,7 +670,7 @@ function go(target: Requirement) {
 }
 .panel-note {
   font-size: 11px;
-  color: #99a7bd;
+  color: var(--text-faint);
 }
 .field-form {
   display: grid;
@@ -670,14 +687,14 @@ function go(target: Requirement) {
 }
 .field > span {
   font-size: 11px;
-  color: #8b98ac;
+  color: var(--text-muted);
 }
 .field :deep(.el-select),
 .field :deep(.el-date-editor) {
   width: 100%;
 }
 .related-block {
-  border-top: 1px solid #eef1f6;
+  border-top: 1px solid var(--border-soft);
   padding-top: 16px;
   display: grid;
   gap: 8px;
@@ -695,13 +712,13 @@ function go(target: Requirement) {
   gap: 10px;
   font-size: 12px;
   padding: 7px 10px;
-  border: 1px solid #eef1f6;
+  border: 1px solid var(--border-soft);
   border-radius: 6px;
-  background: #fbfcfe;
+  background: var(--bg-subtle);
 }
 .related-row .link-button {
   font-size: 12px;
-  color: #41556f;
+  color: var(--text-regular);
   flex: 1;
   text-align: left;
 }
@@ -712,29 +729,22 @@ function go(target: Requirement) {
   cursor: pointer;
 }
 .link-button:hover {
-  color: #4e6ef2;
+  color: var(--brand);
 }
 .field-actions {
   display: flex;
   align-items: center;
   gap: 10px;
-  border-top: 1px solid #eef1f6;
+  border-top: 1px solid var(--border-soft);
   padding-top: 14px;
   margin-top: 4px;
 }
 .field-actions > span {
   margin-right: auto;
   font-size: 11px;
-  color: #99a7bd;
-}
-.stage-header {
-  display: flex;
-  align-items: center;
-  gap: 20px;
-  margin: 6px 0 20px;
+  color: var(--text-faint);
 }
 .stage-timeline {
-  flex: 1;
   min-width: 0;
 }
 .stage-timeline :deep(.xly-timeline-item) {
@@ -742,43 +752,40 @@ function go(target: Requirement) {
 }
 .stage-name {
   font-size: 13px;
-  color: #8e8ea0;
+  color: var(--text-muted);
 }
 .stage-timeline :deep(.xly-timeline-item--finish) .stage-name {
-  color: #344761;
+  color: var(--text-title);
 }
 .stage-timeline :deep(.xly-timeline-item--process) .stage-name {
-  color: #4f6ef7;
+  color: var(--brand-strong);
   font-weight: 600;
-}
-.stage-switch {
-  flex: none;
 }
 .stage-placeholder {
   padding: 42px 22px;
-  background: #fafbfd;
-  border: 1px dashed #dce4f0;
+  background: var(--bg-subtle);
+  border: 1px dashed var(--border-strong);
   border-radius: 8px;
   text-align: center;
 }
 .stage-placeholder > .el-icon {
   font-size: 26px;
-  color: #a6b5d0;
+  color: var(--text-faint);
 }
 .stage-placeholder > strong {
   display: block;
   font-size: 13px;
-  color: #7183a1;
+  color: var(--text-muted);
   margin-top: 12px;
 }
 .stage-placeholder > p {
   font-size: 12px;
-  color: #9aa8bd;
+  color: var(--text-faint);
   margin: 8px 0 18px;
 }
 .stage-history {
   margin-top: 26px;
-  border-top: 1px solid #e7ecf3;
+  border-top: 1px solid var(--border-base);
 }
 .history-date {
   display: inline-flex;
@@ -786,23 +793,23 @@ function go(target: Requirement) {
   gap: 4px;
   margin: 4px 18px 12px 0;
   font-size: 11px;
-  color: #9aabc1;
+  color: var(--text-faint);
 }
 .history-date strong {
   font-size: 12px;
   font-weight: 500;
-  color: #607692;
+  color: var(--text-secondary);
 }
 .stage-history-row {
   display: flex;
   justify-content: space-between;
   font-size: 12px;
-  color: #7790b2;
+  color: var(--text-muted);
   line-height: 2.4;
 }
 .stage-history-row time {
   font-size: 10px;
-  color: #a3b0c3;
+  color: var(--text-faint);
 }
 @media (max-width: 1100px) {
   .detail-grid {
@@ -810,9 +817,12 @@ function go(target: Requirement) {
   }
 }
 @media (max-width: 700px) {
-  .detail-hero {
-    flex-direction: column;
+  .head-row {
     align-items: flex-start;
+  }
+  .head-actions {
+    margin-left: 0;
+    width: 100%;
   }
   .field-row {
     grid-template-columns: minmax(0, 1fr);

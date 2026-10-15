@@ -193,11 +193,11 @@ watch(
 <style scoped lang="scss">
 /* ========== 设计令牌 ========== */
 $bg-mask: rgba(0, 0, 0, 0.45);
-$bg-body: #fff;
-$text-primary: #1a1a2e;
-$text-secondary: #4a4a6a;
-$text-default: #8e8ea0;
-$border-color: #f2f3f7;
+$bg-body: var(--bg-surface);
+$text-primary: var(--text-title);
+$text-secondary: var(--text-regular);
+$text-default: var(--text-muted);
+$border-color: var(--border-soft);
 $radius: 14px;
 $shadow:
   0 20px 60px rgba(0, 0, 0, 0.15),
@@ -291,7 +291,7 @@ $transition-fast: 0.2s ease;
   margin: -4px -4px -4px 8px;
 
   &:hover {
-    background-color: rgba(0, 0, 0, 0.05);
+    background-color: var(--bg-hover);
     color: $text-secondary;
   }
   &:active {

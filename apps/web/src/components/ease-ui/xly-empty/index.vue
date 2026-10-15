@@ -480,13 +480,18 @@ const currentSvg = computed(() => svgMap[props.type] || SvgDefault);
 }
 
 .xly-empty__description {
-  color: #8e8ea0;
+  color: var(--text-muted);
   line-height: 1.6;
   text-align: center;
 
   span {
     display: block;
   }
+}
+
+/* 内置插图是浅色调的静态资源，深色下压低亮度以免刺眼 */
+html.dark .xly-empty__image {
+  opacity: 0.45;
 }
 
 .xly-empty__footer {

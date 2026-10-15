@@ -108,8 +108,8 @@ function handleClick(event: MouseEvent) {
 $primary: #4f6ef7;
 $primary-hover: #3d5ce5;
 $primary-active: #2f4bd6;
-$primary-light: rgba(79, 110, 247, 0.08);
-$primary-light-hover: rgba(79, 110, 247, 0.15);
+$primary-light: var(--bg-brand-soft);
+$primary-light-hover: var(--bg-selected);
 $primary-light-link-hover: rgba(79, 110, 247, 0.65);
 
 $success: #34c759;
@@ -140,10 +140,10 @@ $info-light: rgba(142, 142, 160, 0.08);
 $info-light-hover: rgba(142, 142, 160, 0.15);
 $info-light-link-hover: rgba(142, 142, 160, 0.65);
 
-$text-color: #4a4a6a;
-$text-hover: #4f6ef7;
-$text-active: #2f4bd6;
-$text-light-hover: rgba(79, 110, 247, 0.06);
+$text-color: var(--text-regular);
+$text-hover: var(--brand);
+$text-active: var(--brand-strong);
+$text-light-hover: var(--bg-brand-soft);
 $text-light-link-hover: rgba(79, 110, 247, 0.65);
 
 // link 样式文字颜色（使用主题色，不是白色）
@@ -153,8 +153,8 @@ $link-warning: $warning;
 $link-danger: $danger;
 $link-info: $info;
 
-$border-color: #e2e4ed;
-$border-hover: #c8cbd8;
+$border-color: var(--border-base);
+$border-hover: var(--border-strong);
 
 $radius: 8px;
 $radius-round: 999px;

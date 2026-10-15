@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import {
   Grid,
@@ -8,9 +8,12 @@ import {
   Setting,
   Connection,
   ArrowRight,
+  Moon,
+  Sunny,
 } from "@element-plus/icons-vue";
 import { request } from "./api/client";
 
+const THEME_KEY = "superpm-theme";
 const route = useRoute();
 const connected = ref(false);
 const title = computed(() => String(route.meta.title ?? "需求工作台"));
@@ -19,6 +22,24 @@ const navigation = [
   { path: "/tasks", label: "每日任务历史", icon: Calendar },
   { path: "/notifications", label: "系统通知", icon: Bell },
 ];
+// 记住过的偏好优先，首次访问跟随系统
+const stored = localStorage.getItem(THEME_KEY);
+const dark = ref(
+  stored === null
+    ? window.matchMedia("(prefers-color-scheme: dark)").matches
+    : stored === "dark",
+);
+watch(
+  dark,
+  (value) => {
+    document.documentElement.classList.toggle("dark", value);
+  },
+  { immediate: true },
+);
+function toggleTheme() {
+  dark.value = !dark.value;
+  localStorage.setItem(THEME_KEY, dark.value ? "dark" : "light");
+}
 onMounted(async () => {
   try {
     await request("/health");
@@ -63,10 +84,21 @@ onMounted(async () => {
         <div class="breadcrumb">
           工作空间<el-icon><ArrowRight /></el-icon><span>{{ title }}</span>
         </div>
-        <span class="service-status" :class="{ offline: !connected }"
-          ><el-icon><Connection /></el-icon
-          >{{ connected ? "本地服务已连接" : "本地服务未连接" }}</span
-        >
+        <div class="topbar-actions">
+          <button
+            class="theme-toggle"
+            type="button"
+            :aria-label="dark ? '切换到浅色模式' : '切换到深色模式'"
+            :title="dark ? '切换到浅色模式' : '切换到深色模式'"
+            @click="toggleTheme"
+          >
+            <el-icon><Sunny v-if="dark" /><Moon v-else /></el-icon>
+          </button>
+          <span class="service-status" :class="{ offline: !connected }"
+            ><el-icon><Connection /></el-icon
+            >{{ connected ? "本地服务已连接" : "本地服务未连接" }}</span
+          >
+        </div>
       </header>
       <main class="page-content"><RouterView /></main>
     </div>

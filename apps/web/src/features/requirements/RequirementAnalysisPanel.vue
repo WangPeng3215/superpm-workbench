@@ -45,6 +45,8 @@ const hiddenCount = computed(() =>
     0,
   ),
 );
+const htmlSourcePattern =
+  /^\s*<(?:!doctype|h[1-6]|p|ul|ol|li|div|table|pre|blockquote|img)\b/i;
 const imageExtensions = ["png", "jpg", "jpeg", "gif", "webp", "svg"];
 const isImage = (file: RequirementFile) =>
   imageExtensions.includes(file.name.split(".").pop()?.toLowerCase() ?? "");
@@ -75,7 +77,7 @@ async function loadFiles() {
 function toEditorHtml(content: string) {
   const trimmed = content.trim();
   if (!trimmed) return "";
-  if (trimmed.startsWith("<")) return trimmed;
+  if (htmlSourcePattern.test(trimmed)) return trimmed;
   return String(marked.parse(content, { async: false }));
 }
 function clearSaveTimer() {
@@ -207,7 +209,7 @@ async function upload(event: Event) {
       reader.onerror = reject;
       reader.readAsDataURL(file);
     });
-    await requirementFileApi.upload(props.requirementId, {
+    const created = await requirementFileApi.upload(props.requirementId, {
       phase: "analysis",
       category: activeCategory.value as FileCategory,
       name: file.name,
@@ -215,8 +217,14 @@ async function upload(event: Event) {
       data,
       isFinal: false,
     });
+    // 先关闭「恢复默认文件」，否则列表刷新会把默认记录抢占进编辑器
+    restoreDefault = false;
     await loadFiles();
-    ElMessage.success("文件已上传");
+    if (disposed) return;
+    if (isMarkdown(created)) await loadEditor(created);
+    ElMessage.success(
+      isMarkdown(created) ? "文件已上传，已在左侧编辑器中打开" : "文件已上传",
+    );
   } catch (error) {
     ElMessage.error(errorMessage(error));
   } finally {
@@ -325,6 +333,7 @@ async function removeFile(file: RequirementFile) {
         :html="recordHtml"
         :requirement-id="requirementId"
         label="需求分析记录内容"
+        fill-height
         @update:html="onRecordHtml"
         @update:text="onRecordText"
       />
@@ -424,6 +433,7 @@ async function removeFile(file: RequirementFile) {
               >
               <div class="file-actions">
                 <a
+                  v-if="!isMarkdown(file)"
                   class="file-link"
                   :href="requirementFileApi.rawUrl(requirementId, file.id)"
                   target="_blank"
@@ -473,10 +483,20 @@ async function removeFile(file: RequirementFile) {
 }
 .md-panel,
 .files-panel {
-  border: 1px solid #e7ebf1;
+  border: 1px solid var(--border-base);
   border-radius: 8px;
   padding: 16px 18px;
-  background: #fff;
+  background: var(--bg-surface);
+}
+.md-panel {
+  display: flex;
+  flex-direction: column;
+}
+.md-panel .panel-head {
+  flex: none;
+}
+.md-panel .md-footer {
+  flex: none;
 }
 .panel-head {
   display: flex;
@@ -489,13 +509,13 @@ async function removeFile(file: RequirementFile) {
 .panel-head h3 {
   margin: 0;
   font-size: 14px;
-  color: #344761;
+  color: var(--text-title);
 }
 .current-file {
   max-width: 100%;
   overflow-wrap: anywhere;
   font-size: 12px;
-  color: #7a879b;
+  color: var(--text-muted);
 }
 .files-actions {
   display: flex;
@@ -505,7 +525,7 @@ async function removeFile(file: RequirementFile) {
 }
 .switch-label {
   font-size: 12px;
-  color: #7a879b;
+  color: var(--text-muted);
 }
 .md-footer {
   display: flex;
@@ -513,13 +533,13 @@ async function removeFile(file: RequirementFile) {
   gap: 8px;
   margin-top: 10px;
   font-size: 11px;
-  color: #99a7bd;
+  color: var(--text-faint);
 }
 .files-hint {
   font-size: 12px;
-  color: #a1864f;
-  background: #fdf8ec;
-  border: 1px solid #f3e6c8;
+  color: var(--tone-amber-fg);
+  background: var(--tone-amber-bg);
+  border: 1px solid var(--tone-amber-bd);
   border-radius: 6px;
   padding: 8px 12px;
   margin: 0 0 12px;
@@ -528,7 +548,7 @@ async function removeFile(file: RequirementFile) {
 .tab-count {
   margin-left: 4px;
   font-size: 11px;
-  color: #98a5b8;
+  color: var(--text-faint);
 }
 .file-list {
   display: grid;
@@ -539,20 +559,20 @@ async function removeFile(file: RequirementFile) {
   align-items: center;
   gap: 12px;
   padding: 10px 12px;
-  border: 1px solid #eef1f6;
+  border: 1px solid var(--border-soft);
   border-radius: 6px;
-  background: #fbfcfe;
+  background: var(--bg-subtle);
 }
 .file-row.is-selected {
-  border-color: #bac8fb;
-  background: #f0f4ff;
+  border-color: var(--border-brand);
+  background: var(--bg-selected);
 }
 .file-thumb {
   width: 40px;
   height: 40px;
   object-fit: cover;
   border-radius: 4px;
-  border: 1px solid #e3e9f1;
+  border: 1px solid var(--border-base);
   flex: none;
 }
 .file-main {
@@ -563,7 +583,7 @@ async function removeFile(file: RequirementFile) {
 }
 .file-name {
   font-size: 13px;
-  color: #3b4d67;
+  color: var(--text-title);
   overflow-wrap: anywhere;
 }
 .file-open {
@@ -579,10 +599,10 @@ async function removeFile(file: RequirementFile) {
 }
 .file-open:hover,
 .file-open[aria-pressed="true"] {
-  color: #4e6ef2;
+  color: var(--brand);
 }
 .file-open:focus-visible {
-  outline: 2px solid #4e6ef2;
+  outline: 2px solid var(--brand);
   outline-offset: 3px;
   border-radius: 2px;
 }
@@ -592,7 +612,7 @@ async function removeFile(file: RequirementFile) {
 }
 .file-meta {
   font-size: 11px;
-  color: #9aa8bd;
+  color: var(--text-faint);
 }
 .file-actions {
   display: flex;
@@ -602,7 +622,7 @@ async function removeFile(file: RequirementFile) {
 }
 .file-link {
   font-size: 12px;
-  color: #4e6ef2;
+  color: var(--brand);
   text-decoration: none;
   padding: 0 6px;
 }

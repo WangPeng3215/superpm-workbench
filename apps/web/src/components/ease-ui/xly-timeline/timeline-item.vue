@@ -78,9 +78,9 @@ $color-primary: #4f6ef7;
 $color-success: #67c23a;
 $color-warning: #e6a23c;
 $color-danger: #f56c6c;
-$color-default: #c0c4cc;
-$color-text-secondary: #4a4a6a;
-$color-text-placeholder: #8e8ea0;
+$color-default: var(--border-line);
+$color-text-secondary: var(--text-regular);
+$color-text-placeholder: var(--text-muted);
 
 /* ========== 时间线项 ========== */
 .xly-timeline-item {
@@ -112,9 +112,9 @@ $color-text-placeholder: #8e8ea0;
 
   &--wait {
     .xly-timeline-item__node--wait {
-      background-color: #fff;
+      background-color: var(--bg-surface);
       border-color: $color-default;
-      color: $color-default;
+      color: var(--text-muted);
     }
   }
 
@@ -123,7 +123,7 @@ $color-text-placeholder: #8e8ea0;
       background-color: $color-primary;
       border-color: $color-primary;
       color: #fff;
-      box-shadow: 0 0 0 4px rgba($color-primary, 0.2);
+      box-shadow: 0 0 0 4px var(--brand-ring);
     }
   }
 
@@ -195,15 +195,15 @@ $color-text-placeholder: #8e8ea0;
   height: 24px;
   border-radius: 50%;
   border: 2px solid;
-  background-color: #fff;
+  background-color: var(--bg-surface);
   flex-shrink: 0;
   z-index: 1;
   transition: all 0.3s ease;
 
   &--wait {
-    background-color: #fff;
+    background-color: var(--bg-surface);
     border-color: $color-default;
-    color: $color-default;
+    color: var(--text-muted);
   }
 
   &--process {
