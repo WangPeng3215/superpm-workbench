@@ -646,17 +646,21 @@ function errorMessage(error: unknown) {
   line-height: 1.8;
   color: var(--text-body);
 }
-/* 占满屏幕高度模式：工具栏固定，正文区域撑满并自行滚动 */
+/* 撑满外层容器模式：工具栏固定，正文区域占满剩余高度并自行滚动。
+   EditorContent 会多渲染一层无名包装 div，用 grid 行高分配绕开对它的选择器；
+   容器高度完全跟随外层 flex/grid，不再使用视口级 calc，避免双重滚动 */
 .inline-rich.fill-height {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  flex: 1 1 auto;
+  min-height: 0;
 }
 .inline-rich.fill-height .rich-toolbar {
   flex: none;
 }
 .inline-rich.fill-height :deep(.rich-document) {
-  flex: 1 1 auto;
-  min-height: calc(100vh - 330px);
+  height: 100%;
+  min-height: 0;
   max-height: none;
 }
 /* 占满所在卡片高度模式：随卡片高度伸缩，正文区域撑满并自行滚动。

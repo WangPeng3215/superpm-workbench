@@ -5,12 +5,26 @@ import { ZodError, z } from "zod";
 import { StageWorkspaceService } from "./services/stage-workspace.js";
 import { RequirementFileService } from "./services/requirement-files.js";
 import { IssueService } from "./services/issues.js";
+import { ArtifactService } from "./services/artifacts.js";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { defaultPaths, ensurePaths, projectRoot, allowSystemOpen } from "./config/index.js";
 import { migrate, SCHEMA_VERSION } from "./db/migrate.js";
 import { RequirementService, DomainError } from "./services/requirements.js";
+import {
+  AuthService,
+  parseAuthCookie,
+  serializeAuthCookie,
+  serializeClearAuthCookie,
+} from "./services/auth.js";
 import { stages } from "@superpm/shared";
+
+// 认证中间件写入的当前用户 ID（由 Token 校验产生）
+declare module "fastify" {
+  interface FastifyRequest {
+    authUserId?: number;
+  }
+}
 
 export interface CreateAppOptions {
   databasePath?: string;
@@ -18,6 +32,22 @@ export interface CreateAppOptions {
   logger?: boolean;
   serveWeb?: boolean;
 }
+// 登录与改密请求体校验
+const loginSchema = z
+  .object({
+    username: z.string().trim().min(1, "请输入账号").max(100),
+    password: z.string().min(1, "请输入密码").max(200),
+  })
+  .strict();
+const changePasswordSchema = z
+  .object({
+    oldPassword: z.string().min(1, "请输入原密码").max(200),
+    newPassword: z
+      .string()
+      .min(6, "新密码至少 6 位")
+      .max(100, "新密码最多 100 位"),
+  })
+  .strict();
 const version = "0.1.0";
 const roadmap = {
   files: "文件与版本",
@@ -48,6 +78,8 @@ export async function createApp(
     throw error;
   }
   const service = new RequirementService(db);
+  const authService = new AuthService(db);
+  authService.ensureSeed();
   const workspaceService = new StageWorkspaceService(
     db,
     paths.workspacePath,
@@ -59,6 +91,7 @@ export async function createApp(
     service,
   );
   const issueService = new IssueService(db, service);
+  const artifactService = new ArtifactService(db, paths.workspacePath, service);
   const app = Fastify({
     logger: options.logger ?? true,
     bodyLimit: 8 * 1024 * 1024,
@@ -95,6 +128,22 @@ export async function createApp(
       .send({ error: { code: "INTERNAL_ERROR", message: "服务器内部错误" } });
   });
   app.get("/api/health", async () => ({ status: "ok", version }));
+  // 认证中间件：除公开端点外，全部 /api/* 均需有效会话 Cookie
+  const publicApiPaths = new Set(["/api/health", "/api/system", "/api/auth/login"]);
+  // 编辑器内容以 <img src="/api/..."> 引用阶段工作区图片，图片 raw 读取保持公开
+  const publicImagePattern = /^\/api\/requirements\/\d+\/images\/[^/]+$/;
+  app.addHook("onRequest", async (request, reply) => {
+    const pathname = request.url.split("?")[0];
+    if (!pathname.startsWith("/api/")) return;
+    if (publicApiPaths.has(pathname) || publicImagePattern.test(pathname)) return;
+    const token = parseAuthCookie(request.headers.cookie);
+    const userId = token ? authService.verifyToken(token) : null;
+    if (!userId)
+      return reply.status(401).send({
+        error: { code: "UNAUTHORIZED", message: "未登录或登录已过期，请重新登录" },
+      });
+    request.authUserId = userId;
+  });
   app.get("/api/system", async () => ({
     version,
     ...paths,
@@ -116,12 +165,44 @@ export async function createApp(
         })),
     ],
   }));
+  app.post("/api/auth/login", async (request, reply) => {
+    const body = loginSchema.parse(request.body);
+    const { user, token } = authService.login(body.username, body.password);
+    reply.header(
+      "set-cookie",
+      serializeAuthCookie(token, authService.tokenMaxAgeSeconds),
+    );
+    return user;
+  });
+  app.get("/api/auth/me", async (request) =>
+    authService.getUser(request.authUserId as number),
+  );
+  app.post("/api/auth/change-password", async (request) => {
+    const body = changePasswordSchema.parse(request.body);
+    authService.changePassword(
+      request.authUserId as number,
+      body.oldPassword,
+      body.newPassword,
+    );
+    return { ok: true };
+  });
+  app.post("/api/auth/logout", async (_request, reply) => {
+    reply.header("set-cookie", serializeClearAuthCookie());
+    return { ok: true };
+  });
   app.get("/api/requirements", async (request) =>
     service.list(request.query ?? {}),
   );
-  app.post("/api/requirements", async (request, reply) =>
-    reply.status(201).send(service.create(request.body)),
-  );
+  app.post("/api/requirements", async (request, reply) => {
+    const created = service.create(request.body);
+    // 新建需求立即初始化需求记忆模板（文档 4.3）；磁盘异常不阻断建需，仅记录日志
+    try {
+      artifactService.ensureMemory(created.id);
+    } catch (error) {
+      app.log.error(error, "初始化需求记忆失败");
+    }
+    return reply.status(201).send(created);
+  });
   app.get<{ Params: { id: string } }>(
     "/api/requirements/:id",
     async (request) => service.get(parseId(request.params.id)),
@@ -365,6 +446,129 @@ export async function createApp(
         .type(image.mime)
         .send(image.data);
     },
+  );
+  // ===== 需求知识库（artifact_nodes / artifact_links，迁移 0007；文档管理 tab 使用）=====
+  app.get<{ Params: { id: string } }>(
+    "/api/requirements/:id/artifacts",
+    async (request) => {
+      const query = (request.query ?? {}) as Record<string, unknown>;
+      const parentIdRaw = typeof query.parentId === "string" ? query.parentId : "";
+      const parentId = /^[1-9]\d*$/.test(parentIdRaw) ? Number(parentIdRaw) : null;
+      const keyword = typeof query.q === "string" ? query.q.slice(0, 200) : "";
+      return artifactService.listNodes(parseId(request.params.id), parentId, keyword);
+    },
+  );
+  app.post<{ Params: { id: string } }>(
+    "/api/requirements/:id/artifacts/folders",
+    async (request, reply) =>
+      reply
+        .status(201)
+        .send(artifactService.createFolder(parseId(request.params.id), request.body)),
+  );
+  app.post<{ Params: { id: string } }>(
+    "/api/requirements/:id/artifacts/files",
+    async (request, reply) =>
+      reply
+        .status(201)
+        .send(artifactService.createFile(parseId(request.params.id), request.body)),
+  );
+  app.post<{ Params: { id: string } }>(
+    "/api/requirements/:id/artifacts/refresh",
+    async (request) =>
+      artifactService.refreshDirectory(parseId(request.params.id), request.body ?? {}),
+  );
+  app.post<{ Params: { id: string } }>(
+    "/api/requirements/:id/artifacts/links",
+    async (request, reply) =>
+      reply
+        .status(201)
+        .send(artifactService.createLink(parseId(request.params.id), request.body)),
+  );
+  app.patch<{ Params: { linkId: string } }>(
+    "/api/artifacts/links/:linkId",
+    async (request) =>
+      artifactService.updateLink(parseId(request.params.linkId), request.body),
+  );
+  app.delete<{ Params: { linkId: string } }>(
+    "/api/artifacts/links/:linkId",
+    async (request, reply) => {
+      artifactService.deleteLink(parseId(request.params.linkId));
+      return reply.status(204).send();
+    },
+  );
+  app.get<{ Params: { nodeId: string } }>(
+    "/api/artifacts/nodes/:nodeId",
+    async (request) => artifactService.getNodeDetails(parseId(request.params.nodeId)),
+  );
+  app.patch<{ Params: { nodeId: string } }>(
+    "/api/artifacts/nodes/:nodeId",
+    async (request) =>
+      artifactService.renameNode(parseId(request.params.nodeId), request.body),
+  );
+  app.post<{ Params: { nodeId: string } }>(
+    "/api/artifacts/nodes/:nodeId/move",
+    async (request) =>
+      artifactService.moveNode(parseId(request.params.nodeId), request.body),
+  );
+  app.delete<{ Params: { nodeId: string } }>(
+    "/api/artifacts/nodes/:nodeId",
+    async (request, reply) => {
+      const query = (request.query ?? {}) as Record<string, unknown>;
+      const recursive = query.recursive === "1" || query.recursive === "true";
+      artifactService.deleteNode(parseId(request.params.nodeId), recursive);
+      return reply.status(204).send();
+    },
+  );
+  app.get<{ Params: { nodeId: string } }>(
+    "/api/artifacts/nodes/:nodeId/content",
+    async (request) => artifactService.readText(parseId(request.params.nodeId)),
+  );
+  app.put<{ Params: { nodeId: string } }>(
+    "/api/artifacts/nodes/:nodeId/content",
+    async (request) =>
+      artifactService.saveText(parseId(request.params.nodeId), request.body),
+  );
+  // raw 读取：图片预览 / PDF 预览 / 下载（download=1 时按附件返回）
+  app.get<{ Params: { nodeId: string } }>(
+    "/api/artifacts/nodes/:nodeId/raw",
+    async (request, reply) => {
+      const raw = artifactService.raw(parseId(request.params.nodeId));
+      const query = (request.query ?? {}) as Record<string, unknown>;
+      if (query.download === "1" || query.download === "true") {
+        reply.header(
+          "Content-Disposition",
+          `attachment; filename*=UTF-8''${encodeURIComponent(raw.fileName)}`,
+        );
+      }
+      return reply
+        .header("X-Content-Type-Options", "nosniff")
+        .type(raw.mime)
+        .send(raw.data);
+    },
+  );
+  // 本地默认程序打开（复用 SUPERPM_ALLOW_SYSTEM_OPEN 总开关）
+  app.post<{ Params: { nodeId: string } }>(
+    "/api/artifacts/nodes/:nodeId/open",
+    async (request, reply) => {
+      if (!allowSystemOpen)
+        return reply.status(403).send({
+          error: {
+            code: "FORBIDDEN",
+            message: "本地程序打开功能未启用（需设置 SUPERPM_ALLOW_SYSTEM_OPEN=1）",
+          },
+        });
+      artifactService.openSystem(parseId(request.params.nodeId));
+      return reply.status(204).send();
+    },
+  );
+  // 需求记忆：读取（懒初始化）与元数据刷新
+  app.get<{ Params: { id: string } }>(
+    "/api/requirements/:id/memory",
+    async (request) => artifactService.ensureMemory(parseId(request.params.id)),
+  );
+  app.post<{ Params: { id: string } }>(
+    "/api/requirements/:id/memory/refresh",
+    async (request) => artifactService.refreshMemory(parseId(request.params.id)),
   );
   const webAvailable =
     options.serveWeb && existsSync(join(webRoot, "index.html"));

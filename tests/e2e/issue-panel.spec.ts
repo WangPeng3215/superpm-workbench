@@ -33,8 +33,8 @@ async function createDesignRequirement(
   });
   expect(patched.ok()).toBeTruthy();
   await page.goto(`/requirements/${requirement.id}`);
-  // 进入「需求进展」页签；查看阶段为 UI 设计（问题阶段），左栏自动展示问题面板
-  await page.getByRole("tab", { name: "需求进展", exact: true }).click();
+  // 查看阶段为 UI 设计（问题阶段）：进入「需求问题」页签管理该阶段问题
+  await page.getByRole("tab", { name: "需求问题", exact: true }).click();
   await expect(panel(page)).toBeVisible();
   return requirement.id as number;
 }

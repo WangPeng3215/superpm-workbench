@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import {
   onBeforeRouteLeave,
   onBeforeRouteUpdate,
@@ -7,6 +7,7 @@ import {
   useRouter,
 } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
+import type { TabPaneName } from "element-plus";
 import { ArrowLeft, Delete } from "@element-plus/icons-vue";
 import {
   dateFields,
@@ -19,17 +20,17 @@ import {
   stages,
   statusLabels,
   typeLabels,
+  type ArtifactNode,
   type IssuePhase,
   type Requirement,
-  type RequirementFile,
   type RequirementRelations,
   type RequirementUpdate,
   type Stage,
 } from "@superpm/shared";
 import { requirementApi } from "../api/requirements";
 import { errorMessage } from "../api/client";
-import RequirementAnalysisPanel from "../features/requirements/RequirementAnalysisPanel.vue";
-import RequirementAssetsPanel from "../features/requirements/RequirementAssetsPanel.vue";
+import DocTabEditor from "../features/requirements/DocTabEditor.vue";
+import RequirementDocManager from "../features/requirements/RequirementDocManager.vue";
 import RequirementIssuesPanel from "../features/requirements/RequirementIssuesPanel.vue";
 import InlineRichTextEditor from "../features/requirements/InlineRichTextEditor.vue";
 import XlyTimeline from "../components/ease-ui/xly-timeline/index.vue";
@@ -61,59 +62,90 @@ const initial = ref("");
 const loading = ref(false),
   saving = ref(false),
   error = ref("");
-const activeTab = ref<"detail" | "progress">("detail");
+// 顶层页签：固定「需求详情」「文档管理」「需求问题」+ 动态文档页签（doc-<nodeId>）
+const activeTab = ref("detail");
 const viewingStage = ref<Stage>("analysis");
-// 左栏视图：文档编辑器 / 问题面板（仅在问题阶段可切到问题视图）
-const viewMode = ref<"doc" | "issues">("doc");
 const stageSaving = ref(false);
-const stageSwitching = ref(false);
-const analysisPanel = ref<InstanceType<typeof RequirementAnalysisPanel>>();
-const assetsPanel = ref<InstanceType<typeof RequirementAssetsPanel>>();
+// 动态文档页签：点击「文档管理」中的 md 文件（含需求记忆）时打开，可关闭
+const docTabs = ref<{ node: ArtifactNode }[]>([]);
+const docEditors = new Map<number, InstanceType<typeof DocTabEditor>>();
 // 当前查看阶段是否为问题阶段（UI 设计/开发跟进/需求测试）
 const activeIssuePhase = computed<IssuePhase | null>(() =>
   (issuePhases as readonly string[]).includes(viewingStage.value)
     ? (viewingStage.value as IssuePhase)
     : null,
 );
-// 阶段变化自动切换左栏视图：问题阶段展示问题面板，其余回到文档编辑器
-watch(viewingStage, (stage) => {
-  viewMode.value = (issuePhases as readonly string[]).includes(stage)
-    ? "issues"
-    : "doc";
-});
-// 右栏点开 markdown 文档：编辑器常驻左栏，任意阶段直接加载（补充文档 5.1）
-async function onOpenDoc(file: RequirementFile) {
-  if (file.phase !== "analysis" && viewingStage.value !== file.phase) {
-    // 先保存当前编辑内容，再切换查看阶段（右侧产物区跟随刷新）
-    await viewStage(file.phase);
-  }
-  // 强制回到文档视图：编辑器即将打开
-  viewMode.value = "doc";
-  await nextTick();
-  void analysisPanel.value?.loadEditor(file);
+// 非问题阶段的「需求问题」页签提示
+const issueHint = `当前查看阶段为「${stageLabels[viewingStage.value]}」。切换到 ${(issuePhases as readonly string[])
+  .map((phase) => stageLabels[phase as Stage])
+  .join("、")} 阶段后可管理对应阶段的问题。`;
+function setDocEditor(nodeId: number, el: unknown) {
+  const comp = el as InstanceType<typeof DocTabEditor> | null;
+  if (comp) docEditors.set(nodeId, comp);
+  else docEditors.delete(nodeId);
 }
-// 右栏删除文档后，左栏若正编辑该文档则回退默认分析记录
-async function onDocRemoved(file: RequirementFile) {
-  await analysisPanel.value?.reloadIfCurrent(file.id);
+// 冲刷所有文档页签的未保存内容；任一失败返回 false（导航中止）
+async function flushDocs() {
+  for (const editor of docEditors.values()) {
+    if (!(await editor.flush())) return false;
+  }
+  return true;
+}
+// 右栏文件卡片点开 md（含需求记忆）：先冲刷未保存内容，再新增/激活文档页签（同文件不重复开）
+async function onOpenDoc(node: ArtifactNode) {
+  if (!(await flushDocs())) return;
+  if (!docTabs.value.some((tab) => tab.node.id === node.id))
+    docTabs.value.push({ node });
+  activeTab.value = `doc-${node.id}`;
+}
+// 关闭文档页签：先冲刷；仍有未保存修改时由用户确认是否放弃
+async function closeDocTab(nodeId: number) {
+  const index = docTabs.value.findIndex((tab) => tab.node.id === nodeId);
+  if (index < 0) return;
+  const editor = docEditors.get(nodeId);
+  if (editor && !(await editor.flush())) {
+    try {
+      await ElMessageBox.confirm(
+        "该文档仍有未保存的修改，关闭后将丢失这些修改。",
+        "未保存的修改",
+        {
+          confirmButtonText: "关闭页签",
+          cancelButtonText: "继续编辑",
+          type: "warning",
+        },
+      );
+    } catch {
+      return;
+    }
+  }
+  docTabs.value.splice(index, 1);
+  if (activeTab.value === `doc-${nodeId}`) {
+    const next = docTabs.value[index] ?? docTabs.value[index - 1];
+    activeTab.value = next ? `doc-${next.node.id}` : "progress";
+  }
+}
+function onTabRemove(name: TabPaneName) {
+  const nodeId = Number(String(name).slice(4));
+  if (Number.isInteger(nodeId)) void closeDocTab(nodeId);
+}
+// 文档管理删除文档后关闭对应页签
+function onDocDeleted(nodeId: number) {
+  if (docTabs.value.some((tab) => tab.node.id === nodeId))
+    void closeDocTab(nodeId);
 }
 async function flushAnalysis() {
-  return (await analysisPanel.value?.flush()) ?? true;
+  return flushDocs();
 }
 onBeforeRouteLeave(flushAnalysis);
 onBeforeRouteUpdate(flushAnalysis);
-async function viewStage(stage: Stage) {
-  if (stage === viewingStage.value || stageSwitching.value) return;
-  stageSwitching.value = true;
-  try {
-    if (await flushAnalysis()) viewingStage.value = stage;
-  } finally {
-    stageSwitching.value = false;
-  }
+function viewStage(stage: Stage) {
+  viewingStage.value = stage;
 }
-// 顶部步骤条点击：切到「需求进展」页签并跟随该阶段刷新
-async function goStage(stage: Stage) {
-  activeTab.value = "progress";
-  await viewStage(stage);
+// 顶部步骤条点击：切换查看阶段；问题阶段联动打开「需求问题」页签
+function goStage(stage: Stage) {
+  viewStage(stage);
+  if ((issuePhases as readonly string[]).includes(stage))
+    activeTab.value = "issues";
 }
 const dirty = computed(
   () => Boolean(draft.value) && JSON.stringify(draft.value) !== initial.value,
@@ -331,7 +363,7 @@ function go(target: Requirement) {
         </XlyTimeline>
       </section>
       <section class="surface detail-body">
-        <el-tabs v-model="activeTab">
+        <el-tabs v-model="activeTab" @tab-remove="onTabRemove">
           <el-tab-pane label="需求详情" name="detail">
             <div class="detail-grid">
               <article class="detail-desc">
@@ -548,52 +580,38 @@ function go(target: Requirement) {
               </div>
             </div>
           </el-tab-pane>
-          <el-tab-pane label="需求进展" name="progress">
-            <div class="progress-layout">
-              <div class="progress-main">
-                <!-- 左栏视图切换：文档 / 问题（问题视图仅在问题阶段可用） -->
-                <div class="view-switch" role="group" aria-label="左栏视图切换">
-                  <button
-                    type="button"
-                    :class="{ active: viewMode === 'doc' }"
-                    @click="viewMode = 'doc'"
-                  >
-                    文档
-                  </button>
-                  <button
-                    type="button"
-                    :class="{ active: viewMode === 'issues' }"
-                    :disabled="!activeIssuePhase"
-                    @click="viewMode = 'issues'"
-                  >
-                    问题
-                  </button>
-                </div>
-                <!-- 问题面板：问题阶段的问题视图下渲染 -->
-                <RequirementIssuesPanel
-                  v-if="activeIssuePhase && viewMode === 'issues'"
-                  :key="item.id"
-                  :requirement-id="item.id"
-                  :phase="activeIssuePhase"
-                />
-                <!-- 编辑器常驻左栏：跨阶段打开文档不再切换宿主（补充文档 5.1）；
-                     问题视图下隐藏但保持挂载，冲刷未保存内容不中断 -->
-                <RequirementAnalysisPanel
-                  v-show="!activeIssuePhase || viewMode === 'doc'"
-                  ref="analysisPanel"
-                  :key="item.id"
-                  :requirement-id="item.id"
-                />
-              </div>
-              <RequirementAssetsPanel
-                ref="assetsPanel"
-                class="progress-side"
-                :requirement-id="item.id"
-                :active-phase="viewingStage"
-                @open-doc="onOpenDoc"
-                @doc-removed="onDocRemoved"
-              />
-            </div>
+          <el-tab-pane label="文档管理" name="progress">
+            <!-- 文件面板直接铺满页签；md 文件（含需求记忆）点击后在顶层新增文档页签打开 -->
+            <RequirementDocManager
+              class="doc-manager-pane"
+              :requirement-id="item.id"
+              :requirement-name="item.name"
+              @open-doc="onOpenDoc"
+              @doc-deleted="onDocDeleted"
+            />
+          </el-tab-pane>
+          <el-tab-pane label="需求问题" name="issues">
+            <!-- 问题阶段展示该阶段问题面板；其余阶段提示先切换阶段 -->
+            <RequirementIssuesPanel
+              v-if="activeIssuePhase"
+              :key="item.id"
+              :requirement-id="item.id"
+              :phase="activeIssuePhase"
+            />
+            <el-empty v-else class="issues-empty" :description="issueHint" />
+          </el-tab-pane>
+          <el-tab-pane
+            v-for="tab in docTabs"
+            :key="tab.node.id"
+            :label="tab.node.name"
+            :name="`doc-${tab.node.id}`"
+            closable
+          >
+            <DocTabEditor
+              :ref="(el) => setDocEditor(tab.node.id, el)"
+              :requirement-id="item.id"
+              :node="tab.node"
+            />
           </el-tab-pane>
         </el-tabs>
       </section>
@@ -601,59 +619,24 @@ function go(target: Requirement) {
   </div>
 </template>
 <style scoped>
-.progress-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
-  gap: 14px;
-  align-items: stretch;
-}
-.progress-main {
+.doc-manager-pane {
   min-width: 0;
+  min-height: 0;
+  height: 100%;
+}
+.issues-empty {
+  height: 100%;
   display: flex;
-  flex-direction: column;
-}
-/* 左栏视图切换条：文档 / 问题（segmented 风格） */
-.view-switch {
-  display: inline-flex;
-  gap: 2px;
-  padding: 2px;
-  border: 1px solid var(--border-base);
-  border-radius: 8px;
-  background: var(--bg-surface);
-  flex: none;
-  align-self: flex-start;
-  margin-bottom: 8px;
-}
-.view-switch button {
-  padding: 3px 14px;
-  border: 0;
-  border-radius: 6px;
-  background: none;
-  font-size: 12px;
-  color: var(--text-secondary);
-  cursor: pointer;
-}
-.view-switch button:hover:not(:disabled):not(.active) {
-  color: var(--brand);
-  background: var(--bg-hover);
-}
-.view-switch button.active {
-  background: var(--bg-brand-soft);
-  color: var(--brand);
-  font-weight: 600;
-}
-.view-switch button:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
-  color: var(--text-faint);
-}
-.progress-side {
-  min-width: 0;
+  align-items: center;
+  justify-content: center;
 }
 .detail-page {
-  display: grid;
+  /* 视口限高：顶栏与页头卡片固定不滚动，内容区（页签）自行消化溢出。
+     40px = 全局 .page-content 的上下内边距（20px × 2） */
+  display: flex;
+  flex-direction: column;
   gap: 10px;
-  align-content: start;
+  height: calc(100dvh - var(--app-header-h) - 40px);
 }
 .back-link {
   display: inline-flex;
@@ -720,21 +703,51 @@ function go(target: Requirement) {
 }
 .detail-body {
   padding: 12px 22px 22px;
+  /* 占满限高剩余空间，页签头固定、页签内容区独立消化高度 */
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+/* el-tabs 头/内容分离控制：头不滚，内容区弹性占满并可兜底滚动 */
+.detail-body :deep(.el-tabs) {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.detail-body :deep(.el-tabs__header) {
+  flex: none;
+}
+.detail-body :deep(.el-tabs__content) {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+.detail-body :deep(.el-tab-pane) {
+  height: 100%;
 }
 .detail-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
   gap: 26px;
   padding-top: 6px;
+  /* 单行铺满页签内容区：左编辑器、右表单各自滚动 */
+  height: 100%;
 }
 .detail-desc {
-  /* 高度跟随右侧表单列：编辑器绝对定位铺满本格，内容超出时内部滚动 */
+  /* 高度由外层 grid 行决定：编辑器绝对定位铺满本格，内容超出时内部滚动 */
   position: relative;
-  min-height: 360px;
+  min-height: 0;
 }
 .detail-desc > .inline-rich {
   position: absolute;
   inset: 0;
+}
+.detail-fields {
+  min-width: 0;
+  /* 右列表单栏独立滚动，与左编辑器互不影响 */
+  overflow-y: auto;
 }
 .field-form {
   display: grid;
@@ -829,6 +842,14 @@ function go(target: Requirement) {
 @media (max-width: 1100px) {
   .detail-grid {
     grid-template-columns: minmax(0, 1fr);
+    /* 单列堆叠时退化为跟随内容高度，由页签内容区整体兜底滚动 */
+    height: auto;
+  }
+  .detail-desc {
+    min-height: 360px;
+  }
+  .doc-manager-pane {
+    min-height: 420px;
   }
 }
 @media (max-width: 700px) {

@@ -11,6 +11,7 @@ import type {
   IssueListResult,
 } from "@superpm/shared";
 import { createApp } from "../src/app";
+import { authedInject } from "./auth-helper";
 
 describe("issues API with real SQLite", () => {
   let app: FastifyInstance;
@@ -44,6 +45,8 @@ describe("issues API with real SQLite", () => {
       workspacePath: join(directory, "workspace"),
       logger: false,
     });
+    // 登录种子账号，包装 inject 自动携带会话 Cookie
+    await authedInject(app);
   });
   afterEach(async () => {
     await app.close();

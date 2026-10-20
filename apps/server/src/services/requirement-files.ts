@@ -34,7 +34,8 @@ import { DomainError, RequirementService } from "./requirements.js";
 import { allowSystemOpen } from "../config/index.js";
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
-const MIME_BY_EXTENSION: Record<string, string> = {
+// 导出供知识库（artifacts）等服务复用统一的扩展名 → MIME 推断
+export const MIME_BY_EXTENSION: Record<string, string> = {
   png: "image/png",
   jpg: "image/jpeg",
   jpeg: "image/jpeg",

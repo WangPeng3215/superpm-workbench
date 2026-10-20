@@ -123,6 +123,59 @@ export const issueAssets = sqliteTable("issue_assets", {
     .default("reference"),
   createdAt: text("created_at").notNull(),
 });
+// 本地登录用户：密码用 scrypt 派生密钥存储，盐值独立成列
+export const users = sqliteTable("users", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  username: text("username").notNull().unique(),
+  displayName: text("display_name").notNull(),
+  passwordHash: text("password_hash").notNull(),
+  passwordSalt: text("password_salt").notNull(),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+// 应用级元数据：认证签名密钥等键值对
+export const appMeta = sqliteTable("app_meta", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+});
+// 需求知识库：文件/目录索引（迁移 0007）；磁盘是文件存在性的依据，本表只存元数据
+export const artifactNodes = sqliteTable("artifact_nodes", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  requirementId: integer("requirement_id")
+    .notNull()
+    .references(() => requirements.id),
+  // 空 = 挂在需求根目录
+  parentId: integer("parent_id").references((): AnySQLiteColumn => artifactNodes.id),
+  nodeType: text("node_type").$type<"folder" | "file">().notNull(),
+  name: text("name").notNull(),
+  // 相对需求根目录、正斜杠分隔；(requirement_id, relative_path) 唯一
+  relativePath: text("relative_path").notNull(),
+  extension: text("extension"),
+  mimeType: text("mime_type"),
+  sizeBytes: integer("size_bytes"),
+  modifiedAt: text("modified_at"),
+  indexedAt: text("indexed_at").notNull(),
+  contentHash: text("content_hash"),
+  status: text("status")
+    .$type<"normal" | "missing" | "external_changed" | "conflict">()
+    .notNull()
+    .default("normal"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+// 需求知识库：外部链接（迁移 0007）；只存 SQLite 记录，不在磁盘创建同名文件
+export const artifactLinks = sqliteTable("artifact_links", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  requirementId: integer("requirement_id")
+    .notNull()
+    .references(() => requirements.id),
+  folderNodeId: integer("folder_node_id").references(() => artifactNodes.id),
+  name: text("name").notNull(),
+  url: text("url").notNull(),
+  description: text("description"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
 export const requirementAudit = sqliteTable("requirement_audit", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   requirementId: integer("requirement_id")

@@ -7,6 +7,10 @@
   --el-border-radius-base: 6px;
   --el-font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
 
+  /* 顶栏总占位高度（height 56px，box-sizing: border-box 已含 1px 底边框），
+     供详情页等需要"视口减顶栏"限高布局的页面取用 */
+  --app-header-h: 56px;
+
   /* 背景与表面 */
   --bg-page: #f5f7fa;
   --bg-surface: #ffffff;
@@ -225,34 +229,43 @@ a:focus-visible {
 .sidebar-bottom {
   margin-top: auto;
 }
-.local-profile {
-  border-top: 1px solid var(--border-soft);
-  padding: 22px 6px 0;
-  margin-top: 20px;
+/* 右上角用户区：头像 + 名称 + 下拉（修改密码/退出登录） */
+.user-menu {
   display: flex;
   align-items: center;
-  gap: 11px;
 }
-.avatar {
+.user-trigger {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 4px 8px 4px 4px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  cursor: pointer;
+}
+.user-trigger:hover {
+  background: var(--bg-hover);
+}
+.user-avatar {
   display: grid;
   place-items: center;
-  background: var(--bg-code);
-  color: var(--text-muted);
-  width: 34px;
-  height: 34px;
+  width: 30px;
+  height: 30px;
   border-radius: 50%;
-  font-size: 12px;
+  background: var(--bg-brand-soft);
+  color: var(--brand);
+  font-size: 13px;
+  font-weight: 600;
 }
-.local-profile strong {
+.user-trigger strong {
   font-size: 12px;
   font-weight: 600;
   color: var(--text-body);
 }
-.local-profile small {
-  display: block;
-  color: var(--text-faint);
-  font-size: 10px;
-  margin-top: 4px;
+.user-caret {
+  font-size: 11px;
+  color: var(--text-muted);
 }
 .main-layout {
   min-width: 0;
@@ -265,6 +278,11 @@ a:focus-visible {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  /* 固定在视口顶部：面包屑菜单栏不随页面滚动；
+     z-index 低于 Element Plus 弹层默认 2000+，不遮挡下拉/弹窗 */
+  position: sticky;
+  top: 0;
+  z-index: 100;
 }
 .breadcrumb {
   display: flex;
@@ -449,7 +467,7 @@ h2 {
   .brand > span:last-child,
   .workspace-label,
   .nav-item span,
-  .local-profile {
+  .user-trigger strong {
     display: none;
   }
   .navigation {
@@ -466,6 +484,10 @@ h2 {
   }
 }
 @media (max-width: 560px) {
+  :root {
+    /* 窄屏顶栏压缩为 50px，同步更新占位高度变量 */
+    --app-header-h: 50px;
+  }
   .app-layout {
     display: block;
   }

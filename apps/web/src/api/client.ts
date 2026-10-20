@@ -33,6 +33,17 @@ export async function request<T>(
     const payload = (await response
       .json()
       .catch(() => null)) as ApiErrorResponse | null;
+    // 会话失效：除认证接口本身外，401 一律跳转登录页并携带回跳地址
+    if (
+      response.status === 401 &&
+      !path.startsWith("/auth/") &&
+      !window.location.pathname.startsWith("/login")
+    ) {
+      const target = `${window.location.pathname}${window.location.search}`;
+      window.location.assign(
+        `/login?redirect=${encodeURIComponent(target)}`,
+      );
+    }
     throw new ApiError(
       payload?.error?.message ?? "请求失败，请稍后重试。",
       payload?.error?.code ?? "HTTP_ERROR",

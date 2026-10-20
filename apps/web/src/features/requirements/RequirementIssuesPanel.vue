@@ -681,9 +681,10 @@ function formatTime(iso: string): string {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  min-height: 320px;
+  /* 左栏 flex 子项：占满剩余高度；根容器不滚，滚动交给内部列表/详情区 */
   flex: 1 1 auto;
-  overflow: auto;
+  min-height: 0;
+  overflow: hidden;
 }
 .issues-toolbar {
   display: flex;
@@ -796,6 +797,9 @@ function formatTime(iso: string): string {
 }
 .issue-list {
   flex: 1 1 auto;
+  min-height: 0;
+  /* 问题条目列表独立滚动 */
+  overflow-y: auto;
   padding: 8px 10px 10px;
 }
 .issue-item {
@@ -867,6 +871,10 @@ function formatTime(iso: string): string {
   gap: 12px;
   padding: 10px;
   align-content: start;
+  /* 问题详情视图独立滚动：内容超出时滚动条在面板内 */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
 }
 .issue-desc {
   margin: 0;

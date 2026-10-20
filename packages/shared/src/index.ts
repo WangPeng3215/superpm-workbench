@@ -586,5 +586,181 @@ export const stageWorkspaceSchema = z
   })
   .strict();
 export type StageWorkspace = z.infer<typeof stageWorkspaceSchema>;
+// ===== 需求知识库（artifact_nodes / artifact_links，迁移 0007）=====
+// 每个需求的物理根目录固定放置需求记忆文件，服务层按该文件名识别并保护
+export const artifactMemoryName = "需求记忆.md";
+export const artifactNodeTypes = ["folder", "file"] as const;
+export type ArtifactNodeType = (typeof artifactNodeTypes)[number];
+// normal 正常 / missing 磁盘缺失 / external_changed 外部修改 / conflict 冲突待处理
+export const artifactStatuses = [
+  "normal",
+  "missing",
+  "external_changed",
+  "conflict",
+] as const;
+export type ArtifactStatus = (typeof artifactStatuses)[number];
+export const artifactStatusLabels: Record<ArtifactStatus, string> = {
+  normal: "正常",
+  missing: "文件缺失",
+  external_changed: "外部修改",
+  conflict: "冲突",
+};
+// 节点名称校验：拒绝路径分隔符、Windows 保留字符、控制字符与首尾点空格
+export const artifactNamePattern = /^[^\\/:*?"<>|\x00-\x1f]+$/;
+export function isValidArtifactName(name: string): boolean {
+  const trimmed = name.trim();
+  if (!trimmed || trimmed !== name) return false;
+  if (trimmed === "." || trimmed === ".." || trimmed.includes("..")) return false;
+  if (/[. ]$/.test(trimmed)) return false;
+  return artifactNamePattern.test(trimmed) && trimmed.length <= 200;
+}
+// 需求记忆模板（文档 4.3）：区分事实/假设/决策/待确认/下一步/关联产出物
+export function requirementMemoryTemplate(requirementName: string): string {
+  return [
+    `# ${requirementName} · 需求记忆`,
+    "",
+    "> 需求记忆是当前状态的摘要，供人与 AI 快速读取。请区分「已确认事实」「假设」",
+    "> 与「正式决策」；模型给出的建议不能自动标记为已确认决策，须经人工确认后归入决策章节。",
+    "",
+    "## 当前概况",
+    "",
+    "- 阶段：",
+    "- 状态：",
+    "- 更新时间：",
+    "",
+    "## 已确认事实",
+    "",
+    "- ",
+    "",
+    "## 假设（待验证）",
+    "",
+    "- ",
+    "",
+    "## 当前分析结论",
+    "",
+    "- ",
+    "",
+    "## 重要决策及依据",
+    "",
+    "- ",
+    "",
+    "## 待确认问题",
+    "",
+    "- ",
+    "",
+    "## 下一步行动",
+    "",
+    "- ",
+    "",
+    "## 关联产出物",
+    "",
+    "- ",
+    "",
+  ].join("\n");
+}
+export const artifactFolderCreateSchema = z
+  .object({
+    parentId: z.number().int().positive().nullable().default(null),
+    name: z.string().min(1, "请输入文件夹名称").max(200, "名称最多 200 字"),
+  })
+  .strict();
+export const artifactFileCreateSchema = z
+  .object({
+    parentId: z.number().int().positive().nullable().default(null),
+    name: z.string().min(1, "请输入文件名称").max(200, "名称最多 200 字"),
+    initialContent: z.string().max(200000).optional(),
+  })
+  .strict();
+export const artifactRenameSchema = z
+  .object({ name: z.string().min(1, "请输入名称").max(200, "名称最多 200 字") })
+  .strict();
+export const artifactMoveSchema = z
+  .object({ targetParentId: z.number().int().positive().nullable() })
+  .strict();
+// force：磁盘修改时间与索引不一致（外部修改）时，需显式确认才能覆盖保存
+export const artifactContentSaveSchema = z
+  .object({
+    content: z.string().max(200000),
+    force: z.boolean().default(false),
+  })
+  .strict();
+export const artifactLinkCreateSchema = z
+  .object({
+    folderNodeId: z.number().int().positive().nullable().default(null),
+    name: z.string().trim().min(1, "请输入链接名称").max(200, "名称最多 200 字"),
+    url: z.string().trim().min(1, "请填写链接地址").max(2000),
+    description: z.string().trim().max(2000).optional(),
+  })
+  .strict();
+export const artifactLinkUpdateSchema = z
+  .object({
+    folderNodeId: z.number().int().positive().nullable().optional(),
+    name: z.string().trim().min(1, "请输入链接名称").max(200).optional(),
+    url: z.string().trim().max(2000).optional(),
+    description: z.string().trim().max(2000).nullable().optional(),
+  })
+  .strict()
+  .refine(
+    (value) => Object.keys(value).length > 0,
+    "请提交需要更新的字段",
+  );
+export const artifactRefreshSchema = z
+  .object({ relativePath: z.string().max(2000).optional() })
+  .strict();
+export interface ArtifactNode {
+  id: number;
+  requirementId: number;
+  parentId: number | null;
+  nodeType: ArtifactNodeType;
+  name: string;
+  // 相对需求根目录的规范化路径，正斜杠分隔；根目录子项即文件名本身
+  relativePath: string;
+  extension: string | null;
+  mimeType: string | null;
+  sizeBytes: number | null;
+  modifiedAt: string | null;
+  indexedAt: string;
+  status: ArtifactStatus;
+  createdAt: string;
+  updatedAt: string;
+  // 文件夹卡片的直接子项数（列表接口附加）
+  childCount?: number;
+}
+export interface ArtifactLink {
+  id: number;
+  requirementId: number;
+  folderNodeId: number | null;
+  name: string;
+  url: string;
+  description: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface ArtifactBreadcrumbItem {
+  // null 表示需求根目录
+  id: number | null;
+  name: string;
+}
+export interface ArtifactDirectory {
+  requirementId: number;
+  parentId: number | null;
+  parentPath: string;
+  breadcrumb: ArtifactBreadcrumbItem[];
+  folders: ArtifactNode[];
+  files: ArtifactNode[];
+  links: ArtifactLink[];
+  // 非空表示当前处于按名称的全需求范围搜索（结果跨目录，卡片展示相对路径）
+  search: string;
+}
+export interface ArtifactNodeDetails {
+  node: ArtifactNode;
+  breadcrumb: ArtifactBreadcrumbItem[];
+  descendantCount: number;
+}
+export interface ArtifactRefreshResult {
+  added: number;
+  updated: number;
+  missing: number;
+}
 // MCP 工具契约层（阶段 10）：契约只声明、不执行，网关见 apps/server mcp-gateway
 export * from "./mcp-contract.js";

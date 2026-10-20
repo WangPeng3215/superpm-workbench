@@ -12,6 +12,7 @@ import type {
 } from "@superpm/shared";
 import Database from "better-sqlite3";
 import { createApp } from "../src/app";
+import { authedInject } from "./auth-helper";
 
 describe("requirements API with real SQLite", () => {
   let app: FastifyInstance;
@@ -34,6 +35,8 @@ describe("requirements API with real SQLite", () => {
       logger: false,
       serveWeb: false,
     });
+    // 登录种子账号，包装 inject 自动携带会话 Cookie
+    await authedInject(app);
   });
   afterEach(async () => {
     if (app) await app.close();
@@ -52,6 +55,7 @@ describe("requirements API with real SQLite", () => {
       logger: false,
       serveWeb: false,
     });
+    await authedInject(app);
     const saved = await app.inject(`/api/requirements/${first.id}`);
     expect(saved.json().name).toBe("需求工作台");
     const response = await app.inject({
@@ -229,7 +233,7 @@ describe("requirements API with real SQLite", () => {
       status: "ok",
     });
     expect((await app.inject("/api/system")).json()).toMatchObject({
-      schemaVersion: 5,
+      schemaVersion: 7,
       workspacePath: join(directory, "workspace"),
     });
     expect((await app.inject("/api/requirements")).json().total).toBe(0);

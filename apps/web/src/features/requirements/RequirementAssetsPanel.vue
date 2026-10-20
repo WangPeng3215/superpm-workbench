@@ -464,12 +464,19 @@ const phaseOf = (entry: CategoryEntry) => entry.defaultPhase;
   display: flex;
   flex-direction: column;
   min-width: 0;
-  overflow: auto;
+  /* 面板高度跟随外层两栏布局：根容器不滚，滚动交给内部列表区 */
+  min-height: 0;
+  overflow: hidden;
 }
 .category-grid {
   display: grid;
   gap: 10px;
   padding: 10px;
+  /* 分类卡片列表独立滚动：卡片多时滚动条在本栏内 */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  align-content: start;
 }
 .category-card {
   display: flex;
@@ -563,6 +570,9 @@ const phaseOf = (entry: CategoryEntry) => entry.defaultPhase;
 }
 .asset-list {
   flex: 1 1 auto;
+  min-height: 0;
+  /* 文件条目列表独立滚动 */
+  overflow-y: auto;
   padding: 8px 10px;
 }
 .asset-item {

@@ -8,6 +8,7 @@ import {
   type CategoryOpenAction,
 } from "@superpm/shared";
 import { createApp } from "../src/app";
+import { authedInject } from "./auth-helper";
 
 // 打开策略（补充文档 3.2）：空 / 单文件 / 唯一确认版 / 多确认或无确认 → 全部列表
 describe("resolveCategoryOpenAction", () => {
@@ -62,6 +63,8 @@ describe("external link protocol whitelist", () => {
       workspacePath: join(directory, "workspace"),
       logger: false,
     });
+    // 登录种子账号，包装 inject 自动携带会话 Cookie
+    await authedInject(app);
     const requirement = await app.inject({
       method: "POST",
       url: "/api/requirements",
@@ -124,6 +127,7 @@ describe("local system open endpoint", () => {
       workspacePath: join(directory, "workspace"),
       logger: false,
     });
+    await authedInject(app);
     const requirement = await app.inject({
       method: "POST",
       url: "/api/requirements",

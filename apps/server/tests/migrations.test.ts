@@ -92,10 +92,45 @@ afterEach(() => {
   rmSync(workdir, { recursive: true, force: true });
 });
 
+describe("migrations 0006（用户认证）", () => {
+  it("新库初始化：users 与 app_meta 结构完整", () => {
+    migrate(db);
+    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(tableColumns(db, "users")).toEqual([
+      "id",
+      "username",
+      "display_name",
+      "password_hash",
+      "password_salt",
+      "created_at",
+      "updated_at",
+    ]);
+    expect(tableColumns(db, "app_meta")).toEqual(["key", "value"]);
+  });
+  it("重复迁移与旧库升级均不产生重复结构", () => {
+    seedLegacyDatabase(db);
+    migrate(db);
+    migrate(db);
+    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(
+      db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name IN ('users','app_meta')").get(),
+    ).toEqual({ count: 2 });
+  });
+  it("username 唯一约束生效", () => {
+    migrate(db);
+    const now = "2026-01-01T00:00:00.000Z";
+    const insert = db.prepare(
+      "INSERT INTO users(username, display_name, password_hash, password_salt, created_at, updated_at) VALUES ('admin', '管理员', 'h', 's', ?, ?)",
+    );
+    insert.run(now, now);
+    expect(() => insert.run(now, now)).toThrowError(/UNIQUE/i);
+  });
+});
+
 describe("migrations 0005（资产与问题管理）", () => {
   it("新库初始化：全部版本可执行且结构完整", () => {
     migrate(db);
-    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5]);
+    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7]);
     expect(tableColumns(db, "requirement_files")).toEqual(
       expect.arrayContaining([
         "resource_type",
@@ -143,7 +178,7 @@ describe("migrations 0005（资产与问题管理）", () => {
     const linkRow = insertLegacyFileRow(db, "link", 0);
     expect(appliedVersions(db)).toEqual([1, 2, 3, 4]);
     migrate(db);
-    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5]);
+    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7]);
     const rows = db
       .prepare(
         "SELECT id, resource_type, storage_type, status FROM requirement_files ORDER BY id",
@@ -185,7 +220,7 @@ describe("migrations 0005（资产与问题管理）", () => {
     ).run(issueId, fileRow, now);
     // 重复执行迁移：数据行数与关联均不丢失、不重复
     migrate(db);
-    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5]);
+    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7]);
     expect(
       db.prepare("SELECT COUNT(*) AS count FROM requirement_files").get(),
     ).toEqual({ count: 2 });
@@ -213,7 +248,7 @@ describe("migrations 0005（资产与问题管理）", () => {
     migrate(db);
     const snapshot = tableColumns(db, "requirement_files");
     migrate(db);
-    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5]);
+    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7]);
     expect(tableColumns(db, "requirement_files")).toEqual(snapshot);
   });
   it("新索引与联合主键约束生效", () => {
@@ -291,7 +326,7 @@ describe("migrations 0005（资产与问题管理）", () => {
   });
   it("SCHEMA_VERSION 与已应用迁移数一致", () => {
     migrate(db);
-    expect(SCHEMA_VERSION).toBe(5);
+    expect(SCHEMA_VERSION).toBe(7);
     expect(appliedVersions(db)).toHaveLength(SCHEMA_VERSION);
   });
 });
