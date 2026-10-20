@@ -81,15 +81,18 @@ export const issues = sqliteTable("issues", {
   issueKey: text("issue_key"),
   title: text("title").notNull(),
   description: text("description").notNull().default(""),
+  // 富文本正文（html），与 description 纯文本双写同步（迁移 0008）
+  descriptionHtml: text("description_html").notNull().default(""),
   issueType: text("issue_type"),
   status: text("status")
-    .$type<"open" | "in_progress" | "resolved" | "closed">()
+    .$type<"open" | "in_progress" | "testing" | "resolved">()
     .notNull()
     .default("open"),
   solution: text("solution"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
   resolvedAt: text("resolved_at"),
+  // closed 状态已退役；closed_at 列仅为存量兼容保留，不再写入
   closedAt: text("closed_at"),
   isDeleted: integer("is_deleted", { mode: "boolean" }).notNull().default(false),
 });
@@ -117,6 +120,21 @@ export const issueAssets = sqliteTable("issue_assets", {
   assetId: integer("asset_id")
     .notNull()
     .references(() => requirementFiles.id),
+  relationType: text("relation_type")
+    .$type<"evidence" | "solution_material" | "reference" | "other">()
+    .notNull()
+    .default("reference"),
+  createdAt: text("created_at").notNull(),
+});
+// 问题与知识库节点关联（迁移 0008）：issue_assets 的替代表，文件夹与文件均可关联；
+// artifact_nodes 为硬删除，节点移除时关联行级联清理
+export const issueArtifactLinks = sqliteTable("issue_artifact_links", {
+  issueId: integer("issue_id")
+    .notNull()
+    .references(() => issues.id),
+  artifactId: integer("artifact_id")
+    .notNull()
+    .references(() => artifactNodes.id),
   relationType: text("relation_type")
     .$type<"evidence" | "solution_material" | "reference" | "other">()
     .notNull()

@@ -287,29 +287,30 @@ describe("MCP 契约与服务网关", () => {
   it("issue.linkAsset / issue.unlinkAsset：关联去重返回 CONFLICT，取消后可复检", () => {
     const requirement = createRequirement();
     const issue = createIssueViaMcp(requirement.id, "link-issue");
-    const asset = gateway.call(
-      "asset.create",
-      {
-        requirementId: requirement.id,
-        phase: "design",
-        category: "uiAssets",
-        name: "问题截图",
-        resourceType: "text",
-        textContent: "截图说明",
-      },
-      { idempotencyKey: "link-asset" },
-    ) as RequirementFile;
+    // 问题关联已切换到 artifacts 体系：直接向 artifact_nodes 插入一个文件节点
+    const now = "2026-01-01T00:00:00.000Z";
+    const node = db
+      .prepare(
+        "INSERT INTO artifact_nodes(requirement_id, parent_id, node_type, name, relative_path, indexed_at, created_at, updated_at) VALUES (?, NULL, 'file', '问题截图.md', '问题截图.md', ?, ?, ?)",
+      )
+      .run(requirement.id, now, now, now);
+    const nodeId = Number(node.lastInsertRowid);
 
     const linked = gateway.call(
       "issue.linkAsset",
-      { requirementId: requirement.id, issueId: issue.id, assetId: asset.id, relationType: "evidence" },
+      { requirementId: requirement.id, issueId: issue.id, assetId: nodeId, relationType: "evidence" },
       { idempotencyKey: "link-1" },
     );
-    expect(linked).toMatchObject({ issueId: issue.id, assetId: asset.id, relationType: "evidence" });
+    expect(linked).toMatchObject({
+      issueId: issue.id,
+      assetId: nodeId,
+      relationType: "evidence",
+      asset: { id: nodeId, nodeType: "file", name: "问题截图.md" },
+    });
 
     const duplicate = gateway.call(
       "issue.linkAsset",
-      { requirementId: requirement.id, issueId: issue.id, assetId: asset.id },
+      { requirementId: requirement.id, issueId: issue.id, assetId: nodeId },
       { idempotencyKey: "link-2" },
     ) as StructuredError;
     expect(duplicate).toMatchObject({ error: { code: "CONFLICT" } });
@@ -318,13 +319,13 @@ describe("MCP 契约与服务网关", () => {
     expect(
       gateway.call(
         "issue.unlinkAsset",
-        { requirementId: requirement.id, issueId: issue.id, assetId: asset.id },
+        { requirementId: requirement.id, issueId: issue.id, assetId: nodeId },
         { idempotencyKey: "unlink-1" },
       ),
     ).toBeUndefined();
     const again = gateway.call(
       "issue.unlinkAsset",
-      { requirementId: requirement.id, issueId: issue.id, assetId: asset.id },
+      { requirementId: requirement.id, issueId: issue.id, assetId: nodeId },
       { idempotencyKey: "unlink-2" },
     ) as StructuredError;
     expect(again).toMatchObject({ error: { code: "NOT_FOUND" } });

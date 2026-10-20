@@ -512,6 +512,7 @@ function go(target: Requirement) {
               :key="item.id"
               :requirement-id="item.id"
               :phase="activeIssuePhase"
+              :requirement-name="item.name"
             />
             <el-empty v-else class="issues-empty" :description="issueHint" />
           </el-tab-pane>

@@ -13,11 +13,13 @@ export interface IssueCreatePayload {
   phase: IssuePhase;
   title: string;
   description?: string;
+  descriptionHtml?: string;
   issueType?: string;
 }
 export interface IssueUpdatePayload {
   title?: string;
   description?: string;
+  descriptionHtml?: string;
   issueType?: string | null;
   status?: IssueStatus;
   solution?: string;

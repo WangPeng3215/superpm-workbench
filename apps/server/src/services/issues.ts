@@ -13,14 +13,18 @@ import {
   type IssueStatus,
 } from "@superpm/shared";
 import { DomainError, RequirementService } from "./requirements.js";
-import { toFile, type FileRow } from "./requirement-files.js";
 
 interface LinkRow {
   issue_id: number;
-  asset_id: number;
+  artifact_id: number;
   relation_type: IssueAssetLink["relationType"];
   // 别名避免与产出物表的 created_at 同名冲突
   link_created_at: string;
+  // artifact_nodes 投影列
+  node_id: number;
+  node_type: IssueAssetLink["asset"]["nodeType"];
+  node_name: string;
+  node_relative_path: string;
 }
 
 interface IssueRow {
@@ -30,13 +34,13 @@ interface IssueRow {
   issue_key: string | null;
   title: string;
   description: string;
+  description_html: string;
   issue_type: Issue["issueType"];
   status: IssueStatus;
   solution: string | null;
   created_at: string;
   updated_at: string;
   resolved_at: string | null;
-  closed_at: string | null;
   is_deleted: number;
 }
 interface ActivityRow {
@@ -58,6 +62,7 @@ function toIssue(row: IssueRow): Issue {
     issueKey: row.issue_key,
     title: row.title,
     description: row.description,
+    descriptionHtml: row.description_html,
     issueType: row.issue_type,
     status: row.status,
     solution: row.solution,
@@ -65,7 +70,6 @@ function toIssue(row: IssueRow): Issue {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     resolvedAt: row.resolved_at,
-    closedAt: row.closed_at,
   };
 }
 function toActivity(row: ActivityRow): IssueActivity {
@@ -124,13 +128,14 @@ export class IssueService {
     return this.db.transaction(() => {
       const result = this.db
         .prepare(
-          "INSERT INTO issues(requirement_id, phase, title, description, issue_type, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'open', ?, ?)",
+          "INSERT INTO issues(requirement_id, phase, title, description, description_html, issue_type, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?)",
         )
         .run(
           requirementId,
           data.phase,
           data.title,
           data.description,
+          data.descriptionHtml,
           data.issueType ?? null,
           now,
           now,
@@ -178,12 +183,9 @@ export class IssueService {
             : patch.status === "open"
               ? null
               : issue.resolvedAt;
-        const closedAt = patch.status === "closed" ? now : null;
         this.db
-          .prepare(
-            "UPDATE issues SET status=?, updated_at=?, resolved_at=?, closed_at=? WHERE id=?",
-          )
-          .run(patch.status, now, resolvedAt, closedAt, issueId);
+          .prepare("UPDATE issues SET status=?, updated_at=?, resolved_at=? WHERE id=?")
+          .run(patch.status, now, resolvedAt, issueId);
         this.db
           .prepare(
             "INSERT INTO issue_activities(issue_id, activity_type, content, old_status, new_status, actor_type, actor_name, created_at) VALUES (?, 'status_change', '', ?, ?, ?, ?, ?)",
@@ -197,19 +199,25 @@ export class IssueService {
             now,
           );
       }
-      // 其余字段直接更新（标题/描述/类型不进历史时间线）
+      // 其余字段直接更新（标题/描述/类型不进历史时间线）；
+      // description_html 仅在取值变化时写入，避免自动保存的空转覆盖
+      const descHtmlChanged =
+        patch.descriptionHtml !== undefined &&
+        patch.descriptionHtml !== issue.descriptionHtml;
       if (
         patch.title !== undefined ||
         patch.description !== undefined ||
-        patch.issueType !== undefined
+        patch.issueType !== undefined ||
+        descHtmlChanged
       )
         this.db
           .prepare(
-            "UPDATE issues SET title=?, description=?, issue_type=?, updated_at=? WHERE id=?",
+            "UPDATE issues SET title=?, description=?, description_html=?, issue_type=?, updated_at=? WHERE id=?",
           )
           .run(
             patch.title ?? issue.title,
             patch.description ?? issue.description,
+            descHtmlChanged ? patch.descriptionHtml! : issue.descriptionHtml,
             patch.issueType === undefined ? issue.issueType : patch.issueType,
             now,
             issueId,
@@ -232,54 +240,63 @@ export class IssueService {
     return this.detail(requirementId, issueId);
   }
   remove(requirementId: number, issueId: number) {
-    // 软删除：仅标记索引行；问题与产出物的关联行随之失效
+    // 软删除：仅标记索引行；问题与产出物的关联行随之清理
     this.row(requirementId, issueId);
     this.db.transaction(() => {
       this.db
         .prepare("UPDATE issues SET is_deleted=1, updated_at=? WHERE id=?")
         .run(new Date().toISOString(), issueId);
       this.db
-        .prepare("DELETE FROM issue_assets WHERE issue_id=?")
+        .prepare("DELETE FROM issue_artifact_links WHERE issue_id=?")
         .run(issueId);
     })();
   }
-  // 关联列表：仅展示未删除的产出物（软删资源从问题视角隐藏）
+  // 关联列表：join artifact_nodes 投影名称/类型/相对路径（节点硬删除后关联行级联清理，天然无悬空）
   listAssets(requirementId: number, issueId: number): IssueAssetListResult {
     this.row(requirementId, issueId);
     const rows = this.db
       .prepare(
-        "SELECT link.asset_id, link.issue_id, link.relation_type, link.created_at AS link_created_at, row.* FROM issue_assets AS link JOIN requirement_files AS row ON row.id = link.asset_id WHERE link.issue_id=? AND row.is_deleted=0 ORDER BY link.created_at DESC, link.asset_id DESC",
+        "SELECT link.issue_id, link.artifact_id AS asset_id, link.relation_type, link.created_at AS link_created_at, node.id AS node_id, node.node_type AS node_type, node.name AS node_name, node.relative_path AS node_relative_path FROM issue_artifact_links AS link JOIN artifact_nodes AS node ON node.id = link.artifact_id WHERE link.issue_id=? ORDER BY link.created_at DESC, link.artifact_id DESC",
       )
-      .all(issueId) as (LinkRow & FileRow)[];
+      .all(issueId) as LinkRow[];
     const items: IssueAssetLink[] = rows.map((row) => ({
       issueId: row.issue_id,
-      assetId: row.asset_id,
+      assetId: row.artifact_id,
       relationType: row.relation_type,
       createdAt: row.link_created_at,
-      asset: toFile(row),
+      asset: {
+        id: row.node_id,
+        nodeType: row.node_type,
+        name: row.node_name,
+        relativePath: row.node_relative_path,
+      },
     }));
     return { items, total: items.length };
   }
-  // 建立关联：问题与产出物必须同属一个需求且均未删除；重复关联被拒绝
+  // 建立关联：问题与 artifact 节点必须同属一个需求；重复关联被拒绝；文件夹与文件均可
   linkAsset(requirementId: number, issueId: number, input: unknown) {
     const issue = this.row(requirementId, issueId);
     const data = issueAssetLinkSchema.parse(input);
-    const asset = this.db
+    const node = this.db
       .prepare(
-        "SELECT * FROM requirement_files WHERE id=? AND is_deleted=0",
+        "SELECT id, node_type, name, relative_path FROM artifact_nodes WHERE id=? AND requirement_id=?",
       )
-      .get(data.assetId) as FileRow | undefined;
-    if (!asset || asset.requirement_id !== requirementId)
+      .get(data.assetId, requirementId) as
+      | { id: number; node_type: IssueAssetLink["asset"]["nodeType"]; name: string; relative_path: string }
+      | undefined;
+    if (!node)
       throw new DomainError("NOT_FOUND", "产出物不存在或不属于该需求", 404);
     const existing = this.db
-      .prepare("SELECT 1 FROM issue_assets WHERE issue_id=? AND asset_id=?")
+      .prepare(
+        "SELECT 1 FROM issue_artifact_links WHERE issue_id=? AND artifact_id=?",
+      )
       .get(issueId, data.assetId);
     if (existing)
       throw new DomainError("CONFLICT", "该产出物已与当前问题关联", 409);
     const now = new Date().toISOString();
     this.db
       .prepare(
-        "INSERT INTO issue_assets(issue_id, asset_id, relation_type, created_at) VALUES (?, ?, ?, ?)",
+        "INSERT INTO issue_artifact_links(issue_id, artifact_id, relation_type, created_at) VALUES (?, ?, ?, ?)",
       )
       .run(issueId, data.assetId, data.relationType, now);
     return {
@@ -287,15 +304,22 @@ export class IssueService {
       assetId: data.assetId,
       relationType: data.relationType,
       createdAt: now,
-      // 关联建立时问题与资源同需求，phase 不要求一致（跨阶段引用合理）
-      asset: toFile(asset),
+      // 关联建立时问题与资源同需求；跨阶段/跨目录引用合理，不限制节点层级
+      asset: {
+        id: node.id,
+        nodeType: node.node_type,
+        name: node.name,
+        relativePath: node.relative_path,
+      },
     } satisfies IssueAssetLink;
   }
   // 取消关联：仅移除关联行，绝不触碰产出物本体与物理文件
   unlinkAsset(requirementId: number, issueId: number, assetId: number) {
     this.row(requirementId, issueId);
     const result = this.db
-      .prepare("DELETE FROM issue_assets WHERE issue_id=? AND asset_id=?")
+      .prepare(
+        "DELETE FROM issue_artifact_links WHERE issue_id=? AND artifact_id=?",
+      )
       .run(issueId, assetId);
     if (result.changes === 0)
       throw new DomainError("NOT_FOUND", "关联关系不存在", 404);

@@ -95,7 +95,7 @@ afterEach(() => {
 describe("migrations 0006（用户认证）", () => {
   it("新库初始化：users 与 app_meta 结构完整", () => {
     migrate(db);
-    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
     expect(tableColumns(db, "users")).toEqual([
       "id",
       "username",
@@ -111,7 +111,7 @@ describe("migrations 0006（用户认证）", () => {
     seedLegacyDatabase(db);
     migrate(db);
     migrate(db);
-    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
     expect(
       db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name IN ('users','app_meta')").get(),
     ).toEqual({ count: 2 });
@@ -127,10 +127,81 @@ describe("migrations 0006（用户认证）", () => {
   });
 });
 
+describe("migrations 0008（问题正文富文本化与关联切换）", () => {
+  it("新库：issues 含 description_html 列，issue_artifact_links 联合主键与索引齐备", () => {
+    migrate(db);
+    expect(SCHEMA_VERSION).toBe(8);
+    expect(tableColumns(db, "issues")).toContain("description_html");
+    expect(tableColumns(db, "issue_artifact_links")).toEqual([
+      "issue_id",
+      "artifact_id",
+      "relation_type",
+      "created_at",
+    ]);
+    expect(
+      (
+        db
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name='issue_artifact_links_artifact_idx'",
+          )
+          .all() as { name: string }[]
+      ),
+    ).toHaveLength(1);
+    // 重复迁移不报错、不重复
+    migrate(db);
+    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+  });
+  it("存量映射：closed→resolved 补解决时间；design→ui、bug→defect", () => {
+    // 模拟已应用 0001-0007 的旧库：写入旧枚举数据后再执行迁移
+    db.exec(
+      "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)",
+    );
+    const mark = db.prepare(
+      "INSERT INTO schema_migrations(version, applied_at) VALUES (?, '2026-01-01T00:00:00.000Z')",
+    );
+    for (const [version, file] of [
+      [1, "0001_initial.sql"],
+      [2, "0002_stage_workspace.sql"],
+      [3, "0003_requirement_files.sql"],
+      [4, "0004_file_entry_kinds.sql"],
+      [5, "0005_assets_and_issues.sql"],
+      [6, "0006_users.sql"],
+      [7, "0007_artifacts.sql"],
+    ] as const) {
+      db.exec(readFileSync(join(migrationsDir, file), "utf8"));
+      mark.run(version);
+    }
+    insertRequirement(db);
+    const now = "2026-01-02T00:00:00.000Z";
+    const insert = db.prepare(
+      "INSERT INTO issues(requirement_id, phase, title, description, issue_type, status, created_at, updated_at) VALUES (1, 'design', ?, '', ?, ?, ?, ?)",
+    );
+    insert.run("旧设计问题", "design", "closed", now, now);
+    insert.run("旧开发问题", "development", "open", now, now);
+    insert.run("旧缺陷", "bug", "open", now, now);
+    // 迁移：0008 落地并完成存量映射
+    migrate(db);
+    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    const rows = db
+      .prepare("SELECT title, issue_type, status, resolved_at FROM issues ORDER BY id")
+      .all() as { title: string; issue_type: string; status: string; resolved_at: string | null }[];
+    expect(rows).toHaveLength(3);
+    expect(rows[0]).toMatchObject({ issue_type: "ui", status: "resolved", resolved_at: now });
+    expect(rows[1]).toMatchObject({ issue_type: "development", status: "open" });
+    expect(rows[2]).toMatchObject({ issue_type: "defect", status: "open" });
+    // 新列默认空串
+    expect(
+      (db.prepare("SELECT description_html FROM issues").all() as { description_html: string }[]).every(
+        (row) => row.description_html === "",
+      ),
+    ).toBe(true);
+  });
+});
+
 describe("migrations 0005（资产与问题管理）", () => {
   it("新库初始化：全部版本可执行且结构完整", () => {
     migrate(db);
-    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
     expect(tableColumns(db, "requirement_files")).toEqual(
       expect.arrayContaining([
         "resource_type",
@@ -150,6 +221,7 @@ describe("migrations 0005（资产与问题管理）", () => {
         "issue_key",
         "title",
         "status",
+        "description_html",
         "solution",
         "resolved_at",
         "closed_at",
@@ -170,6 +242,12 @@ describe("migrations 0005（资产与问题管理）", () => {
       "relation_type",
       "created_at",
     ]);
+    expect(tableColumns(db, "issue_artifact_links")).toEqual([
+      "issue_id",
+      "artifact_id",
+      "relation_type",
+      "created_at",
+    ]);
   });
   it("旧库升级：kind/is_final 正确映射为 resource_type/storage_type/status", () => {
     seedLegacyDatabase(db);
@@ -178,7 +256,7 @@ describe("migrations 0005（资产与问题管理）", () => {
     const linkRow = insertLegacyFileRow(db, "link", 0);
     expect(appliedVersions(db)).toEqual([1, 2, 3, 4]);
     migrate(db);
-    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
     const rows = db
       .prepare(
         "SELECT id, resource_type, storage_type, status FROM requirement_files ORDER BY id",
@@ -220,7 +298,7 @@ describe("migrations 0005（资产与问题管理）", () => {
     ).run(issueId, fileRow, now);
     // 重复执行迁移：数据行数与关联均不丢失、不重复
     migrate(db);
-    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
     expect(
       db.prepare("SELECT COUNT(*) AS count FROM requirement_files").get(),
     ).toEqual({ count: 2 });
@@ -248,7 +326,7 @@ describe("migrations 0005（资产与问题管理）", () => {
     migrate(db);
     const snapshot = tableColumns(db, "requirement_files");
     migrate(db);
-    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
     expect(tableColumns(db, "requirement_files")).toEqual(snapshot);
   });
   it("新索引与联合主键约束生效", () => {
@@ -326,7 +404,7 @@ describe("migrations 0005（资产与问题管理）", () => {
   });
   it("SCHEMA_VERSION 与已应用迁移数一致", () => {
     migrate(db);
-    expect(SCHEMA_VERSION).toBe(7);
+    expect(SCHEMA_VERSION).toBe(8);
     expect(appliedVersions(db)).toHaveLength(SCHEMA_VERSION);
   });
 });

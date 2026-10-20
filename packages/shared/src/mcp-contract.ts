@@ -154,7 +154,7 @@ export const mcpIssueListInput = z
   .object({
     requirementId: id,
     phase: z.enum(["design", "development", "testing"]).optional(),
-    status: z.enum(["open", "in_progress", "resolved", "closed"]).optional(),
+    status: z.enum(["open", "in_progress", "testing", "resolved"]).optional(),
   })
   .strict();
 export type McpIssueListInput = z.output<typeof mcpIssueListInput>;
@@ -176,7 +176,8 @@ export const mcpIssueCreateInput = z
     phase: z.enum(["design", "development", "testing"]),
     title: z.string().trim().min(1, "请输入问题标题").max(200),
     description: z.string().max(10000).default(""),
-    issueType: z.enum(["design", "development", "bug", "change", "question"]).optional(),
+    descriptionHtml: z.string().max(200000).default(""),
+    issueType: z.enum(["ui", "development", "defect", "change", "question"]).optional(),
   })
   .strict();
 export type McpIssueCreateInput = z.output<typeof mcpIssueCreateInput>;
@@ -191,8 +192,9 @@ export const mcpIssueUpdateInput = z
     issueId: id,
     title: z.string().trim().min(1, "请输入问题标题").max(200).optional(),
     description: z.string().max(10000).optional(),
-    issueType: z.enum(["design", "development", "bug", "change", "question"]).nullable().optional(),
-    status: z.enum(["open", "in_progress", "resolved", "closed"]).optional(),
+    descriptionHtml: z.string().max(200000).optional(),
+    issueType: z.enum(["ui", "development", "defect", "change", "question"]).nullable().optional(),
+    status: z.enum(["open", "in_progress", "testing", "resolved"]).optional(),
     solution: z.string().max(10000).optional(),
   })
   .strict()
@@ -200,6 +202,7 @@ export const mcpIssueUpdateInput = z
     (value) =>
       value.title !== undefined ||
       value.description !== undefined ||
+      value.descriptionHtml !== undefined ||
       value.issueType !== undefined ||
       value.status !== undefined ||
       value.solution !== undefined,

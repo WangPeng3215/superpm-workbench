@@ -323,7 +323,7 @@ export async function createApp(
   const issueListQuery = z.object({
     phase: z.enum(["design", "development", "testing"]).optional(),
     status: z
-      .enum(["open", "in_progress", "resolved", "closed"])
+      .enum(["open", "in_progress", "testing", "resolved"])
       .optional(),
   });
   app.get<{ Params: { id: string } }>(

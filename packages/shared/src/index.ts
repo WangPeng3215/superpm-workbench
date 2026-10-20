@@ -405,20 +405,20 @@ export const assetCategories: AssetCategoryDef[] = [
 // 问题管理：Issue 仅存在于 UI 设计/开发跟进/需求测试三个阶段
 export const issuePhases = ["design", "development", "testing"] as const;
 export type IssuePhase = (typeof issuePhases)[number];
-export const issueStatuses = ["open", "in_progress", "resolved", "closed"] as const;
+export const issueStatuses = ["open", "in_progress", "testing", "resolved"] as const;
 export type IssueStatus = (typeof issueStatuses)[number];
 export const issueStatusLabels: Record<IssueStatus, string> = {
   open: "待处理",
   in_progress: "处理中",
+  testing: "测试中",
   resolved: "已解决",
-  closed: "已关闭",
 };
-export const issueTypes = ["design", "development", "bug", "change", "question"] as const;
+export const issueTypes = ["ui", "development", "defect", "change", "question"] as const;
 export type IssueType = (typeof issueTypes)[number];
 export const issueTypeLabels: Record<IssueType, string> = {
-  design: "设计问题",
-  development: "开发问题",
-  bug: "缺陷",
+  ui: "UI",
+  development: "开发",
+  defect: "缺陷",
   change: "变更",
   question: "疑问",
 };
@@ -429,6 +429,8 @@ export const issueCreateSchema = z
     phase: z.enum(issuePhases),
     title: z.string().trim().min(1, "请输入问题标题").max(200),
     description: z.string().max(10000).default(""),
+    // 富文本正文：html 与纯文本双写同步（html 用于回显编辑器，text 用于导出/检索）
+    descriptionHtml: z.string().max(200000).default(""),
     issueType: z.enum(issueTypes).optional(),
   })
   .strict();
@@ -436,6 +438,7 @@ export const issueUpdateSchema = z
   .object({
     title: z.string().trim().min(1, "请输入问题标题").max(200).optional(),
     description: z.string().max(10000).optional(),
+    descriptionHtml: z.string().max(200000).optional(),
     issueType: z.enum(issueTypes).nullable().optional(),
     status: z.enum(issueStatuses).optional(),
     solution: z.string().max(10000).optional(),
@@ -453,6 +456,8 @@ export interface Issue {
   issueKey: string | null;
   title: string;
   description: string;
+  // 富文本正文（html），与 description 纯文本双写同步
+  descriptionHtml: string;
   issueType: IssueType | null;
   status: IssueStatus;
   solution: string | null;
@@ -460,7 +465,6 @@ export interface Issue {
   createdAt: string;
   updatedAt: string;
   resolvedAt: string | null;
-  closedAt: string | null;
 }
 export interface IssueActivity {
   id: number;
@@ -480,7 +484,8 @@ export interface IssueListResult {
   items: Issue[];
   total: number;
 }
-// 问题与产出物关联：同一问题与产出物仅允许一条关联记录
+// 问题与产出物关联（artifacts 体系）：同一问题与同一 artifact 节点仅允许一条关联记录；
+// assetId 指向 artifact_nodes.id，文件夹与文件均可关联
 export const issueAssetRelations = [
   "evidence",
   "solution_material",
@@ -500,12 +505,17 @@ export const issueAssetLinkSchema = z
     relationType: z.enum(issueAssetRelations).default("reference"),
   })
   .strict();
+// 关联视图的节点投影：名称 + 类型 + 相对路径，用于文件夹 + 文件树形展示
+export type IssueLinkedArtifact = Pick<
+  ArtifactNode,
+  "id" | "nodeType" | "name" | "relativePath"
+>;
 export interface IssueAssetLink {
   issueId: number;
   assetId: number;
   relationType: IssueAssetRelation;
   createdAt: string;
-  asset: RequirementFile;
+  asset: IssueLinkedArtifact;
 }
 export interface IssueAssetListResult {
   items: IssueAssetLink[];

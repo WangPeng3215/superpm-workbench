@@ -75,7 +75,7 @@ describe("issues API with real SQLite", () => {
     const requirement = await create();
     const issue = await createIssue(requirement.id, {
       description: "间距偏差 4px",
-      issueType: "design",
+      issueType: "ui",
     });
     expect(issue).toMatchObject({
       requirementId: requirement.id,
@@ -83,11 +83,11 @@ describe("issues API with real SQLite", () => {
       status: "open",
       title: "按钮样式与设计稿不一致",
       description: "间距偏差 4px",
-      issueType: "design",
+      descriptionHtml: "",
+      issueType: "ui",
       issueKey: null,
       isDeleted: false,
       resolvedAt: null,
-      closedAt: null,
     });
     // 创建即产生一条 system 历史
     const detail = (
@@ -149,18 +149,14 @@ describe("issues API with real SQLite", () => {
       (item) => item.activityType === "solution",
     );
     expect(solutionActivity?.content).toBe("调整间距为 8px 并重新导出切图");
-    // 关闭不要求解决说明：关闭 ≠ 解决
-    const closed = await app.inject({
+    // 进入测试中：任意流转允许，写状态历史
+    const testing = await app.inject({
       method: "PATCH",
       url: `/api/requirements/${requirement.id}/issues/${issue.id}`,
-      payload: { status: "closed" },
+      payload: { status: "testing" },
     });
-    expect(closed.statusCode).toBe(200);
-    expect(closed.json<Issue>()).toMatchObject({
-      status: "closed",
-      closedAt: expect.any(String),
-      solution: "调整间距为 8px 并重新导出切图",
-    });
+    expect(testing.statusCode).toBe(200);
+    expect(testing.json<Issue>()).toMatchObject({ status: "testing" });
     // 重新打开：保留全部历史，清空解决时间
     const reopened = await app.inject({
       method: "PATCH",
@@ -171,12 +167,18 @@ describe("issues API with real SQLite", () => {
     expect(reopened.json<Issue>()).toMatchObject({
       status: "open",
       resolvedAt: null,
-      closedAt: null,
     });
     detail = (
       await app.inject(`/api/requirements/${requirement.id}/issues/${issue.id}`)
     ).json<IssueDetail>();
     expect(detail.activities.filter((item) => item.activityType === "status_change")).toHaveLength(3);
+    // closed 状态已退役：非法枚举被拒绝
+    const closed = await app.inject({
+      method: "PATCH",
+      url: `/api/requirements/${requirement.id}/issues/${issue.id}`,
+      payload: { status: "closed" },
+    });
+    expect(closed.statusCode).toBe(400);
   });
   it("appends comments without rewriting history and updates timestamps", async () => {
     const requirement = await create();
@@ -299,21 +301,22 @@ describe("issues API with real SQLite", () => {
     expect(renamed.statusCode).toBe(200);
     expect(renamed.json<Issue>().title).toBe("修正后的问题标题");
   });
-  it("links assets to issues with dedup and keeps assets untouched after unlink", async () => {
+  // 通过 artifacts 体系建一个知识库文件（问题关联已切换到 artifact_nodes）
+  const createArtifact = async (requirementId: number, name: string) => {
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/requirements/${requirementId}/artifacts/files`,
+      payload: { parentId: null, name },
+    });
+    expect(response.statusCode).toBe(201);
+    return response.json() as { id: number; name: string; relativePath: string };
+  };
+  it("links artifacts to issues with dedup and keeps nodes untouched after unlink", async () => {
     const requirement = await create();
     const issue = await createIssue(requirement.id);
-    const asset = await app.inject({
-      method: "POST",
-      url: `/api/requirements/${requirement.id}/files`,
-      payload: {
-        phase: "design",
-        category: "uiAssets",
-        name: "问题截图",
-        data: Buffer.from("png-bytes").toString("base64"),
-      },
-    });
-    const assetId = asset.json().id;
-    // 关联成功：返回关联信息与产出物投影
+    const artifact = await createArtifact(requirement.id, "问题截图.md");
+    const assetId = artifact.id;
+    // 关联成功：返回关联信息与节点投影（含类型与相对路径）
     const linked = await app.inject({
       method: "POST",
       url: `/api/requirements/${requirement.id}/issues/${issue.id}/assets`,
@@ -325,7 +328,12 @@ describe("issues API with real SQLite", () => {
       assetId,
       relationType: "evidence",
     });
-    expect(linked.json().asset).toMatchObject({ id: assetId, name: "问题截图" });
+    expect(linked.json().asset).toMatchObject({
+      id: assetId,
+      nodeType: "file",
+      name: "问题截图.md",
+      relativePath: "问题截图.md",
+    });
     // 重复关联被拒绝（联合主键去重）
     const duplicate = await app.inject({
       method: "POST",
@@ -334,15 +342,32 @@ describe("issues API with real SQLite", () => {
     });
     expect(duplicate.statusCode).toBe(409);
     expect(duplicate.json().error.code).toBe("CONFLICT");
+    // 文件夹与文件均可关联
+    const folderResponse = await app.inject({
+      method: "POST",
+      url: `/api/requirements/${requirement.id}/artifacts/folders`,
+      payload: { parentId: null, name: "设计稿" },
+    });
+    expect(folderResponse.statusCode).toBe(201);
+    const folder = folderResponse.json() as { id: number; relativePath: string };
+    const folderLinked = await app.inject({
+      method: "POST",
+      url: `/api/requirements/${requirement.id}/issues/${issue.id}/assets`,
+      payload: { assetId: folder.id },
+    });
+    expect(folderLinked.statusCode).toBe(201);
+    expect(folderLinked.json().asset).toMatchObject({
+      nodeType: "folder",
+      relativePath: "设计稿",
+    });
     // 关联列表
     const list = (
       await app.inject(
         `/api/requirements/${requirement.id}/issues/${issue.id}/assets`,
       )
     ).json<IssueAssetListResult>();
-    expect(list.total).toBe(1);
-    expect(list.items[0]).toMatchObject({ assetId, relationType: "evidence" });
-    // 取消关联后产出物本体不受影响
+    expect(list.total).toBe(2);
+    // 取消关联后产出物本体不受影响：节点仍可直接再次关联
     expect(
       (
         await app.inject({
@@ -357,15 +382,18 @@ describe("issues API with real SQLite", () => {
           `/api/requirements/${requirement.id}/issues/${issue.id}/assets`,
         )
       ).json<IssueAssetListResult>().total,
-    ).toBe(0);
-    expect(
-      (
-        await app.inject(
-          `/api/requirements/${requirement.id}/files/${assetId}/content`,
-        )
-      ).statusCode,
-    ).toBe(200);
-    // 二次取消返回 404
+    ).toBe(1);
+    const relink = await app.inject({
+      method: "POST",
+      url: `/api/requirements/${requirement.id}/issues/${issue.id}/assets`,
+      payload: { assetId },
+    });
+    expect(relink.statusCode).toBe(201);
+    // 二次取消后重复取消返回 404
+    await app.inject({
+      method: "DELETE",
+      url: `/api/requirements/${requirement.id}/issues/${issue.id}/assets/${assetId}`,
+    });
     expect(
       (
         await app.inject({
@@ -375,39 +403,21 @@ describe("issues API with real SQLite", () => {
       ).statusCode,
     ).toBe(404);
   });
-  it("validates ownership and hides deleted assets from issue links", async () => {
+  it("validates ownership and cleans links when artifact nodes are deleted", async () => {
     const first = await create({ name: "需求一", proposedAt: "2026-10-15" });
     const second = await create({ name: "需求二", proposedAt: "2026-10-15" });
     const issue = await createIssue(first.id);
-    const foreignAsset = await app.inject({
-      method: "POST",
-      url: `/api/requirements/${second.id}/files`,
-      payload: {
-        phase: "design",
-        category: "uiAssets",
-        name: "别的需求的文件",
-        data: Buffer.from("x").toString("base64"),
-      },
-    });
+    const foreignArtifact = await createArtifact(second.id, "别的需求的文件.md");
     // 跨需求关联被拒绝
     const cross = await app.inject({
       method: "POST",
       url: `/api/requirements/${first.id}/issues/${issue.id}/assets`,
-      payload: { assetId: foreignAsset.json().id },
+      payload: { assetId: foreignArtifact.id },
     });
     expect(cross.statusCode).toBe(404);
-    // 本需求资源关联后软删除：从关联列表隐藏，且不可再次关联
-    const asset = await app.inject({
-      method: "POST",
-      url: `/api/requirements/${first.id}/files`,
-      payload: {
-        phase: "design",
-        category: "uiAssets",
-        name: "将被删除的文件",
-        data: Buffer.from("y").toString("base64"),
-      },
-    });
-    const assetId = asset.json().id;
+    // 本需求资源关联后删除节点：关联行级联清理，节点不存在不可再次关联
+    const asset = await createArtifact(first.id, "将被删除的文件.md");
+    const assetId = asset.id;
     expect(
       (
         await app.inject({
@@ -419,7 +429,7 @@ describe("issues API with real SQLite", () => {
     ).toBe(201);
     await app.inject({
       method: "DELETE",
-      url: `/api/requirements/${first.id}/files/${assetId}`,
+      url: `/api/artifacts/nodes/${assetId}`,
     });
     expect(
       (
@@ -441,17 +451,8 @@ describe("issues API with real SQLite", () => {
   it("cleans up link rows when an issue is soft-deleted", async () => {
     const requirement = await create();
     const issue = await createIssue(requirement.id);
-    const asset = await app.inject({
-      method: "POST",
-      url: `/api/requirements/${requirement.id}/files`,
-      payload: {
-        phase: "development",
-        category: "other",
-        name: "日志附件",
-        data: Buffer.from("log").toString("base64"),
-      },
-    });
-    const assetId = asset.json().id;
+    const artifact = await createArtifact(requirement.id, "日志附件.md");
+    const assetId = artifact.id;
     await app.inject({
       method: "POST",
       url: `/api/requirements/${requirement.id}/issues/${issue.id}/assets`,
@@ -464,16 +465,16 @@ describe("issues API with real SQLite", () => {
     });
     const inspection = new Database(join(directory, "test.sqlite"));
     const rows = inspection
-      .prepare("SELECT COUNT(*) AS count FROM issue_assets WHERE issue_id=?")
+      .prepare(
+        "SELECT COUNT(*) AS count FROM issue_artifact_links WHERE issue_id=?",
+      )
       .get(issue.id) as { count: number };
     inspection.close();
     expect(rows.count).toBe(0);
-    // 产出物本体不受问题删除影响
+    // 产出物本体不受问题删除影响：节点详情仍可访问
     expect(
       (
-        await app.inject(
-          `/api/requirements/${requirement.id}/files/${assetId}/content`,
-        )
+        await app.inject(`/api/artifacts/nodes/${assetId}`)
       ).statusCode,
     ).toBe(200);
   });

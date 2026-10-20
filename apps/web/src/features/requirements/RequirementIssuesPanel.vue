@@ -1,40 +1,48 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import {
-  ArrowLeft,
+  ArrowRight,
   ChatDotRound,
   CircleCheck,
+  Close,
   Delete,
+  Document,
+  Download,
+  Folder,
   InfoFilled,
   Link,
   Plus,
   Switch,
 } from "@element-plus/icons-vue";
 import {
-  assetCategories,
   issueAssetRelationLabels,
   issueStatuses,
   issueStatusLabels,
   issueTypes,
   issueTypeLabels,
+  stageLabels,
   type Issue,
   type IssueActivity,
   type IssueAssetLink,
   type IssueDetail,
+  type IssueLinkedArtifact,
   type IssuePhase,
   type IssueStatus,
   type IssueType,
-  type RequirementFile,
 } from "@superpm/shared";
 import { issueApi, type IssueUpdatePayload } from "../../api/issues";
-import { requirementFileApi } from "../../api/requirement-files";
+import { artifactApi } from "../../api/artifacts";
 import { errorMessage } from "../../api/client";
+import InlineRichTextEditor from "./InlineRichTextEditor.vue";
 
-const props = defineProps<{ requirementId: number; phase: IssuePhase }>();
+const props = defineProps<{
+  requirementId: number;
+  phase: IssuePhase;
+  requirementName?: string;
+}>();
 
-// ===== 两级视图（列表 / 详情），参考产物区两态实现 =====
-const view = ref<"list" | "detail">("list");
+// ===== 左栏：问题列表 =====
 const issues = ref<Issue[]>([]);
 const loading = ref(false);
 // 状态筛选：空串表示全部
@@ -52,6 +60,9 @@ async function loadList() {
     issues.value = [...result.items].sort((a, b) =>
       b.updatedAt.localeCompare(a.updatedAt),
     );
+    // 清理已不存在（删除/被过滤）的选择项
+    const alive = new Set(issues.value.map((issue) => issue.id));
+    selectedIds.value = selectedIds.value.filter((id) => alive.has(id));
   } catch (error) {
     ElMessage.error(errorMessage(error));
   } finally {
@@ -59,12 +70,14 @@ async function loadList() {
   }
 }
 
-// 切换阶段：重置回列表视图并重新拉取（状态筛选一并还原）
+// 切换阶段：关闭详情并重新拉取（状态筛选一并还原）
 watch(
   () => props.phase,
   () => {
-    view.value = "list";
+    cancelDescSave();
+    descDirty.value = false;
     detail.value = undefined;
+    selectedIds.value = [];
     if (statusFilter.value === "") {
       void loadList();
     } else {
@@ -72,10 +85,97 @@ watch(
     }
   },
 );
-watch(statusFilter, () => {
-  if (view.value === "list") void loadList();
-});
+watch(statusFilter, () => void loadList());
 onMounted(loadList);
+onBeforeUnmount(() => {
+  cancelDescSave();
+  void flushDescSave(); // 卸载前保存未落盘的正文
+});
+
+// ===== 多选导出 Markdown =====
+const selectedIds = ref<number[]>([]);
+const exporting = ref(false);
+function isSelected(id: number) {
+  return selectedIds.value.includes(id);
+}
+function onItemCheck(issue: Issue, checked: boolean | string | number) {
+  if (checked === true) {
+    if (!selectedIds.value.includes(issue.id))
+      selectedIds.value = [...selectedIds.value, issue.id];
+  } else {
+    selectedIds.value = selectedIds.value.filter((id) => id !== issue.id);
+  }
+}
+const allSelected = computed(
+  () =>
+    issues.value.length > 0 &&
+    issues.value.every((issue) => selectedIds.value.includes(issue.id)),
+);
+function toggleAll(checked: boolean | string | number) {
+  selectedIds.value = checked === true ? issues.value.map((i) => i.id) : [];
+}
+
+function downloadTextFile(fileName: string, content: string) {
+  const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = fileName;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+function buildExportMarkdown(name: string, details: IssueDetail[]): string {
+  const blocks = details.map((issue) => {
+    const lines: string[] = [];
+    lines.push(`# ${name}-${issue.title}`);
+    lines.push("");
+    lines.push(
+      `- 分类：${issue.issueType ? issueTypeLabels[issue.issueType] : "未分类"}`,
+    );
+    lines.push(`- 状态：${issueStatusLabels[issue.status]}`);
+    lines.push(`- 阶段：${stageLabels[issue.phase]}`);
+    lines.push(`- 编号：${issue.issueKey ?? `#${issue.id}`}`);
+    lines.push(`- 创建时间：${formatTime(issue.createdAt)}`);
+    lines.push(`- 更新时间：${formatTime(issue.updatedAt)}`);
+    lines.push("");
+    lines.push("## 问题描述");
+    lines.push("");
+    lines.push(issue.description.trim() || "暂无描述");
+    lines.push("");
+    lines.push("## 解决说明");
+    lines.push("");
+    lines.push(issue.solution?.trim() || "暂无");
+    lines.push("");
+    lines.push("## 动态时间线");
+    lines.push("");
+    if (!issue.activities.length) lines.push("暂无动态");
+    for (const activity of issue.activities)
+      lines.push(`- [${formatTime(activity.createdAt)}] ${activityText(activity)}`);
+    return lines.join("\n");
+  });
+  return blocks.join("\n\n---\n\n") + "\n";
+}
+
+async function exportSelected() {
+  if (!selectedIds.value.length || exporting.value) return;
+  exporting.value = true;
+  try {
+    const details: IssueDetail[] = [];
+    for (const id of selectedIds.value)
+      details.push(await issueApi.detail(props.requirementId, id));
+    const name = props.requirementName?.trim() || `需求${props.requirementId}`;
+    const now = new Date();
+    const pad = (value: number) => String(value).padStart(2, "0");
+    const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}`;
+    downloadTextFile(`${name}-问题记录-${stamp}.md`, buildExportMarkdown(name, details));
+    ElMessage.success(`已导出 ${details.length} 条问题`);
+  } catch (error) {
+    ElMessage.error(errorMessage(error));
+  } finally {
+    exporting.value = false;
+  }
+}
 
 // ===== 新建问题：内联小表单 =====
 const showCreate = ref(false);
@@ -122,7 +222,7 @@ async function submitCreate() {
   }
 }
 
-// ===== 详情视图 =====
+// ===== 右栏：问题详情（md 编辑器） =====
 const detail = ref<IssueDetail>();
 const detailLoading = ref(false);
 // 状态流转请求进行中，防止重复提交
@@ -130,11 +230,63 @@ const acting = ref(false);
 const commentText = ref("");
 const sending = ref(false);
 
+// 正文草稿：html 与纯文本双写，防抖自动保存
+const descHtml = ref("");
+const descText = ref("");
+const descDirty = ref(false);
+let saveTimer: number | undefined;
+
+function onDescHtml(html: string) {
+  descHtml.value = html;
+  scheduleDescSave();
+}
+function onDescText(text: string) {
+  descText.value = text;
+  scheduleDescSave();
+}
+function scheduleDescSave() {
+  descDirty.value = true;
+  cancelDescSave();
+  saveTimer = window.setTimeout(() => {
+    saveTimer = undefined;
+    void flushDescSave();
+  }, 800);
+}
+function cancelDescSave() {
+  if (saveTimer !== undefined) {
+    window.clearTimeout(saveTimer);
+    saveTimer = undefined;
+  }
+}
+async function flushDescSave() {
+  cancelDescSave();
+  if (!descDirty.value || !detail.value) return;
+  descDirty.value = false;
+  try {
+    const updated = await issueApi.update(props.requirementId, detail.value.id, {
+      description: descText.value,
+      descriptionHtml: descHtml.value,
+    });
+    if (detail.value?.id === updated.id)
+      detail.value = { ...detail.value, ...updated };
+    syncListIssue(updated);
+  } catch (error) {
+    // 保存失败恢复脏标记：关闭/切换时会再次提示
+    descDirty.value = true;
+    ElMessage.error(errorMessage(error));
+  }
+}
+
 async function openDetail(issue: Issue) {
+  if (detail.value?.id === issue.id) return;
+  await flushDescSave(); // 切换前保存当前正文
   detailLoading.value = true;
   try {
-    detail.value = await issueApi.detail(props.requirementId, issue.id);
-    view.value = "detail";
+    const loaded = await issueApi.detail(props.requirementId, issue.id);
+    detail.value = loaded;
+    descHtml.value = loaded.descriptionHtml;
+    descText.value = loaded.description;
+    descDirty.value = false;
     commentText.value = "";
     await loadAssets();
   } catch (error) {
@@ -144,23 +296,48 @@ async function openDetail(issue: Issue) {
   }
 }
 
-function backToList() {
+async function closeDetail() {
+  if (descDirty.value) {
+    try {
+      await ElMessageBox.confirm(
+        "正文修改尚未保存，关闭前将自动保存。",
+        "关闭问题详情",
+        {
+          confirmButtonText: "保存并关闭",
+          cancelButtonText: "取消",
+          type: "info",
+        },
+      );
+    } catch {
+      return; // 取消关闭：留在详情
+    }
+  }
+  await flushDescSave();
   detail.value = undefined;
-  view.value = "list";
-  // 详情内的流转会改变列表排序与状态，返回时重新拉取
+  // 详情内的编辑/流转会改变列表数据，关闭时重新拉取
   void loadList();
 }
 
-async function refreshDetail(id: number) {
-  detail.value = await issueApi.detail(props.requirementId, id);
+function syncListIssue(updated: Issue) {
+  const index = issues.value.findIndex((item) => item.id === updated.id);
+  if (index < 0) return;
+  const next = [...issues.value];
+  next[index] = updated;
+  issues.value = next;
 }
 
 async function applyUpdate(payload: IssueUpdatePayload, successText: string) {
   if (!detail.value || acting.value) return;
   acting.value = true;
   try {
-    await issueApi.update(props.requirementId, detail.value.id, payload);
-    await refreshDetail(detail.value.id);
+    const updated = await issueApi.update(
+      props.requirementId,
+      detail.value.id,
+      payload,
+    );
+    if (detail.value?.id === updated.id)
+      detail.value = { ...detail.value, ...updated };
+    syncListIssue(updated);
     ElMessage.success(successText);
   } catch (error) {
     ElMessage.error(errorMessage(error));
@@ -171,6 +348,10 @@ async function applyUpdate(payload: IssueUpdatePayload, successText: string) {
 
 function startProgress() {
   void applyUpdate({ status: "in_progress" }, "已开始处理");
+}
+
+function startTesting() {
+  void applyUpdate({ status: "testing" }, "已进入测试");
 }
 
 // 标记解决：服务端强制要求解决说明，弹窗内必填校验
@@ -195,10 +376,6 @@ async function markResolved() {
   await applyUpdate({ status: "resolved", solution }, "已标记解决");
 }
 
-function closeIssue() {
-  void applyUpdate({ status: "closed" }, "问题已关闭");
-}
-
 function reopen() {
   void applyUpdate({ status: "open" }, "问题已重新打开");
 }
@@ -209,11 +386,13 @@ async function sendComment() {
   sending.value = true;
   try {
     // 评论接口返回最新详情（含新活动），直接替换
-    detail.value = await issueApi.comment(
+    const result = await issueApi.comment(
       props.requirementId,
       detail.value.id,
       content,
     );
+    detail.value = result;
+    syncListIssue(result);
     commentText.value = "";
     ElMessage.success("评论已发送");
   } catch (error) {
@@ -243,19 +422,16 @@ async function removeIssue() {
     await issueApi.remove(props.requirementId, issueId);
     ElMessage.success("问题已删除");
     detail.value = undefined;
-    view.value = "list";
     await loadList();
   } catch (error) {
     ElMessage.error(errorMessage(error));
   }
 }
 
-// ===== 关联产出物 =====
+// ===== 关联产出物（artifacts 体系：文件夹 + 文件） =====
 const assets = ref<IssueAssetLink[]>([]);
 const linkDialogVisible = ref(false);
 const linkSaving = ref(false);
-const allFiles = ref<RequirementFile[]>([]);
-const selectedAssetIds = ref<number[]>([]);
 const linkedIds = computed(() => new Set(assets.value.map((l) => l.assetId)));
 
 async function loadAssets() {
@@ -271,37 +447,161 @@ async function loadAssets() {
   }
 }
 
-async function openLinkDialog() {
-  linkDialogVisible.value = true;
-  selectedAssetIds.value = [];
-  try {
-    const result = await requirementFileApi.list(
-      props.requirementId,
-      "all",
-      true,
+// 已关联条目按相对路径组织成文件夹 + 文件树形展示
+interface AssetDisplayNode {
+  key: string;
+  name: string;
+  nodeType: IssueLinkedArtifact["nodeType"];
+  link: IssueAssetLink | null;
+  children: AssetDisplayNode[];
+}
+const assetRows = computed<{ node: AssetDisplayNode; depth: number }[]>(() => {
+  const roots: AssetDisplayNode[] = [];
+  const index = new Map<string, AssetDisplayNode>();
+  const links = [...assets.value].sort((a, b) =>
+    a.asset.relativePath.localeCompare(b.asset.relativePath, "zh-Hans-CN"),
+  );
+  for (const link of links) {
+    const segments = link.asset.relativePath.split("/");
+    let prefix = "";
+    let siblings = roots;
+    segments.forEach((segment, position) => {
+      prefix = prefix ? `${prefix}/${segment}` : segment;
+      const isLeaf = position === segments.length - 1;
+      let node = index.get(prefix);
+      if (!node) {
+        node = {
+          key: prefix,
+          name: segment,
+          nodeType: isLeaf ? link.asset.nodeType : "folder",
+          link: isLeaf ? link : null,
+          children: [],
+        };
+        index.set(prefix, node);
+        siblings.push(node);
+      } else if (isLeaf) {
+        node.link = link; // 文件夹本身被关联
+      }
+      siblings = node.children;
+    });
+  }
+  // 文件夹在前、名称升序
+  const sortNodes = (nodes: AssetDisplayNode[]) => {
+    nodes.sort((a, b) =>
+      a.nodeType === b.nodeType
+        ? a.name.localeCompare(b.name, "zh-Hans-CN")
+        : a.nodeType === "folder"
+          ? -1
+          : 1,
     );
-    allFiles.value = result.groups.flatMap((group) => group.files);
+    for (const node of nodes) sortNodes(node.children);
+  };
+  sortNodes(roots);
+  const rows: { node: AssetDisplayNode; depth: number }[] = [];
+  const walk = (nodes: AssetDisplayNode[], depth: number) => {
+    for (const node of nodes) {
+      rows.push({ node, depth });
+      if (node.children.length) walk(node.children, depth + 1);
+    }
+  };
+  walk(roots, 0);
+  return rows;
+});
+
+async function unlink(node: AssetDisplayNode) {
+  if (!node.link || !detail.value) return;
+  try {
+    await issueApi.unlinkAsset(props.requirementId, detail.value.id, node.link.assetId);
+    await loadAssets();
   } catch (error) {
     ElMessage.error(errorMessage(error));
   }
 }
 
-// 弹窗内按固定分类分组展示（与产物区分类一致）
-const fileGroups = computed(() =>
-  assetCategories
-    .map((entry) => ({
-      label: entry.label,
-      files: allFiles.value.filter((file) => file.category === entry.key),
-    }))
-    .filter((group) => group.files.length > 0),
-);
+// 关联选择器：递归拉取 artifacts 目录树，文件夹可展开，文件夹/文件均可勾选
+interface ArtifactTreeItem {
+  id: number;
+  name: string;
+  nodeType: IssueLinkedArtifact["nodeType"];
+  disabled: boolean;
+  children: ArtifactTreeItem[];
+}
+const treeLoading = ref(false);
+const artifactTree = ref<ArtifactTreeItem[]>([]);
+const checkedIds = ref<number[]>([]);
+const expandedIds = ref<Set<number>>(new Set());
+
+async function loadTreeLevel(parentId: number | null): Promise<ArtifactTreeItem[]> {
+  const directory = await artifactApi.list(props.requirementId, parentId);
+  const folderItems = await Promise.all(
+    directory.folders.map(async (folder) => ({
+      id: folder.id,
+      name: folder.name,
+      nodeType: "folder" as const,
+      disabled: linkedIds.value.has(folder.id),
+      children: await loadTreeLevel(folder.id),
+    })),
+  );
+  const fileItems = directory.files.map((file) => ({
+    id: file.id,
+    name: file.name,
+    nodeType: "file" as const,
+    disabled: linkedIds.value.has(file.id),
+    children: [],
+  }));
+  return [...folderItems, ...fileItems];
+}
+
+async function openLinkDialog() {
+  linkDialogVisible.value = true;
+  treeLoading.value = true;
+  checkedIds.value = [];
+  expandedIds.value = new Set();
+  try {
+    artifactTree.value = await loadTreeLevel(null);
+    // 根层文件夹默认展开，深层按需点击
+    for (const item of artifactTree.value)
+      if (item.nodeType === "folder") expandedIds.value.add(item.id);
+  } catch (error) {
+    ElMessage.error(errorMessage(error));
+  } finally {
+    treeLoading.value = false;
+  }
+}
+
+const treeRows = computed<{ item: ArtifactTreeItem; depth: number }[]>(() => {
+  const rows: { item: ArtifactTreeItem; depth: number }[] = [];
+  const walk = (items: ArtifactTreeItem[], depth: number) => {
+    for (const item of items) {
+      rows.push({ item, depth });
+      if (item.nodeType === "folder" && expandedIds.value.has(item.id))
+        walk(item.children, depth + 1);
+    }
+  };
+  walk(artifactTree.value, 0);
+  return rows;
+});
+
+function toggleExpanded(item: ArtifactTreeItem) {
+  const next = new Set(expandedIds.value);
+  if (next.has(item.id)) next.delete(item.id);
+  else next.add(item.id);
+  expandedIds.value = next;
+}
+
+function onTreeCheck(item: ArtifactTreeItem, checked: boolean | string | number) {
+  if (checked === true) {
+    if (!checkedIds.value.includes(item.id))
+      checkedIds.value = [...checkedIds.value, item.id];
+  } else {
+    checkedIds.value = checkedIds.value.filter((id) => id !== item.id);
+  }
+}
 
 async function confirmLink() {
   if (!detail.value) return;
   // 已关联的条目在弹窗中禁用，这里仅提交新增项
-  const targets = selectedAssetIds.value.filter(
-    (id) => !linkedIds.value.has(id),
-  );
+  const targets = checkedIds.value.filter((id) => !linkedIds.value.has(id));
   if (!targets.length) {
     linkDialogVisible.value = false;
     return;
@@ -326,24 +626,14 @@ async function confirmLink() {
   }
 }
 
-async function unlink(assetId: number) {
-  if (!detail.value) return;
-  try {
-    await issueApi.unlinkAsset(props.requirementId, detail.value.id, assetId);
-    await loadAssets();
-  } catch (error) {
-    ElMessage.error(errorMessage(error));
-  }
-}
-
 // ===== 展示辅助 =====
 function typeTone(issue: Issue): string {
   switch (issue.issueType) {
-    case "design":
+    case "ui":
       return "tone-teal";
     case "development":
       return "tone-blue";
-    case "bug":
+    case "defect":
       return "tone-red";
     case "change":
       return "tone-purple";
@@ -360,10 +650,10 @@ function statusTone(status: IssueStatus): string {
       return "tone-amber";
     case "in_progress":
       return "tone-blue";
+    case "testing":
+      return "tone-purple";
     case "resolved":
       return "tone-green";
-    case "closed":
-      return "tone-gray";
   }
 }
 
@@ -398,9 +688,13 @@ function formatTime(iso: string): string {
 }
 </script>
 <template>
-  <aside class="surface issues-panel" v-loading="loading || detailLoading">
-    <!-- 一级：问题列表 -->
-    <template v-if="view === 'list'">
+  <aside
+    class="surface issues-panel"
+    :class="{ 'has-detail': !!detail }"
+    v-loading="loading || detailLoading"
+  >
+    <!-- 左栏：问题列表（默认形态） -->
+    <section class="issues-left">
       <header class="issues-toolbar">
         <div class="status-filter" role="group" aria-label="按状态筛选">
           <button
@@ -441,7 +735,7 @@ function formatTime(iso: string): string {
           <el-select
             v-model="createType"
             class="issue-type-select"
-            placeholder="问题类型（可选）"
+            placeholder="问题分类（可选）"
             clearable
           >
             <el-option
@@ -464,7 +758,17 @@ function formatTime(iso: string): string {
         </div>
       </form>
       <div class="issue-list">
-        <div v-for="issue in issues" :key="issue.id" class="issue-item">
+        <div
+          v-for="issue in issues"
+          :key="issue.id"
+          class="issue-item"
+          :class="{ active: detail?.id === issue.id }"
+        >
+          <el-checkbox
+            class="issue-check"
+            :model-value="isSelected(issue.id)"
+            @change="onItemCheck(issue, $event)"
+          />
           <el-tag
             v-if="issue.issueType"
             size="small"
@@ -486,28 +790,55 @@ function formatTime(iso: string): string {
           :image-size="48"
         />
       </div>
-    </template>
-    <!-- 二级：问题详情 -->
-    <template v-else-if="detail">
-      <header class="issues-head">
-        <button
-          class="issues-back"
-          type="button"
-          aria-label="返回问题列表"
-          @click="backToList"
+      <footer class="issues-footer">
+        <el-checkbox
+          class="select-all"
+          :model-value="allSelected"
+          :disabled="!issues.length"
+          @change="toggleAll($event)"
+          >全选</el-checkbox
         >
-          <el-icon :size="14"><ArrowLeft /></el-icon>
+        <button
+          class="issue-btn issue-btn--primary issue-export"
+          type="button"
+          :disabled="!selectedIds.length || exporting"
+          @click="exportSelected"
+        >
+          <el-icon :size="12"><Download /></el-icon>导出 Markdown<template
+            v-if="selectedIds.length"
+          >
+            （{{ selectedIds.length }}）</template
+          >
         </button>
+      </footer>
+    </section>
+    <!-- 右栏：问题详情（点击问题打开，可关闭） -->
+    <section v-if="detail" class="issues-right">
+      <header class="issues-head">
         <strong class="issues-title">{{ detail.title }}</strong>
         <el-tag size="small" class="enum-tag" :class="statusTone(detail.status)"
           >{{ issueStatusLabels[detail.status] }}</el-tag
         >
+        <button
+          class="issues-close"
+          type="button"
+          aria-label="关闭详情"
+          @click="closeDetail"
+        >
+          <el-icon :size="14"><Close /></el-icon>
+        </button>
       </header>
       <div class="issue-detail">
-        <p v-if="detail.description" class="issue-desc">{{
-          detail.description
-        }}</p>
-        <p v-else class="issue-desc muted-line">暂无描述</p>
+        <!-- 正文 md 编辑器：随问题切换重建，编辑后防抖自动保存 -->
+        <InlineRichTextEditor
+          :key="detail.id"
+          :html="descHtml"
+          :text="descText"
+          :requirement-id="requirementId"
+          label="问题正文"
+          @update:html="onDescHtml"
+          @update:text="onDescText"
+        />
         <!-- 状态流转按钮组 -->
         <div class="issue-flow">
           <button
@@ -520,22 +851,22 @@ function formatTime(iso: string): string {
             开始处理
           </button>
           <button
-            v-if="detail.status !== 'closed'"
+            v-if="detail.status === 'in_progress'"
+            class="issue-btn issue-btn--primary"
+            type="button"
+            :disabled="acting"
+            @click="startTesting"
+          >
+            开始测试
+          </button>
+          <button
+            v-if="detail.status !== 'resolved'"
             class="issue-btn"
             type="button"
             :disabled="acting"
             @click="markResolved"
           >
             标记解决
-          </button>
-          <button
-            v-if="detail.status === 'open' || detail.status === 'in_progress'"
-            class="issue-btn"
-            type="button"
-            :disabled="acting"
-            @click="closeIssue"
-          >
-            关闭问题
           </button>
           <button
             v-if="detail.status === 'resolved'"
@@ -559,7 +890,7 @@ function formatTime(iso: string): string {
           <span class="block-label">解决说明</span>
           <p>{{ detail.solution }}</p>
         </div>
-        <!-- 关联产出物 -->
+        <!-- 关联产出物：文件夹 + 文件树形展示 -->
         <div class="issue-assets">
           <div class="assets-head-row">
             <span class="block-label">关联产出物</span>
@@ -567,15 +898,33 @@ function formatTime(iso: string): string {
               <el-icon :size="12"><Link /></el-icon>关联产出物
             </button>
           </div>
-          <div v-for="link in assets" :key="link.assetId" class="asset-row">
-            <el-tag size="small" effect="plain">{{
-              issueAssetRelationLabels[link.relationType]
+          <div
+            v-for="row in assetRows"
+            :key="row.node.key"
+            class="asset-row"
+            :style="{ paddingLeft: `${10 + row.depth * 16}px` }"
+          >
+            <el-icon
+              class="asset-icon"
+              :class="{ 'asset-icon--folder': row.node.nodeType === 'folder' }"
+              :size="13"
+            >
+              <Folder v-if="row.node.nodeType === 'folder'" />
+              <Document v-else />
+            </el-icon>
+            <span
+              class="asset-name"
+              :title="row.node.link?.asset.relativePath"
+              >{{ row.node.name }}</span
+            >
+            <el-tag v-if="row.node.link" size="small" effect="plain">{{
+              issueAssetRelationLabels[row.node.link.relationType]
             }}</el-tag>
-            <span class="asset-name">{{ link.asset.name }}</span>
             <button
+              v-if="row.node.link"
               class="issue-unlink"
               type="button"
-              @click="unlink(link.assetId)"
+              @click="unlink(row.node)"
             >
               解除
             </button>
@@ -624,34 +973,49 @@ function formatTime(iso: string): string {
           </button>
         </div>
       </div>
-    </template>
-    <!-- 关联产出物选择弹窗：多选后按「参考」关系建立关联 -->
+    </section>
+    <!-- 关联产出物选择弹窗：artifacts 目录树，文件夹/文件均可勾选 -->
     <el-dialog
       v-model="linkDialogVisible"
       title="关联产出物"
-      width="420px"
+      width="440px"
       append-to-body
     >
-      <div class="link-dialog-body">
+      <div class="link-dialog-body" v-loading="treeLoading">
         <div
-          v-for="group in fileGroups"
-          :key="group.label"
-          class="link-dialog-group"
+          v-for="row in treeRows"
+          :key="row.item.id"
+          class="tree-row"
+          :style="{ paddingLeft: `${6 + row.depth * 16}px` }"
+          @click="row.item.nodeType === 'folder' && toggleExpanded(row.item)"
         >
-          <span class="link-dialog-label">{{ group.label }}</span>
-          <el-checkbox-group v-model="selectedAssetIds">
-            <el-checkbox
-              v-for="file in group.files"
-              :key="file.id"
-              :label="file.id"
-              :disabled="linkedIds.has(file.id)"
-            >
-              {{ file.name }}
-            </el-checkbox>
-          </el-checkbox-group>
+          <span
+            v-if="row.item.nodeType === 'folder'"
+            class="tree-caret"
+            :class="{ expanded: expandedIds.has(row.item.id) }"
+          >
+            <el-icon :size="11"><ArrowRight /></el-icon>
+          </span>
+          <span v-else class="tree-caret tree-caret--leaf"></span>
+          <el-icon
+            class="asset-icon"
+            :class="{ 'asset-icon--folder': row.item.nodeType === 'folder' }"
+            :size="13"
+          >
+            <Folder v-if="row.item.nodeType === 'folder'" />
+            <Document v-else />
+          </el-icon>
+          <span class="tree-name">{{ row.item.name }}</span>
+          <el-checkbox
+            class="tree-check"
+            :model-value="checkedIds.includes(row.item.id)"
+            :disabled="row.item.disabled"
+            @click.stop
+            @change="onTreeCheck(row.item, $event)"
+          />
         </div>
         <el-empty
-          v-if="!fileGroups.length"
+          v-if="!artifactTree.length && !treeLoading"
           description="暂无可关联的产出物"
           :image-size="48"
         />
@@ -667,7 +1031,7 @@ function formatTime(iso: string): string {
         <button
           class="issue-btn issue-btn--primary"
           type="button"
-          :disabled="linkSaving"
+          :disabled="linkSaving || !checkedIds.length"
           @click="confirmLink"
         >
           确定关联
@@ -678,11 +1042,34 @@ function formatTime(iso: string): string {
 </template>
 <style scoped>
 .issues-panel {
+  /* 两栏布局：左列表右详情；未打开详情时列表占满整行 */
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  align-items: stretch;
   min-width: 0;
   /* 左栏 flex 子项：占满剩余高度；根容器不滚，滚动交给内部列表/详情区 */
   flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+.issues-panel.has-detail .issues-left {
+  flex: 0 0 320px;
+  width: 320px;
+  border-right: 1px solid var(--border-soft);
+}
+.issues-left {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.issues-right {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
   min-height: 0;
   overflow: hidden;
 }
@@ -805,12 +1192,23 @@ function formatTime(iso: string): string {
 .issue-item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   padding: 6px 8px;
   border-radius: 8px;
 }
 .issue-item:hover {
   background: var(--bg-hover);
+}
+.issue-item.active {
+  background: var(--bg-brand-soft);
+}
+/* 列表多选框：压缩默认高度避免撑高条目 */
+.issue-check {
+  flex: none;
+  height: auto;
+}
+.issue-check :deep(.el-checkbox__label) {
+  display: none;
 }
 .issue-title {
   flex: 1 1 auto;
@@ -835,6 +1233,26 @@ function formatTime(iso: string): string {
   font-size: 11px;
   color: var(--text-faint);
 }
+/* 底部：全选 + 导出 */
+.issues-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border-soft);
+  flex: none;
+}
+.select-all {
+  height: auto;
+}
+.select-all :deep(.el-checkbox__label) {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.issue-export {
+  padding: 5px 12px;
+}
 /* 详情视图 */
 .issues-head {
   display: flex;
@@ -843,7 +1261,7 @@ function formatTime(iso: string): string {
   padding: 10px 10px 0;
   flex: none;
 }
-.issues-back {
+.issues-close {
   display: inline-flex;
   padding: 4px;
   border: 0;
@@ -853,7 +1271,7 @@ function formatTime(iso: string): string {
   cursor: pointer;
   flex: none;
 }
-.issues-back:hover {
+.issues-close:hover {
   color: var(--brand);
   background: var(--bg-hover);
 }
@@ -875,18 +1293,6 @@ function formatTime(iso: string): string {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-}
-.issue-desc {
-  margin: 0;
-  padding: 8px 10px;
-  border-radius: 8px;
-  background: var(--bg-subtle);
-  border: 1px solid var(--border-soft);
-  font-size: 12px;
-  line-height: 1.7;
-  color: var(--text-regular);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
 }
 .muted-line {
   color: var(--text-faint);
@@ -944,6 +1350,13 @@ function formatTime(iso: string): string {
   border: 1px solid var(--border-soft);
   border-radius: 6px;
   background: var(--bg-subtle);
+}
+.asset-icon {
+  flex: none;
+  color: var(--text-faint);
+}
+.asset-icon--folder {
+  color: var(--tone-amber-fg, var(--brand));
 }
 .asset-name {
   flex: 1 1 auto;
@@ -1008,23 +1421,53 @@ function formatTime(iso: string): string {
   gap: 8px;
   justify-items: end;
 }
-/* 关联弹窗 */
+/* 关联弹窗：artifacts 目录树 */
 .link-dialog-body {
   display: grid;
-  gap: 10px;
-  max-height: 320px;
+  gap: 2px;
+  max-height: 360px;
+  min-height: 120px;
   overflow: auto;
 }
-.link-dialog-group {
-  display: grid;
-  gap: 4px;
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  cursor: default;
+  user-select: none;
 }
-.link-dialog-group :deep(.el-checkbox-group) {
-  display: grid;
-  gap: 2px;
+.tree-row:hover {
+  background: var(--bg-hover);
 }
-.link-dialog-label {
-  font-size: 11px;
-  color: var(--text-muted);
+.tree-caret {
+  display: inline-flex;
+  flex: none;
+  width: 14px;
+  color: var(--text-faint);
+  transition: transform 0.15s ease;
+}
+.tree-caret.expanded {
+  transform: rotate(90deg);
+}
+.tree-caret--leaf {
+  visibility: hidden;
+}
+.tree-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-regular);
+}
+.tree-check {
+  flex: none;
+  height: auto;
+}
+.tree-check :deep(.el-checkbox__label) {
+  display: none;
 }
 </style>

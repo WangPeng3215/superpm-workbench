@@ -55,6 +55,10 @@ test("creates an issue in the design stage and starts processing it", async ({
   request,
 }) => {
   await createDesignRequirement(page, request);
+  // 默认列表形态：仅左栏列表，右侧编辑器未打开；多选导出按钮存在
+  await expect(page.locator(".issues-right")).toHaveCount(0);
+  await expect(panel(page).locator(".issue-export")).toBeVisible();
+  await expect(panel(page).locator(".issue-export")).toBeDisabled();
   // 新建问题：标题 + 类型下拉选择「缺陷」
   await panel(page).getByRole("button", { name: "新建问题", exact: true }).click();
   await panel(page).getByPlaceholder("问题标题（必填）").fill("主视觉配色不一致");
@@ -76,9 +80,11 @@ test("creates an issue in the design stage and starts processing it", async ({
   await expect(
     item.locator(".enum-tag").filter({ hasText: "待处理" }),
   ).toBeVisible();
-  // 进详情：初始含系统记录，执行「开始处理」状态流转
+  // 进详情：点击问题在右侧打开 md 编辑器，列表仍可见
   await item.locator(".issue-title").click();
+  await expect(page.locator(".issues-right")).toBeVisible();
   await expect(page.locator(".issue-detail")).toBeVisible();
+  await expect(page.locator(".inline-rich")).toBeVisible();
   await expect(
     panel(page).locator(".activity-row").filter({ hasText: "创建问题" }),
   ).toBeVisible();
@@ -99,7 +105,8 @@ test("blocks resolving without a note then resolves after filling it", async ({
   await createDesignRequirement(page, request);
   await createIssue(page, "按钮点击无响应");
   await issueItem(page, "按钮点击无响应").locator(".issue-title").click();
-  await expect(page.locator(".issue-detail")).toBeVisible();
+  await expect(page.locator(".issues-right")).toBeVisible();
+  await expect(page.locator(".inline-rich")).toBeVisible();
   // 未填解决说明：弹窗内取消 → 状态保持待处理
   await panel(page).getByRole("button", { name: "标记解决", exact: true }).click();
   const messageBox = page.locator(".el-message-box");
@@ -129,7 +136,8 @@ test("posts a comment and shows it in the activity timeline", async ({
   await createDesignRequirement(page, request);
   await createIssue(page, "文案截断");
   await issueItem(page, "文案截断").locator(".issue-title").click();
-  await expect(page.locator(".issue-detail")).toBeVisible();
+  await expect(page.locator(".issues-right")).toBeVisible();
+  await expect(page.locator(".inline-rich")).toBeVisible();
   // 发送评论后时间线出现该评论内容
   await panel(page)
     .getByPlaceholder("填写处理说明…")
