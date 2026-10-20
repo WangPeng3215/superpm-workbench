@@ -49,6 +49,22 @@ function activeFooter(page: Page) {
   return page.locator(".el-tab-pane:visible .md-footer");
 }
 
+// 通过详情表单切换当前阶段（头部步骤条已移除）：下拉选择阶段并保存
+async function switchStage(page: Page, label: string) {
+  await page.getByRole("tab", { name: "需求详情" }).click();
+  await page
+    .locator("label.field")
+    .filter({ hasText: "当前阶段" })
+    .locator(".el-select")
+    .click();
+  await page
+    .locator(".el-select-dropdown__item:visible")
+    .filter({ hasText: label })
+    .click();
+  await page.getByRole("button", { name: "保存修改" }).click();
+  await expect(page.getByText("需求已保存").first()).toBeVisible();
+}
+
 // 通过 API 建需求（记忆即时初始化）并放置两个知识库文件，随后打开「文档管理」页签
 // 并点击记忆卡片以新页签打开编辑器（记忆文件不再自动展示）
 async function createDocFixture(page: Page, request: APIRequestContext) {
@@ -323,16 +339,11 @@ test("keeps doc tabs open with their drafts when switching stages", async ({
     await editor.fill("已落盘但响应尚未返回");
     await started.promise;
     await editor.fill("离开前的最后一版草稿");
-    // 切到问题阶段：文档页签保持打开，问题页签联动激活，阶段切换立即生效
-    await page
-      .locator(".stage-timeline .stage-name")
-      .filter({ hasText: "UI 设计" })
-      .click();
-    await expect(docTab(page, "需求问题")).toHaveClass(/is-active/);
+    // 切到 UI 设计阶段（详情表单保存当前阶段）：文档页签保持打开，问题页签展示该阶段面板
+    await switchStage(page, "UI 设计");
+    await docTab(page, "需求问题").click();
+    await expect(page.locator(".issues-panel")).toBeVisible();
     await expect(docTab(page, "需求记忆.md")).toBeVisible();
-    await expect(
-      page.getByRole("button", { name: "设为当前阶段", exact: true }),
-    ).toBeVisible();
     responseGate.release();
     // 切回记忆页签：草稿不丢且最终修改已随自动保存落盘
     await docTab(page, "需求记忆.md").click();
@@ -363,12 +374,12 @@ test("blocks navigation when doc content cannot be saved", async ({
     }
   });
   await editor.fill("导航失败后应保留的草稿");
-  await page.getByRole("button", { name: "返回需求列表", exact: true }).click();
+  await page.getByRole("link", { name: "需求列表" }).click();
   await expect(page.getByText("离开前保存失败", { exact: true })).toBeVisible();
   await expect(page).toHaveURL(/\/requirements\/\d+$/);
   await expect(editor).toHaveText("导航失败后应保留的草稿");
   await page.unroute(contentUrl);
-  await page.getByRole("button", { name: "返回需求列表", exact: true }).click();
+  await page.getByRole("link", { name: "需求列表" }).click();
   await expect(page).toHaveURL(/\/requirements$/);
 });
 

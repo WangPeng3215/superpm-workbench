@@ -8,7 +8,6 @@ import {
 } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import type { TabPaneName } from "element-plus";
-import { ArrowLeft, Delete } from "@element-plus/icons-vue";
 import {
   dateFields,
   dateLabels,
@@ -29,12 +28,11 @@ import {
 } from "@superpm/shared";
 import { requirementApi } from "../api/requirements";
 import { errorMessage } from "../api/client";
+import { setTabLabel } from "../stores/tabs";
 import DocTabEditor from "../features/requirements/DocTabEditor.vue";
 import RequirementDocManager from "../features/requirements/RequirementDocManager.vue";
 import RequirementIssuesPanel from "../features/requirements/RequirementIssuesPanel.vue";
 import InlineRichTextEditor from "../features/requirements/InlineRichTextEditor.vue";
-import XlyTimeline from "../components/ease-ui/xly-timeline/index.vue";
-import XlyTimelineItem from "../components/ease-ui/xly-timeline/timeline-item.vue";
 import { tagTone } from "../features/requirements/enum-tags";
 type Editable = Pick<
   Requirement,
@@ -64,21 +62,23 @@ const loading = ref(false),
   error = ref("");
 // 顶层页签：固定「需求详情」「文档管理」「需求问题」+ 动态文档页签（doc-<nodeId>）
 const activeTab = ref("detail");
-const viewingStage = ref<Stage>("analysis");
-const stageSaving = ref(false);
 // 动态文档页签：点击「文档管理」中的 md 文件（含需求记忆）时打开，可关闭
 const docTabs = ref<{ node: ArtifactNode }[]>([]);
 const docEditors = new Map<number, InstanceType<typeof DocTabEditor>>();
-// 当前查看阶段是否为问题阶段（UI 设计/开发跟进/需求测试）
-const activeIssuePhase = computed<IssuePhase | null>(() =>
-  (issuePhases as readonly string[]).includes(viewingStage.value)
-    ? (viewingStage.value as IssuePhase)
-    : null,
-);
+// 当前阶段是否为问题阶段（UI 设计/开发跟进/需求测试）
+const activeIssuePhase = computed<IssuePhase | null>(() => {
+  const stage = item.value?.currentStage;
+  return stage && (issuePhases as readonly string[]).includes(stage)
+    ? (stage as IssuePhase)
+    : null;
+});
 // 非问题阶段的「需求问题」页签提示
-const issueHint = `当前查看阶段为「${stageLabels[viewingStage.value]}」。切换到 ${(issuePhases as readonly string[])
-  .map((phase) => stageLabels[phase as Stage])
-  .join("、")} 阶段后可管理对应阶段的问题。`;
+const issueHint = computed(
+  () =>
+    `当前阶段为「${stageLabels[item.value?.currentStage ?? "analysis"]}」。切换到 ${(issuePhases as readonly string[])
+      .map((phase) => stageLabels[phase as Stage])
+      .join("、")} 阶段后可管理对应阶段的问题。`,
+);
 function setDocEditor(nodeId: number, el: unknown) {
   const comp = el as InstanceType<typeof DocTabEditor> | null;
   if (comp) docEditors.set(nodeId, comp);
@@ -138,26 +138,9 @@ async function flushAnalysis() {
 }
 onBeforeRouteLeave(flushAnalysis);
 onBeforeRouteUpdate(flushAnalysis);
-function viewStage(stage: Stage) {
-  viewingStage.value = stage;
-}
-// 顶部步骤条点击：切换查看阶段；问题阶段联动打开「需求问题」页签
-function goStage(stage: Stage) {
-  viewStage(stage);
-  if ((issuePhases as readonly string[]).includes(stage))
-    activeTab.value = "issues";
-}
 const dirty = computed(
   () => Boolean(draft.value) && JSON.stringify(draft.value) !== initial.value,
 );
-function statusOf(stage: Stage): "finish" | "process" | "wait" {
-  if (!item.value) return "wait";
-  const current = stages.indexOf(item.value.currentStage);
-  const target = stages.indexOf(stage);
-  if (target < current) return "finish";
-  if (target === current) return "process";
-  return "wait";
-}
 // 提出时间与开始时间并排一行，其余日期字段两列排布
 const leadDates: string[] = ["proposedAt", "startedAt"];
 const extraDates = dateFields.filter((key) => !leadDates.includes(key));
@@ -214,8 +197,9 @@ async function load() {
     if (token !== revision) return;
     item.value = detail;
     relations.value = related;
-    viewingStage.value = detail.currentStage;
     resetDraft(detail);
+    // 顶栏页签回填真实文案「编号 · 名称」（进入时先以「需求 #id」占位）
+    setTabLabel(route.path, `${detail.requirementNo} · ${detail.name}`);
   } catch (e) {
     if (token === revision) error.value = errorMessage(e);
   } finally {
@@ -236,6 +220,8 @@ async function save() {
     } as RequirementUpdate);
     item.value = updated;
     resetDraft(updated);
+    // 改名/改编号后同步刷新顶栏页签文案
+    setTabLabel(route.path, `${updated.requirementNo} · ${updated.name}`);
     ElMessage.success("需求已保存");
   } catch (e) {
     ElMessage.error(errorMessage(e));
@@ -261,60 +247,12 @@ function onDescriptionHtml(html: string) {
 function onDescriptionText(text: string) {
   if (draft.value) draft.value.description = text;
 }
-async function changeStage(stage: Stage) {
-  if (!item.value || stageSaving.value) return;
-  stageSaving.value = true;
-  try {
-    const updated = await requirementApi.update(item.value.id, {
-      currentStage: stage,
-    });
-    item.value = updated;
-    viewingStage.value = stage;
-    resetDraft(updated);
-    ElMessage.success("当前阶段已更新");
-  } catch (e) {
-    ElMessage.error(errorMessage(e));
-  } finally {
-    stageSaving.value = false;
-  }
-}
-async function remove() {
-  if (!item.value) return;
-  try {
-    await ElMessageBox.confirm(
-      `确定软删除「${item.value.name}」吗？`,
-      "删除需求",
-      {
-        confirmButtonText: "确认删除",
-        cancelButtonText: "取消",
-        type: "warning",
-      },
-    );
-  } catch {
-    return;
-  }
-  try {
-    if (!(await flushAnalysis())) return;
-    await requirementApi.remove(item.value.id);
-    ElMessage.success("需求已删除");
-    router.push("/requirements");
-  } catch (e) {
-    ElMessage.error(errorMessage(e));
-  }
-}
 function go(target: Requirement) {
   router.push(`/requirements/${target.id}`);
 }
 </script>
 <template>
   <div class="detail-page" v-loading="loading">
-    <button
-      class="back-link"
-      type="button"
-      @click="router.push('/requirements')"
-    >
-      <el-icon><ArrowLeft /></el-icon>返回需求列表
-    </button>
     <el-alert
       v-if="error"
       :title="error"
@@ -330,37 +268,14 @@ function go(target: Requirement) {
             <span class="hero-no">{{ item.requirementNo }}</span>
             <h1 class="head-title">{{ item.name }}</h1>
           </div>
-          <div class="head-actions">
-            <el-button
-              v-if="viewingStage !== item.currentStage"
-              type="primary"
-              plain
-              size="small"
-              :loading="stageSaving"
-              @click="changeStage(viewingStage)"
-              >设为当前阶段</el-button
-            >
-            <el-tag v-else effect="plain" size="small">当前阶段</el-tag>
-            <el-button
-              type="danger"
-              plain
-              size="small"
-              :icon="Delete"
-              @click="remove"
-              >删除</el-button
-            >
-          </div>
-        </div>
-        <XlyTimeline direction="horizontal" class="stage-timeline">
-          <XlyTimelineItem
-            v-for="stage in stages"
-            :key="stage"
-            :status="statusOf(stage)"
-            @click="goStage(stage)"
+          <!-- 当前阶段 tag：随详情表单保存的 currentStage 刷新 -->
+          <el-tag
+            size="small"
+            class="enum-tag head-stage"
+            :class="tagTone('currentStage', item.currentStage)"
+            >{{ stageLabels[item.currentStage] }}</el-tag
           >
-            <span class="stage-name">{{ stageLabels[stage] }}</span>
-          </XlyTimelineItem>
-        </XlyTimeline>
+        </div>
       </section>
       <section class="surface detail-body">
         <el-tabs v-model="activeTab" @tab-remove="onTabRemove">
@@ -638,45 +553,29 @@ function go(target: Requirement) {
   gap: 10px;
   height: calc(100dvh - var(--app-header-h) - 40px);
 }
-.back-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border: 0;
-  background: none;
-  padding: 0;
-  font-size: 12px;
-  color: var(--text-muted);
-  cursor: pointer;
-  justify-self: start;
-}
-.back-link:hover {
-  color: var(--brand);
-}
 .detail-head {
-  display: grid;
-  gap: 8px;
-  padding: 10px 18px 12px;
+  /* 单行头部：编号 + 标题 + 当前阶段 tag，无步骤条 */
+  padding: 8px 18px;
 }
 .head-row {
   display: flex;
   align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
+  gap: 10px;
   min-width: 0;
 }
 .head-identity {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   flex: 1 1 auto;
   min-width: 0;
 }
 .head-title {
   margin: 0;
-  font-size: 17px;
+  font-size: 16px;
   font-weight: 650;
   letter-spacing: -0.2px;
+  line-height: 1.35;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -691,15 +590,8 @@ function go(target: Requirement) {
   background: var(--bg-brand-soft);
   flex: none;
 }
-.head-actions {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.head-stage {
   flex: none;
-}
-.detail-head .stage-timeline {
-  min-width: 0;
 }
 .detail-body {
   padding: 12px 22px 22px;
@@ -821,24 +713,6 @@ function go(target: Requirement) {
   font-size: 11px;
   color: var(--text-faint);
 }
-.stage-timeline {
-  min-width: 0;
-}
-.stage-timeline :deep(.xly-timeline-item) {
-  cursor: pointer;
-}
-.stage-name {
-  font-size: 13px;
-  line-height: 1.4;
-  color: var(--text-muted);
-}
-.stage-timeline :deep(.xly-timeline-item--finish) .stage-name {
-  color: var(--text-title);
-}
-.stage-timeline :deep(.xly-timeline-item--process) .stage-name {
-  color: var(--brand-strong);
-  font-weight: 600;
-}
 @media (max-width: 1100px) {
   .detail-grid {
     grid-template-columns: minmax(0, 1fr);
@@ -853,13 +727,6 @@ function go(target: Requirement) {
   }
 }
 @media (max-width: 700px) {
-  .head-row {
-    align-items: flex-start;
-  }
-  .head-actions {
-    margin-left: 0;
-    width: 100%;
-  }
   .field-row {
     grid-template-columns: minmax(0, 1fr);
   }

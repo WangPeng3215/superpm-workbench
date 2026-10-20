@@ -7,7 +7,7 @@
   --el-border-radius-base: 6px;
   --el-font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
 
-  /* 顶栏总占位高度（height 56px，box-sizing: border-box 已含 1px 底边框），
+  /* 顶栏（功能页签栏）总占位高度（height 56px，box-sizing: border-box 已含 1px 底边框），
      供详情页等需要"视口减顶栏"限高布局的页面取用 */
   --app-header-h: 56px;
 
@@ -278,24 +278,86 @@ a:focus-visible {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  /* 固定在视口顶部：面包屑菜单栏不随页面滚动；
+  /* 固定在视口顶部：页签栏不随页面滚动；
      z-index 低于 Element Plus 弹层默认 2000+，不遮挡下拉/弹窗 */
   position: sticky;
   top: 0;
   z-index: 100;
 }
-.breadcrumb {
+/* 顶栏功能页签栏（替代原面包屑）：圆角芯片式页签，进入功能后出现 + 需求详情动态页签，过多时横向滚动 */
+.topbar-tabs {
+  flex: 1 1 auto;
+  min-width: 0;
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 7px;
+  margin: 0 20px 0 8px;
+  overflow-x: auto;
+  /* 页签栏不显示滚动条，鼠标滚轮/拖动横向滚动即可 */
+  scrollbar-width: none;
+}
+.topbar-tabs::-webkit-scrollbar {
+  display: none;
+}
+.topbar-tab {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 200px;
+  height: 30px;
+  /* 边框常态透明占位，激活态换品牌色时文字不跳动 */
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 0 6px 0 12px;
+  background: transparent;
+  color: var(--text-secondary);
   font-size: 12px;
-  color: var(--text-faint);
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    border-color 0.15s,
+    color 0.15s;
 }
-.breadcrumb .el-icon {
-  font-size: 10px;
-}
-.breadcrumb span {
+.topbar-tab:hover {
+  background: var(--bg-hover);
   color: var(--text-regular);
+}
+.topbar-tab.active {
+  color: var(--brand);
+  font-weight: 600;
+  /* 激活芯片：浅品牌底 + 品牌色文字 + 细边框，深浅色跟随语义变量自动适配 */
+  background: var(--bg-brand-soft);
+  border-color: var(--border-brand);
+}
+.tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tab-close {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  flex: none;
+  border-radius: 50%;
+  font-size: 11px;
+  color: var(--text-faint);
+  opacity: 0;
+  transition:
+    opacity 0.15s,
+    background 0.15s,
+    color 0.15s;
+}
+.topbar-tab:hover .tab-close,
+.topbar-tab.active .tab-close {
+  opacity: 1;
+}
+.tab-close:hover {
+  /* 悬停时用表面色圆点托起关闭按钮，浅品牌底激活芯片上也清晰可辨 */
+  background: var(--bg-surface);
+  color: var(--danger-text);
 }
 .topbar-actions {
   display: flex;

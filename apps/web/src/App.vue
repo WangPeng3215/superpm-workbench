@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import type { FormInstance, FormRules } from "element-plus";
 import { ElMessage, ElMessageBox } from "element-plus";
@@ -9,24 +9,53 @@ import {
   Bell,
   Setting,
   Connection,
-  ArrowRight,
   ArrowDown,
+  Close,
   Moon,
   Sunny,
 } from "@element-plus/icons-vue";
 import { request } from "./api/client";
 import { changePassword, logout } from "./api/auth";
 import { authStore, clearAuthUser } from "./stores/auth";
+import {
+  clearTabs,
+  closeTab,
+  syncRoute,
+  tabsStore,
+  type WorkTab,
+} from "./stores/tabs";
 import { dark, toggleTheme } from "./theme";
 
 const route = useRoute();
 const router = useRouter();
 const connected = ref(false);
-const title = computed(() => String(route.meta.title ?? "需求工作台"));
 // 登录页是独立视图：脱离侧栏/顶栏布局直接渲染
 const bareLayout = computed(() => Boolean(route.meta.public));
+// 顶栏页签与路由联动：功能/详情路由进入后对应页签才出现并激活；
+// 进入公开页（登录、退出登录跳转）时清空全部页签，之后进入功能按需重开
+watch(
+  () => route.path,
+  (path) => {
+    if (route.meta.public) clearTabs();
+    else syncRoute(path);
+  },
+  { immediate: true },
+);
+
+// 点击页签跳转对应路由（当前页签重复点击不重复导航）
+function pushTab(tab: WorkTab) {
+  if (route.path !== tab.path) void router.push(tab.path);
+}
+// 关闭页签：若关闭的是激活页签，按右侧→左侧→需求列表规则回退路由；
+// 目标与当前路由相同（关掉最后一个页签兜底回首页）时不再触发路由联动，手动补开首页页签
+async function onCloseTab(tab: WorkTab) {
+  const target = closeTab(tab.key);
+  if (!target) return;
+  if (route.path === target) syncRoute(target);
+  else await router.push(target);
+}
 const navigation = [
-  { path: "/requirements", label: "需求工作台", icon: Grid },
+  { path: "/requirements", label: "需求列表", icon: Grid },
   { path: "/tasks", label: "每日任务历史", icon: Calendar },
   { path: "/notifications", label: "系统通知", icon: Bell },
 ];
@@ -140,9 +169,28 @@ async function submitChangePassword() {
     </aside>
     <div class="main-layout">
       <header class="topbar">
-        <div class="breadcrumb">
-          工作空间<el-icon><ArrowRight /></el-icon><span>{{ title }}</span>
-        </div>
+        <!-- 功能页签栏（替代原面包屑）：页签在功能被打开后出现、均可关闭，需求详情按访问动态开签 -->
+        <nav class="topbar-tabs" aria-label="功能页签">
+          <button
+            v-for="tab in tabsStore.tabs"
+            :key="tab.key"
+            type="button"
+            class="topbar-tab"
+            :class="{ active: tabsStore.activePath === tab.path }"
+            :title="tab.label"
+            @click="pushTab(tab)"
+          >
+            <span class="tab-label">{{ tab.label }}</span>
+            <span
+              class="tab-close"
+              aria-label="关闭页签"
+              title="关闭页签"
+              @click.stop="onCloseTab(tab)"
+            >
+              <el-icon><Close /></el-icon>
+            </span>
+          </button>
+        </nav>
         <div class="topbar-actions">
           <span class="service-status" :class="{ offline: !connected }"
             ><el-icon><Connection /></el-icon

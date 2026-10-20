@@ -12,6 +12,22 @@ async function addRequirement(page: Page, name: string) {
     .locator("xpath=ancestor::tr");
 }
 
+// 通过详情表单切换当前阶段（头部步骤条已移除）：下拉选择阶段并保存
+async function switchStage(page: Page, label: string) {
+  await page.getByRole("tab", { name: "需求详情" }).click();
+  await page
+    .locator("label.field")
+    .filter({ hasText: "当前阶段" })
+    .locator(".el-select")
+    .click();
+  await page
+    .locator(".el-select-dropdown__item:visible")
+    .filter({ hasText: label })
+    .click();
+  await page.getByRole("button", { name: "保存修改" }).click();
+  await expect(page.getByText("需求已保存").first()).toBeVisible();
+}
+
 test("inline CRUD inserts a child below its parent", async ({
   page,
   request,
@@ -107,9 +123,9 @@ test("stage workspace persists analysis docs and issue resolution", async ({
   await expect(recordEditor).toBeVisible();
   await recordEditor.fill("# 阶段验收内容");
   await expect(page.getByText("已自动保存到本地文件")).toBeVisible();
-  // 切到 UI 设计阶段：问题页签联动激活，新建问题
-  const timeline = page.locator(".stage-timeline");
-  await timeline.getByText("UI 设计", { exact: true }).click();
+  // 切到 UI 设计阶段：详情表单保存当前阶段，问题页签展示该阶段问题，新建问题
+  await switchStage(page, "UI 设计");
+  await page.getByRole("tab", { name: "需求问题" }).click();
   const issuesPanel = page.locator(".issues-panel");
   await issuesPanel.getByRole("button", { name: /新建问题/ }).click();
   await issuesPanel.getByPlaceholder("问题标题（必填）").fill("设计评审阻塞");
@@ -118,7 +134,8 @@ test("stage workspace persists analysis docs and issue resolution", async ({
     issuesPanel.getByRole("button", { name: "设计评审阻塞" }),
   ).toBeVisible();
   // 切到需求测试阶段：新建问题并在详情中标记解决
-  await timeline.getByText("需求测试", { exact: true }).click();
+  await switchStage(page, "需求测试");
+  await page.getByRole("tab", { name: "需求问题" }).click();
   await issuesPanel.getByRole("button", { name: /新建问题/ }).click();
   await issuesPanel.getByPlaceholder("问题标题（必填）").fill("测试问题");
   await issuesPanel.getByRole("button", { name: "创建", exact: true }).click();
@@ -178,4 +195,97 @@ test("unsaved inline edits are protected on cancel and navigation", async ({
     .click();
   await page.getByRole("button", { name: "放弃修改", exact: true }).click();
   await expect(page.locator("tr.editing-row")).toHaveCount(0);
+});
+
+// 功能页签：左侧菜单打开功能后页签才出现且可关闭；需求详情为动态页签的路由联动
+test("workbench tabs open from menu and close with route fallback", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  const name = `页签验收-${Date.now()}`;
+  await page.goto("/requirements");
+  // 页签不预置：首次进入仅当前功能页签出现，且可关闭（有关闭按钮）
+  await expect(page.locator(".topbar-tab")).toHaveCount(1);
+  await expect(page.locator(".topbar-tab").first()).toContainText("需求列表");
+  // 左侧菜单打开功能 → 对应页签依次出现
+  await page.getByRole("link", { name: "每日任务历史" }).click();
+  await expect(page).toHaveURL(/\/tasks$/);
+  await expect(page.locator(".topbar-tab")).toHaveCount(2);
+  await page.getByRole("link", { name: "系统通知" }).click();
+  await expect(page.locator(".topbar-tab")).toHaveCount(3);
+  await page.getByRole("link", { name: "系统设置" }).click();
+  await expect(page.locator(".topbar-tab")).toHaveCount(4);
+  // 打开需求详情 → 动态页签出现，加载完成后回填「编号 · 名称」
+  await page.locator(".topbar-tab").filter({ hasText: "需求列表" }).click();
+  await expect(page).toHaveURL(/\/requirements$/);
+  const row = await addRequirement(page, name);
+  await row.locator(".requirement-no").click();
+  await expect(page).toHaveURL(/\/requirements\/\d+$/);
+  const tab1 = page.locator(".topbar-tab").filter({ hasText: name });
+  await expect(tab1).toBeVisible();
+  await expect(tab1).toContainText("·");
+  // 点击功能页签「需求列表」返回列表，再打开第二个需求 → 4 功能页签 + 2 详情页签
+  await page.locator(".topbar-tab").filter({ hasText: "需求列表" }).click();
+  const name2 = `页签二-${Date.now()}`;
+  const row2 = await addRequirement(page, name2);
+  await row2.locator(".requirement-no").click();
+  const tab2 = page.locator(".topbar-tab").filter({ hasText: name2 });
+  await expect(tab2).toBeVisible();
+  await expect(page.locator(".topbar-tab")).toHaveCount(6);
+  const detail2Url = page.url();
+  // 点击第一个详情页签切换路由
+  await tab1.locator(".tab-label").click();
+  await expect(page).not.toHaveURL(detail2Url);
+  await expect(page.getByRole("tab", { name: "需求详情" })).toBeVisible();
+  // 关闭激活页签 → 路由回退到右侧第一个页签（第二个详情）
+  await tab1.locator(".tab-close").click();
+  await expect(page.locator(".topbar-tab")).toHaveCount(5);
+  await expect(page).toHaveURL(detail2Url);
+  // 关闭非激活页签不改变当前路由：回列表重新打开第一个需求，再关第二个详情
+  await page.locator(".topbar-tab").filter({ hasText: "需求列表" }).click();
+  const row1 = page
+    .getByRole("button", { name, exact: true })
+    .locator("xpath=ancestor::tr");
+  await row1.locator(".requirement-no").click();
+  await expect(page.locator(".topbar-tab")).toHaveCount(6);
+  await tab2.locator(".tab-close").click();
+  await expect(page.locator(".topbar-tab")).toHaveCount(5);
+  await expect(page).toHaveURL(/\/requirements\/\d+$/);
+  // 关闭最后一个详情页签（激活中、右侧无页签）→ 回退左侧最近的功能页签
+  await page
+    .locator(".topbar-tab")
+    .filter({ hasText: name })
+    .locator(".tab-close")
+    .click();
+  await expect(page.locator(".topbar-tab")).toHaveCount(4);
+  await expect(page).toHaveURL(/\/settings$/);
+  // 依次关闭激活的功能页签：逐个回退右邻页签路由
+  await page
+    .locator(".topbar-tab")
+    .filter({ hasText: "系统设置" })
+    .locator(".tab-close")
+    .click();
+  await expect(page).toHaveURL(/\/notifications$/);
+  await expect(page.locator(".topbar-tab")).toHaveCount(3);
+  await page
+    .locator(".topbar-tab")
+    .filter({ hasText: "系统通知" })
+    .locator(".tab-close")
+    .click();
+  await expect(page).toHaveURL(/\/tasks$/);
+  await expect(page.locator(".topbar-tab")).toHaveCount(2);
+  await page
+    .locator(".topbar-tab")
+    .filter({ hasText: "每日任务历史" })
+    .locator(".tab-close")
+    .click();
+  await expect(page).toHaveURL(/\/requirements$/);
+  await expect(page.locator(".topbar-tab")).toHaveCount(1);
+  // 关闭最后一个页签：路由兜底回需求列表，页签随路由联动重新开出
+  await page.locator(".topbar-tab .tab-close").click();
+  await expect(page).toHaveURL(/\/requirements$/);
+  await expect(page.locator(".topbar-tab")).toHaveCount(1);
+  await expect(page.locator(".topbar-tab").first()).toContainText("需求列表");
+  expect(errors).toEqual([]);
 });
