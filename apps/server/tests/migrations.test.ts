@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import { beforeEach, afterEach, describe, expect, it } from "vitest";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -95,7 +96,7 @@ afterEach(() => {
 describe("migrations 0006（用户认证）", () => {
   it("新库初始化：users 与 app_meta 结构完整", () => {
     migrate(db);
-    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
     expect(tableColumns(db, "users")).toEqual([
       "id",
       "username",
@@ -111,7 +112,7 @@ describe("migrations 0006（用户认证）", () => {
     seedLegacyDatabase(db);
     migrate(db);
     migrate(db);
-    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
     expect(
       db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name IN ('users','app_meta')").get(),
     ).toEqual({ count: 2 });
@@ -130,7 +131,6 @@ describe("migrations 0006（用户认证）", () => {
 describe("migrations 0008（问题正文富文本化与关联切换）", () => {
   it("新库：issues 含 description_html 列，issue_artifact_links 联合主键与索引齐备", () => {
     migrate(db);
-    expect(SCHEMA_VERSION).toBe(8);
     expect(tableColumns(db, "issues")).toContain("description_html");
     expect(tableColumns(db, "issue_artifact_links")).toEqual([
       "issue_id",
@@ -149,7 +149,7 @@ describe("migrations 0008（问题正文富文本化与关联切换）", () => {
     ).toHaveLength(1);
     // 重复迁移不报错、不重复
     migrate(db);
-    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
   });
   it("存量映射：closed→resolved 补解决时间；design→ui、bug→defect", () => {
     // 模拟已应用 0001-0007 的旧库：写入旧枚举数据后再执行迁移
@@ -181,14 +181,15 @@ describe("migrations 0008（问题正文富文本化与关联切换）", () => {
     insert.run("旧缺陷", "bug", "open", now, now);
     // 迁移：0008 落地并完成存量映射
     migrate(db);
-    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
     const rows = db
       .prepare("SELECT title, issue_type, status, resolved_at FROM issues ORDER BY id")
       .all() as { title: string; issue_type: string; status: string; resolved_at: string | null }[];
     expect(rows).toHaveLength(3);
     expect(rows[0]).toMatchObject({ issue_type: "ui", status: "resolved", resolved_at: now });
-    expect(rows[1]).toMatchObject({ issue_type: "development", status: "open" });
-    expect(rows[2]).toMatchObject({ issue_type: "defect", status: "open" });
+    // open 状态随后被 0009 映射为 pending
+    expect(rows[1]).toMatchObject({ issue_type: "development", status: "pending" });
+    expect(rows[2]).toMatchObject({ issue_type: "defect", status: "pending" });
     // 新列默认空串
     expect(
       (db.prepare("SELECT description_html FROM issues").all() as { description_html: string }[]).every(
@@ -201,7 +202,7 @@ describe("migrations 0008（问题正文富文本化与关联切换）", () => {
 describe("migrations 0005（资产与问题管理）", () => {
   it("新库初始化：全部版本可执行且结构完整", () => {
     migrate(db);
-    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
     expect(tableColumns(db, "requirement_files")).toEqual(
       expect.arrayContaining([
         "resource_type",
@@ -256,7 +257,7 @@ describe("migrations 0005（资产与问题管理）", () => {
     const linkRow = insertLegacyFileRow(db, "link", 0);
     expect(appliedVersions(db)).toEqual([1, 2, 3, 4]);
     migrate(db);
-    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
     const rows = db
       .prepare(
         "SELECT id, resource_type, storage_type, status FROM requirement_files ORDER BY id",
@@ -298,7 +299,7 @@ describe("migrations 0005（资产与问题管理）", () => {
     ).run(issueId, fileRow, now);
     // 重复执行迁移：数据行数与关联均不丢失、不重复
     migrate(db);
-    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
     expect(
       db.prepare("SELECT COUNT(*) AS count FROM requirement_files").get(),
     ).toEqual({ count: 2 });
@@ -326,7 +327,7 @@ describe("migrations 0005（资产与问题管理）", () => {
     migrate(db);
     const snapshot = tableColumns(db, "requirement_files");
     migrate(db);
-    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
     expect(tableColumns(db, "requirement_files")).toEqual(snapshot);
   });
   it("新索引与联合主键约束生效", () => {
@@ -404,7 +405,146 @@ describe("migrations 0005（资产与问题管理）", () => {
   });
   it("SCHEMA_VERSION 与已应用迁移数一致", () => {
     migrate(db);
-    expect(SCHEMA_VERSION).toBe(8);
+    expect(SCHEMA_VERSION).toBe(9);
     expect(appliedVersions(db)).toHaveLength(SCHEMA_VERSION);
+  });
+});
+
+describe("migrations 0009（问题枚举整备与正文 md 落盘）", () => {
+  // 模拟已应用 0001-0008 的旧库
+  function seedThrough0008(db: Database.Database) {
+    db.exec(
+      "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)",
+    );
+    const mark = db.prepare(
+      "INSERT INTO schema_migrations(version, applied_at) VALUES (?, '2026-01-01T00:00:00.000Z')",
+    );
+    const files = [
+      "0001_initial.sql",
+      "0002_stage_workspace.sql",
+      "0003_requirement_files.sql",
+      "0004_file_entry_kinds.sql",
+      "0005_assets_and_issues.sql",
+      "0006_users.sql",
+      "0007_artifacts.sql",
+      "0008_issues_md_and_artifact_links.sql",
+    ];
+    for (const [index, file] of files.entries()) {
+      db.exec(readFileSync(join(migrationsDir, file), "utf8"));
+      mark.run(index + 1);
+    }
+  }
+  function insertLegacyIssue(
+    db: Database.Database,
+    fields: {
+      title: string;
+      description: string;
+      descriptionHtml?: string;
+      issueType?: string | null;
+      status: string;
+      isDeleted?: number;
+    },
+  ) {
+    const result = db
+      .prepare(
+        "INSERT INTO issues(requirement_id, phase, title, description, description_html, issue_type, status, created_at, updated_at, is_deleted) VALUES (1, 'design', ?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        fields.title,
+        fields.description,
+        fields.descriptionHtml ?? "",
+        fields.issueType ?? null,
+        fields.status,
+        "2026-01-02T00:00:00.000Z",
+        "2026-01-02T00:00:00.000Z",
+        fields.isDeleted ?? 0,
+      );
+    return Number(result.lastInsertRowid);
+  }
+
+  it("存量映射：分类 testing/requirement/other→defect/change/question，状态 open/in_progress/closed→pending/processing/resolved", () => {
+    seedThrough0008(db);
+    insertRequirement(db);
+    insertLegacyIssue(db, {
+      title: "旧测试问题",
+      description: "纯文本",
+      issueType: "testing",
+      status: "open",
+    });
+    insertLegacyIssue(db, {
+      title: "旧需求问题",
+      description: "",
+      issueType: "requirement",
+      status: "in_progress",
+    });
+    insertLegacyIssue(db, {
+      title: "旧其他问题",
+      description: "",
+      issueType: "other",
+      status: "closed",
+    });
+    insertLegacyIssue(db, {
+      title: "取值不变",
+      description: "",
+      issueType: "ui",
+      status: "resolved",
+    });
+    migrate(db);
+    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    const rows = db
+      .prepare("SELECT issue_type, status, resolved_at FROM issues ORDER BY id")
+      .all() as {
+      issue_type: string | null;
+      status: string;
+      resolved_at: string | null;
+    }[];
+    expect(rows).toHaveLength(4);
+    expect(rows[0]).toMatchObject({ issue_type: "defect", status: "pending" });
+    expect(rows[1]).toMatchObject({ issue_type: "change", status: "processing" });
+    // closed→resolved：解决时间以更新时间兜底
+    expect(rows[2]).toMatchObject({
+      issue_type: "question",
+      status: "resolved",
+      resolved_at: "2026-01-02T00:00:00.000Z",
+    });
+    expect(rows[3]).toMatchObject({ issue_type: "ui", status: "resolved" });
+  });
+  it("正文引导：md 文件生成且优先取 description_html，软删行与已存在文件不受影响", () => {
+    seedThrough0008(db);
+    insertRequirement(db);
+    insertLegacyIssue(db, {
+      title: "富文本问题",
+      description: "纯文本正文",
+      descriptionHtml: "<p>富文本正文</p>",
+      issueType: "ui",
+      status: "open",
+    });
+    const plainId = insertLegacyIssue(db, {
+      title: "纯文本问题",
+      description: "仅纯文本正文",
+      issueType: "ui",
+      status: "open",
+    });
+    const deletedId = insertLegacyIssue(db, {
+      title: "已删除问题",
+      description: "已删除正文",
+      issueType: "ui",
+      status: "open",
+      isDeleted: 1,
+    });
+    const workspace = join(workdir, "workspace");
+    const issuesDir = join(workspace, "requirements", "1", "issues");
+    mkdirSync(issuesDir, { recursive: true });
+    writeFileSync(join(issuesDir, "1.md"), "外部已有内容", "utf8");
+    migrate(db, migrationsDir, workspace);
+    // description_html 优先，缺失回退纯文本；软删行不落盘
+    expect(readFileSync(join(issuesDir, "1.md"), "utf8")).toBe("外部已有内容");
+    expect(readFileSync(join(issuesDir, `${plainId}.md`), "utf8")).toBe(
+      "仅纯文本正文",
+    );
+    expect(existsSync(join(issuesDir, `${deletedId}.md`))).toBe(false);
+    // 重复迁移：不重写、不报错
+    migrate(db, migrationsDir, workspace);
+    expect(readFileSync(join(issuesDir, "1.md"), "utf8")).toBe("外部已有内容");
   });
 });

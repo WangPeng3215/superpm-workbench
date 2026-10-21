@@ -44,7 +44,7 @@ describe("MCP 契约与服务网关", () => {
     mkdirSync(workspace, { recursive: true });
     requirements = new RequirementService(db);
     files = new RequirementFileService(db, workspace, requirements);
-    issues = new IssueService(db, requirements);
+    issues = new IssueService(db, requirements, workspace);
     gateway = buildMcpTools({ requirements, files, issues });
   });
   afterEach(() => {
@@ -130,7 +130,7 @@ describe("MCP 契约与服务网关", () => {
     }) as IssueDetail;
     expect(detail).toMatchObject({
       id: issue.id,
-      status: "open",
+      status: "pending",
       title: "按钮样式与设计稿不一致",
     });
     expect(detail.activities).toHaveLength(1);
@@ -175,7 +175,7 @@ describe("MCP 契约与服务网关", () => {
     // 被拒调用不得产生任何副作用
     expect(
       gateway.call("issue.get", { requirementId: requirement.id, issueId: issue.id }) as IssueDetail,
-    ).toMatchObject({ status: "open", solution: null });
+    ).toMatchObject({ status: "pending", solution: null });
 
     // 第一步：显式保存解决方案（状态保持不变）
     const saved = gateway.call(
@@ -188,7 +188,7 @@ describe("MCP 契约与服务网关", () => {
       { idempotencyKey: "guard-2" },
     ) as Issue;
     expect(saved).toMatchObject({
-      status: "open",
+      status: "pending",
       solution: "调整间距为 8px 并重新导出切图",
     });
 

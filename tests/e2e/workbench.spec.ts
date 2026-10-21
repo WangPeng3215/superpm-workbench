@@ -140,9 +140,12 @@ test("stage workspace persists analysis docs and issue resolution", async ({
   await issuesPanel.getByPlaceholder("问题标题（必填）").fill("测试问题");
   await issuesPanel.getByRole("button", { name: "创建", exact: true }).click();
   await issuesPanel.getByRole("button", { name: "测试问题" }).click();
-  await issuesPanel.getByRole("button", { name: "标记解决" }).click();
-  await page.getByPlaceholder("填写解决说明").fill("修复完成，复测通过");
-  await page.getByRole("button", { name: "确定", exact: true }).click();
+  // 状态下拉自由流转：待处理 → 已解决（无需填写解决说明）
+  await issuesPanel.locator(".issue-status-select").click();
+  await page
+    .locator(".el-select-dropdown:visible .el-select-dropdown__item")
+    .filter({ hasText: "已解决" })
+    .click();
   await expect(
     issuesPanel.locator(".issues-head").getByText("已解决"),
   ).toBeVisible();
@@ -166,7 +169,7 @@ test("stage workspace persists analysis docs and issue resolution", async ({
     await request.get(`/api/requirements/${id}/issues?phase=testing`)
   ).json();
   expect(testing.items[0].status).toBe("resolved");
-  expect(testing.items[0].solution).toContain("复测通过");
+  expect(testing.items[0].resolvedAt).toBeTruthy();
 });
 
 test("unsaved inline edits are protected on cancel and navigation", async ({

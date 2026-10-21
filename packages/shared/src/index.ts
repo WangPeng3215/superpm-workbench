@@ -40,12 +40,6 @@ export const stageLabels: Record<Stage, string> = {
   development: "开发跟进",
   testing: "需求测试",
 };
-export const stageDescriptions: Record<Stage, string> = {
-  analysis: "澄清目标与边界，整理待确认事项、方案和分析产物。",
-  design: "管理设计方案、设计稿版本和设计确认。",
-  development: "记录实现进展、问题、风险与需求变更。",
-  testing: "维护测试用例、执行记录与修复后的复测历史。",
-};
 
 export const dateSchema = z
   .string()
@@ -351,7 +345,6 @@ export const requirementFileContentSchema = z
 export type AssetResourceType = "file" | "link" | "text";
 export type AssetStorageType = "local" | "database" | "external";
 export type AssetStatus = "draft" | "final" | "archived" | "missing";
-export type RequirementFileCreate = z.input<typeof requirementFileCreateSchema>;
 export interface RequirementFile {
   id: number;
   requirementId: number;
@@ -405,11 +398,11 @@ export const assetCategories: AssetCategoryDef[] = [
 // 问题管理：Issue 仅存在于 UI 设计/开发跟进/需求测试三个阶段
 export const issuePhases = ["design", "development", "testing"] as const;
 export type IssuePhase = (typeof issuePhases)[number];
-export const issueStatuses = ["open", "in_progress", "testing", "resolved"] as const;
+export const issueStatuses = ["pending", "processing", "testing", "resolved"] as const;
 export type IssueStatus = (typeof issueStatuses)[number];
 export const issueStatusLabels: Record<IssueStatus, string> = {
-  open: "待处理",
-  in_progress: "处理中",
+  pending: "待处理",
+  processing: "处理中",
   testing: "测试中",
   resolved: "已解决",
 };
@@ -428,17 +421,15 @@ export const issueCreateSchema = z
   .object({
     phase: z.enum(issuePhases),
     title: z.string().trim().min(1, "请输入问题标题").max(200),
-    description: z.string().max(10000).default(""),
-    // 富文本正文：html 与纯文本双写同步（html 用于回显编辑器，text 用于导出/检索）
-    descriptionHtml: z.string().max(200000).default(""),
+    // 正文（md 文件内容）：迁移 0009 起唯一权威存储为工作区 md 文件
+    description: z.string().max(200000).default(""),
     issueType: z.enum(issueTypes).optional(),
   })
   .strict();
 export const issueUpdateSchema = z
   .object({
     title: z.string().trim().min(1, "请输入问题标题").max(200).optional(),
-    description: z.string().max(10000).optional(),
-    descriptionHtml: z.string().max(200000).optional(),
+    description: z.string().max(200000).optional(),
     issueType: z.enum(issueTypes).nullable().optional(),
     status: z.enum(issueStatuses).optional(),
     solution: z.string().max(10000).optional(),
@@ -448,16 +439,14 @@ export const issueUpdateSchema = z
 export const issueCommentSchema = z
   .object({ content: z.string().trim().min(1, "请输入处理说明").max(10000) })
   .strict();
-export type IssueCreate = z.input<typeof issueCreateSchema>;
 export interface Issue {
   id: number;
   requirementId: number;
   phase: IssuePhase;
   issueKey: string | null;
   title: string;
+  // 正文：工作区 md 文件内容（迁移 0009 起 description/description_html 列仅存量兼容）
   description: string;
-  // 富文本正文（html），与 description 纯文本双写同步
-  descriptionHtml: string;
   issueType: IssueType | null;
   status: IssueStatus;
   solution: string | null;
@@ -572,7 +561,6 @@ export const workspaceRecordSchema = z
     linkedChildId: z.number().int().positive().nullable().default(null),
   })
   .strict();
-export type WorkspaceRecord = z.infer<typeof workspaceRecordSchema>;
 export const stageWorkspaceSchema = z
   .object({
     version: z.number().int().nonnegative(),

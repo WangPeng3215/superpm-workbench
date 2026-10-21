@@ -154,7 +154,7 @@ export const mcpIssueListInput = z
   .object({
     requirementId: id,
     phase: z.enum(["design", "development", "testing"]).optional(),
-    status: z.enum(["open", "in_progress", "testing", "resolved"]).optional(),
+    status: z.enum(["pending", "processing", "testing", "resolved"]).optional(),
   })
   .strict();
 export type McpIssueListInput = z.output<typeof mcpIssueListInput>;
@@ -169,14 +169,13 @@ export type McpIssueGetInput = z.output<typeof mcpIssueGetInput>;
 export const mcpIssueActivitiesInput = mcpIssueGetInput;
 export type McpIssueActivitiesInput = z.output<typeof mcpIssueActivitiesInput>;
 
-/** 镜像 IssueService.create / issueCreateSchema（初始状态固定 open） */
+/** 镜像 IssueService.create / issueCreateSchema（初始状态固定 pending） */
 export const mcpIssueCreateInput = z
   .object({
     requirementId: id,
     phase: z.enum(["design", "development", "testing"]),
     title: z.string().trim().min(1, "请输入问题标题").max(200),
-    description: z.string().max(10000).default(""),
-    descriptionHtml: z.string().max(200000).default(""),
+    description: z.string().max(200000).default(""),
     issueType: z.enum(["ui", "development", "defect", "change", "question"]).optional(),
   })
   .strict();
@@ -191,10 +190,9 @@ export const mcpIssueUpdateInput = z
     requirementId: id,
     issueId: id,
     title: z.string().trim().min(1, "请输入问题标题").max(200).optional(),
-    description: z.string().max(10000).optional(),
-    descriptionHtml: z.string().max(200000).optional(),
+    description: z.string().max(200000).optional(),
     issueType: z.enum(["ui", "development", "defect", "change", "question"]).nullable().optional(),
-    status: z.enum(["open", "in_progress", "testing", "resolved"]).optional(),
+    status: z.enum(["pending", "processing", "testing", "resolved"]).optional(),
     solution: z.string().max(10000).optional(),
   })
   .strict()
@@ -202,7 +200,6 @@ export const mcpIssueUpdateInput = z
     (value) =>
       value.title !== undefined ||
       value.description !== undefined ||
-      value.descriptionHtml !== undefined ||
       value.issueType !== undefined ||
       value.status !== undefined ||
       value.solution !== undefined,
@@ -366,7 +363,7 @@ export const mcpToolContracts: McpToolContract[] = [
   {
     name: "issue.create",
     description:
-      "在需求的指定阶段创建问题；初始状态固定为 open，并自动写入一条系统活动记录。",
+      "在需求的指定阶段创建问题；初始状态固定为 pending，并自动写入一条系统活动记录。",
     kind: "mutating",
     input: mcpIssueCreateInput,
     allowedErrors: ["NOT_FOUND", "VALIDATION_ERROR"],

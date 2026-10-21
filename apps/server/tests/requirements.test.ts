@@ -233,7 +233,7 @@ describe("requirements API with real SQLite", () => {
       status: "ok",
     });
     expect((await app.inject("/api/system")).json()).toMatchObject({
-      schemaVersion: 8,
+      schemaVersion: 9,
       workspacePath: join(directory, "workspace"),
     });
     expect((await app.inject("/api/requirements")).json().total).toBe(0);

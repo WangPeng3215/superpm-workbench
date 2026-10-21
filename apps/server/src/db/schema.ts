@@ -80,14 +80,15 @@ export const issues = sqliteTable("issues", {
   phase: text("phase").$type<"design" | "development" | "testing">().notNull(),
   issueKey: text("issue_key"),
   title: text("title").notNull(),
+  // 正文列：迁移 0009 起正文唯一权威存储为工作区 md 文件（requirements/{rid}/issues/{id}.md），两列仅存量兼容
   description: text("description").notNull().default(""),
-  // 富文本正文（html），与 description 纯文本双写同步（迁移 0008）
   descriptionHtml: text("description_html").notNull().default(""),
   issueType: text("issue_type"),
+  // 库内列默认值仍为历史值 'open'（SQLite 低成本改默认需重建表），业务层写入始终显式指定状态
   status: text("status")
-    .$type<"open" | "in_progress" | "testing" | "resolved">()
+    .$type<"pending" | "processing" | "testing" | "resolved">()
     .notNull()
-    .default("open"),
+    .default("pending"),
   solution: text("solution"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),

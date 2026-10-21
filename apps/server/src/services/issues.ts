@@ -1,4 +1,14 @@
 import type Database from "better-sqlite3";
+import { z } from "zod";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
+import { isAbsolute, join, relative } from "node:path";
 import {
   issueAssetLinkSchema,
   issueCommentSchema,
@@ -14,9 +24,15 @@ import {
 } from "@superpm/shared";
 import { DomainError, RequirementService } from "./requirements.js";
 
+// 正文保存端点的入参校验（与通用更新分离：正文只写 md 文件，不进数据库列）
+const issueDescriptionSaveSchema = z
+  .object({ content: z.string().max(200000) })
+  .strict();
+
 interface LinkRow {
   issue_id: number;
-  artifact_id: number;
+  // SELECT 里以 asset_id 别名输出（避免与产出物表的 id 混淆）
+  asset_id: number;
   relation_type: IssueAssetLink["relationType"];
   // 别名避免与产出物表的 created_at 同名冲突
   link_created_at: string;
@@ -33,8 +49,6 @@ interface IssueRow {
   phase: Issue["phase"];
   issue_key: string | null;
   title: string;
-  description: string;
-  description_html: string;
   issue_type: Issue["issueType"];
   status: IssueStatus;
   solution: string | null;
@@ -54,15 +68,14 @@ interface ActivityRow {
   actor_name: string | null;
   created_at: string;
 }
-function toIssue(row: IssueRow): Issue {
+function toIssue(row: IssueRow, description: string): Issue {
   return {
     id: row.id,
     requirementId: row.requirement_id,
     phase: row.phase,
     issueKey: row.issue_key,
     title: row.title,
-    description: row.description,
-    descriptionHtml: row.description_html,
+    description,
     issueType: row.issue_type,
     status: row.status,
     solution: row.solution,
@@ -86,10 +99,35 @@ function toActivity(row: ActivityRow): IssueActivity {
   };
 }
 const LOCAL_ACTOR = { actorType: "user" as const, actorName: "local-user" };
+
+// 问题正文 md 文件路径：requirements/{rid}/issues/{id}.md（迁移 0009 起正文的唯一权威存储）。
+// 逐级解析并拒绝符号链接与越界（与 artifacts 服务同一套防护）。
+function issueDescriptionFile(
+  workspacePath: string,
+  requirementId: number,
+  issueId: number,
+): string {
+  const root = realpathSync(workspacePath);
+  let current = root;
+  for (const segment of ["requirements", String(requirementId), "issues"]) {
+    current = join(current, segment);
+    if (!existsSync(current)) mkdirSync(current);
+    if (lstatSync(current).isSymbolicLink())
+      throw new DomainError("INVALID_PATH", "路径不能包含符号链接");
+    const resolved = realpathSync(current);
+    const distance = relative(root, resolved);
+    if (distance.startsWith("..") || isAbsolute(distance))
+      throw new DomainError("INVALID_PATH", "路径越界");
+  }
+  return join(current, `${issueId}.md`);
+}
+
 export class IssueService {
   constructor(
     private db: Database.Database,
     private requirements: RequirementService,
+    // 工作区根目录：正文 md 文件存放位置；未提供时正文读写退化为空串/跳过（仅测试场景）
+    private workspacePath?: string,
   ) {}
   list(requirementId: number, phase?: string, status?: string): IssueListResult {
     this.requirements.get(requirementId);
@@ -108,7 +146,12 @@ export class IssueService {
         `SELECT * FROM issues WHERE ${conditions.join(" AND ")} ORDER BY id DESC`,
       )
       .all(...params) as IssueRow[];
-    return { items: rows.map(toIssue), total: rows.length };
+    return {
+      items: rows.map((row) =>
+        toIssue(row, this.readDescription(row.requirement_id, row.id)),
+      ),
+      total: rows.length,
+    };
   }
   detail(requirementId: number, issueId: number): IssueDetail {
     const issue = this.row(requirementId, issueId);
@@ -128,19 +171,12 @@ export class IssueService {
     return this.db.transaction(() => {
       const result = this.db
         .prepare(
-          "INSERT INTO issues(requirement_id, phase, title, description, description_html, issue_type, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?)",
+          "INSERT INTO issues(requirement_id, phase, title, issue_type, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'pending', ?, ?)",
         )
-        .run(
-          requirementId,
-          data.phase,
-          data.title,
-          data.description,
-          data.descriptionHtml,
-          data.issueType ?? null,
-          now,
-          now,
-        );
+        .run(requirementId, data.phase, data.title, data.issueType ?? null, now, now);
       const issueId = Number(result.lastInsertRowid);
+      // 正文直接落盘为 md 文件；写盘失败随事务回滚，不产生半成品问题
+      this.writeDescription(requirementId, issueId, data.description);
       // 创建即写入一条系统记录，保证时间线完整（统一约定）
       this.db
         .prepare(
@@ -154,15 +190,6 @@ export class IssueService {
     const issue = this.row(requirementId, issueId);
     const patch = issueUpdateSchema.parse(input);
     const now = new Date().toISOString();
-    // 解决时必须具备解决说明：本次提交的 solution 或已存在的 solution
-    if (patch.status === "resolved") {
-      const solution = patch.solution ?? issue.solution;
-      if (!solution?.trim())
-        throw new DomainError(
-          "VALIDATION_ERROR",
-          "标记为已解决前请先填写解决说明",
-        );
-    }
     return this.db.transaction(() => {
       // solution 变更：更新快照列并追加一条 solution 历史
       if (patch.solution !== undefined && patch.solution !== issue.solution) {
@@ -175,12 +202,13 @@ export class IssueService {
           )
           .run(issueId, patch.solution, LOCAL_ACTOR.actorType, LOCAL_ACTOR.actorName, now);
       }
-      // 状态变更：更新状态与时间戳列并追加 status_change 历史；重新打开时清空解决时间
+      // 状态变更：更新状态与时间戳列并追加 status_change 历史；
+      // 四态自由流转：回到 pending 清空解决时间、置为 resolved 记录解决时间，其余保留
       if (patch.status && patch.status !== issue.status) {
         const resolvedAt =
           patch.status === "resolved"
             ? now
-            : patch.status === "open"
+            : patch.status === "pending"
               ? null
               : issue.resolvedAt;
         this.db
@@ -199,30 +227,40 @@ export class IssueService {
             now,
           );
       }
-      // 其余字段直接更新（标题/描述/类型不进历史时间线）；
-      // description_html 仅在取值变化时写入，避免自动保存的空转覆盖
-      const descHtmlChanged =
-        patch.descriptionHtml !== undefined &&
-        patch.descriptionHtml !== issue.descriptionHtml;
-      if (
-        patch.title !== undefined ||
-        patch.description !== undefined ||
-        patch.issueType !== undefined ||
-        descHtmlChanged
-      )
+      // 正文：内容变化时写入 md 文件（文件是唯一权威存储）
+      const descChanged =
+        patch.description !== undefined && patch.description !== issue.description;
+      if (patch.description !== undefined && descChanged)
+        this.writeDescription(requirementId, issueId, patch.description);
+      // 其余字段直接更新（标题/类型不进历史时间线）
+      if (patch.title !== undefined || patch.issueType !== undefined || descChanged)
         this.db
-          .prepare(
-            "UPDATE issues SET title=?, description=?, description_html=?, issue_type=?, updated_at=? WHERE id=?",
-          )
+          .prepare("UPDATE issues SET title=?, issue_type=?, updated_at=? WHERE id=?")
           .run(
             patch.title ?? issue.title,
-            patch.description ?? issue.description,
-            descHtmlChanged ? patch.descriptionHtml! : issue.descriptionHtml,
             patch.issueType === undefined ? issue.issueType : patch.issueType,
             now,
             issueId,
           );
       return this.row(requirementId, issueId);
+    })();
+  }
+  // 正文直读：返回 md 文件原始内容（缺失视为空串）
+  getDescription(requirementId: number, issueId: number) {
+    const issue = this.row(requirementId, issueId);
+    return { content: issue.description };
+  }
+  // 正文直写：保存 md 文件并刷新 updated_at
+  saveDescription(requirementId: number, issueId: number, input: unknown) {
+    this.row(requirementId, issueId);
+    const { content } = issueDescriptionSaveSchema.parse(input);
+    const now = new Date().toISOString();
+    return this.db.transaction(() => {
+      this.writeDescription(requirementId, issueId, content);
+      this.db
+        .prepare("UPDATE issues SET updated_at=? WHERE id=?")
+        .run(now, issueId);
+      return { updatedAt: now };
     })();
   }
   comment(requirementId: number, issueId: number, input: unknown) {
@@ -240,7 +278,7 @@ export class IssueService {
     return this.detail(requirementId, issueId);
   }
   remove(requirementId: number, issueId: number) {
-    // 软删除：仅标记索引行；问题与产出物的关联行随之清理
+    // 软删除：仅标记索引行；问题与产出物的关联行随之清理（md 文件保留）
     this.row(requirementId, issueId);
     this.db.transaction(() => {
       this.db
@@ -259,9 +297,9 @@ export class IssueService {
         "SELECT link.issue_id, link.artifact_id AS asset_id, link.relation_type, link.created_at AS link_created_at, node.id AS node_id, node.node_type AS node_type, node.name AS node_name, node.relative_path AS node_relative_path FROM issue_artifact_links AS link JOIN artifact_nodes AS node ON node.id = link.artifact_id WHERE link.issue_id=? ORDER BY link.created_at DESC, link.artifact_id DESC",
       )
       .all(issueId) as LinkRow[];
-    const items: IssueAssetLink[] = rows.map((row) => ({
+    const items = rows.map((row) => ({
       issueId: row.issue_id,
-      assetId: row.artifact_id,
+      assetId: row.asset_id,
       relationType: row.relation_type,
       createdAt: row.link_created_at,
       asset: {
@@ -324,6 +362,20 @@ export class IssueService {
     if (result.changes === 0)
       throw new DomainError("NOT_FOUND", "关联关系不存在", 404);
   }
+  // 读取正文 md 文件；工作区未配置或文件缺失时返回空串
+  private readDescription(requirementId: number, issueId: number): string {
+    if (!this.workspacePath) return "";
+    const file = issueDescriptionFile(this.workspacePath, requirementId, issueId);
+    return existsSync(file) ? readFileSync(file, "utf8") : "";
+  }
+  private writeDescription(requirementId: number, issueId: number, content: string) {
+    if (!this.workspacePath) return;
+    writeFileSync(
+      issueDescriptionFile(this.workspacePath, requirementId, issueId),
+      content,
+      "utf8",
+    );
+  }
   private row(requirementId: number, issueId: number) {
     this.requirements.get(requirementId);
     const row = this.db
@@ -331,6 +383,6 @@ export class IssueService {
       .get(issueId) as IssueRow | undefined;
     if (!row || row.requirement_id !== requirementId)
       throw new DomainError("NOT_FOUND", "问题不存在", 404);
-    return toIssue(row);
+    return toIssue(row, this.readDescription(requirementId, issueId));
   }
 }

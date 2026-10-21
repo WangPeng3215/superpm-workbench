@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { marked } from "marked";
 import { ElMessage, ElMessageBox } from "element-plus";
 import {
   ArrowRight,
@@ -41,6 +42,16 @@ const props = defineProps<{
   phase: IssuePhase;
   requirementName?: string;
 }>();
+
+// 正文加载：md 文件内容可能是纯 markdown 或编辑器 html，统一转为编辑器可回显的 html
+const htmlSourcePattern =
+  /^\s*<(?:!doctype|h[1-6]|p|ul|ol|li|div|table|pre|blockquote|img)\b/i;
+function toEditorHtml(content: string) {
+  const trimmed = content.trim();
+  if (!trimmed) return "";
+  if (htmlSourcePattern.test(trimmed)) return trimmed;
+  return String(marked.parse(content, { async: false }));
+}
 
 // ===== 左栏：问题列表 =====
 const issues = ref<Issue[]>([]);
@@ -263,9 +274,9 @@ async function flushDescSave() {
   if (!descDirty.value || !detail.value) return;
   descDirty.value = false;
   try {
+    // 正文（编辑器 html）落盘为 md 文件内容，由服务端写入工作区
     const updated = await issueApi.update(props.requirementId, detail.value.id, {
-      description: descText.value,
-      descriptionHtml: descHtml.value,
+      description: descHtml.value,
     });
     if (detail.value?.id === updated.id)
       detail.value = { ...detail.value, ...updated };
@@ -284,8 +295,10 @@ async function openDetail(issue: Issue) {
   try {
     const loaded = await issueApi.detail(props.requirementId, issue.id);
     detail.value = loaded;
-    descHtml.value = loaded.descriptionHtml;
-    descText.value = loaded.description;
+    descHtml.value = toEditorHtml(loaded.description);
+    descText.value =
+      new DOMParser().parseFromString(descHtml.value, "text/html").body
+        .textContent ?? "";
     descDirty.value = false;
     commentText.value = "";
     await loadAssets();
@@ -346,38 +359,10 @@ async function applyUpdate(payload: IssueUpdatePayload, successText: string) {
   }
 }
 
-function startProgress() {
-  void applyUpdate({ status: "in_progress" }, "已开始处理");
-}
-
-function startTesting() {
-  void applyUpdate({ status: "testing" }, "已进入测试");
-}
-
-// 标记解决：服务端强制要求解决说明，弹窗内必填校验
-async function markResolved() {
-  let solution: string;
-  try {
-    const result = await ElMessageBox.prompt(
-      "解决说明将记录到问题时间线（必填）",
-      "标记解决",
-      {
-        inputPlaceholder: "填写解决说明",
-        confirmButtonText: "确定",
-        cancelButtonText: "取消",
-        inputValidator: (text: string) =>
-          text.trim() ? true : "请输入解决说明",
-      },
-    );
-    solution = result.value.trim();
-  } catch {
-    return; // 取消弹窗：不做任何更新
-  }
-  await applyUpdate({ status: "resolved", solution }, "已标记解决");
-}
-
-function reopen() {
-  void applyUpdate({ status: "open" }, "问题已重新打开");
+// 状态自由流转：四态下拉任选，切换即保存（服务端无解决说明前置校验，不再弹窗）
+function onStatusChange(value: unknown) {
+  if (typeof value !== "string") return;
+  void applyUpdate({ status: value as IssueStatus }, "状态已更新");
 }
 
 async function sendComment() {
@@ -646,9 +631,9 @@ function typeTone(issue: Issue): string {
 
 function statusTone(status: IssueStatus): string {
   switch (status) {
-    case "open":
+    case "pending":
       return "tone-amber";
-    case "in_progress":
+    case "processing":
       return "tone-blue";
     case "testing":
       return "tone-purple";
@@ -839,44 +824,22 @@ function formatTime(iso: string): string {
           @update:html="onDescHtml"
           @update:text="onDescText"
         />
-        <!-- 状态流转按钮组 -->
+        <!-- 状态自由流转：四态下拉任选，切换即保存 -->
         <div class="issue-flow">
-          <button
-            v-if="detail.status === 'open'"
-            class="issue-btn issue-btn--primary"
-            type="button"
+          <el-select
+            class="issue-status-select"
+            :model-value="detail.status"
             :disabled="acting"
-            @click="startProgress"
+            aria-label="问题状态"
+            @change="onStatusChange"
           >
-            开始处理
-          </button>
-          <button
-            v-if="detail.status === 'in_progress'"
-            class="issue-btn issue-btn--primary"
-            type="button"
-            :disabled="acting"
-            @click="startTesting"
-          >
-            开始测试
-          </button>
-          <button
-            v-if="detail.status !== 'resolved'"
-            class="issue-btn"
-            type="button"
-            :disabled="acting"
-            @click="markResolved"
-          >
-            标记解决
-          </button>
-          <button
-            v-if="detail.status === 'resolved'"
-            class="issue-btn"
-            type="button"
-            :disabled="acting"
-            @click="reopen"
-          >
-            重新打开
-          </button>
+            <el-option
+              v-for="status in issueStatuses"
+              :key="status"
+              :label="issueStatusLabels[status]"
+              :value="status"
+            />
+          </el-select>
           <button
             class="issue-btn issue-btn--danger"
             type="button"
@@ -1300,7 +1263,11 @@ function formatTime(iso: string): string {
 .issue-flow {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
+}
+.issue-status-select {
+  width: 132px;
 }
 .block-label {
   font-size: 11px;

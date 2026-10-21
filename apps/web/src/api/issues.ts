@@ -13,13 +13,11 @@ export interface IssueCreatePayload {
   phase: IssuePhase;
   title: string;
   description?: string;
-  descriptionHtml?: string;
   issueType?: string;
 }
 export interface IssueUpdatePayload {
   title?: string;
   description?: string;
-  descriptionHtml?: string;
   issueType?: string | null;
   status?: IssueStatus;
   solution?: string;
@@ -46,6 +44,16 @@ export const issueApi = {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),
+  // 问题正文（md 文件）直读/直写
+  getDescription: (id: number, issueId: number) =>
+    request<{ content: string }>(
+      `/requirements/${id}/issues/${issueId}/description`,
+    ),
+  saveDescription: (id: number, issueId: number, content: string) =>
+    request<{ updatedAt: string }>(
+      `/requirements/${id}/issues/${issueId}/description`,
+      { method: "PUT", body: JSON.stringify({ content }) },
+    ),
   comment: (id: number, issueId: number, content: string) =>
     request<IssueDetail>(
       `/requirements/${id}/issues/${issueId}/activities`,

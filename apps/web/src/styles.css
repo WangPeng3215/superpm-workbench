@@ -513,9 +513,6 @@ h2 {
 .module-row:last-child {
   border-bottom: none;
 }
-.xly-drawer-mask {
-  z-index: 1800 !important;
-}
 @media (max-width: 900px) {
   .app-layout {
     grid-template-columns: 76px minmax(0, 1fr);

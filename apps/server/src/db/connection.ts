@@ -7,7 +7,7 @@ export function migrateDefaultDatabase() {
   ensurePaths(paths.databasePath, paths.workspacePath);
   const db = new Database(paths.databasePath);
   try {
-    migrate(db);
+    migrate(db, undefined, paths.workspacePath);
   } finally {
     db.close();
   }

@@ -72,7 +72,7 @@ export async function createApp(
   ensurePaths(paths.databasePath, paths.workspacePath);
   const db = new Database(paths.databasePath);
   try {
-    migrate(db);
+    migrate(db, undefined, paths.workspacePath);
   } catch (error) {
     db.close();
     throw error;
@@ -90,7 +90,7 @@ export async function createApp(
     paths.workspacePath,
     service,
   );
-  const issueService = new IssueService(db, service);
+  const issueService = new IssueService(db, service, paths.workspacePath);
   const artifactService = new ArtifactService(db, paths.workspacePath, service);
   const app = Fastify({
     logger: options.logger ?? true,
@@ -323,7 +323,7 @@ export async function createApp(
   const issueListQuery = z.object({
     phase: z.enum(["design", "development", "testing"]).optional(),
     status: z
-      .enum(["open", "in_progress", "testing", "resolved"])
+      .enum(["pending", "processing", "testing", "resolved"])
       .optional(),
   });
   app.get<{ Params: { id: string } }>(
@@ -356,6 +356,24 @@ export async function createApp(
     "/api/requirements/:id/issues/:issueId",
     async (request) =>
       issueService.update(
+        parseId(request.params.id),
+        parseId(request.params.issueId),
+        request.body,
+      ),
+  );
+  // 问题正文（md 文件）直读/直写：面板自动保存走 PATCH 更新，此端点供外部工具与同步使用
+  app.get<{ Params: { id: string; issueId: string } }>(
+    "/api/requirements/:id/issues/:issueId/description",
+    async (request) =>
+      issueService.getDescription(
+        parseId(request.params.id),
+        parseId(request.params.issueId),
+      ),
+  );
+  app.put<{ Params: { id: string; issueId: string } }>(
+    "/api/requirements/:id/issues/:issueId/description",
+    async (request) =>
+      issueService.saveDescription(
         parseId(request.params.id),
         parseId(request.params.issueId),
         request.body,

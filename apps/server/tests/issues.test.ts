@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
@@ -80,10 +80,9 @@ describe("issues API with real SQLite", () => {
     expect(issue).toMatchObject({
       requirementId: requirement.id,
       phase: "design",
-      status: "open",
+      status: "pending",
       title: "按钮样式与设计稿不一致",
       description: "间距偏差 4px",
-      descriptionHtml: "",
       issueType: "ui",
       issueKey: null,
       isDeleted: false,
@@ -113,43 +112,37 @@ describe("issues API with real SQLite", () => {
     });
     expect(noTitle.statusCode).toBe(400);
   });
-  it("enforces solution requirement when resolving and records status history", async () => {
+  it("transitions status freely without solution and persists description as a md file", async () => {
     const requirement = await create();
-    const issue = await createIssue(requirement.id);
-    // 无解决说明直接标记解决被拒绝
-    const noSolution = await app.inject({
+    const issue = await createIssue(requirement.id, {
+      description: "间距偏差 4px",
+    });
+    // 创建后正文落盘为 md 文件（description/description_html 列不再写入）
+    const mdPath = join(
+      directory,
+      "workspace",
+      "requirements",
+      String(requirement.id),
+      "issues",
+      `${issue.id}.md`,
+    );
+    expect(readFileSync(mdPath, "utf8")).toBe("间距偏差 4px");
+    // 无解决说明直接标记解决：四态自由流转，写 resolved_at 与状态历史
+    const resolved = await app.inject({
       method: "PATCH",
       url: `/api/requirements/${requirement.id}/issues/${issue.id}`,
       payload: { status: "resolved" },
     });
-    expect(noSolution.statusCode).toBe(400);
-    // 带解决说明标记解决：写 resolved_at 与 solution 历史
-    const resolved = await app.inject({
-      method: "PATCH",
-      url: `/api/requirements/${requirement.id}/issues/${issue.id}`,
-      payload: { status: "resolved", solution: "调整间距为 8px 并重新导出切图" },
-    });
     expect(resolved.statusCode).toBe(200);
-    expect(resolved.json<Issue>()).toMatchObject({
-      status: "resolved",
-      solution: "调整间距为 8px 并重新导出切图",
-    });
+    expect(resolved.json<Issue>()).toMatchObject({ status: "resolved" });
     expect(resolved.json<Issue>().resolvedAt).toBeTruthy();
     let detail = (
       await app.inject(`/api/requirements/${requirement.id}/issues/${issue.id}`)
     ).json<IssueDetail>();
-    const statusChange = detail.activities.find(
-      (item) => item.activityType === "status_change",
-    );
-    expect(statusChange).toMatchObject({
-      oldStatus: "open",
-      newStatus: "resolved",
-    });
-    const solutionActivity = detail.activities.find(
-      (item) => item.activityType === "solution",
-    );
-    expect(solutionActivity?.content).toBe("调整间距为 8px 并重新导出切图");
-    // 进入测试中：任意流转允许，写状态历史
+    expect(
+      detail.activities.find((item) => item.activityType === "status_change"),
+    ).toMatchObject({ oldStatus: "pending", newStatus: "resolved" });
+    // 已解决 → 测试中 → 待处理：任意方向可流转；回到待处理清空解决时间
     const testing = await app.inject({
       method: "PATCH",
       url: `/api/requirements/${requirement.id}/issues/${issue.id}`,
@@ -157,21 +150,35 @@ describe("issues API with real SQLite", () => {
     });
     expect(testing.statusCode).toBe(200);
     expect(testing.json<Issue>()).toMatchObject({ status: "testing" });
-    // 重新打开：保留全部历史，清空解决时间
     const reopened = await app.inject({
       method: "PATCH",
       url: `/api/requirements/${requirement.id}/issues/${issue.id}`,
-      payload: { status: "open" },
+      payload: { status: "pending" },
     });
     expect(reopened.statusCode).toBe(200);
     expect(reopened.json<Issue>()).toMatchObject({
-      status: "open",
+      status: "pending",
       resolvedAt: null,
     });
+    // 正文端点：GET 读取 md 文件内容，PUT 写入并刷新 updated_at
+    const got = await app.inject(
+      `/api/requirements/${requirement.id}/issues/${issue.id}/description`,
+    );
+    expect(got.statusCode).toBe(200);
+    expect(got.json()).toEqual({ content: "间距偏差 4px" });
+    const put = await app.inject({
+      method: "PUT",
+      url: `/api/requirements/${requirement.id}/issues/${issue.id}/description`,
+      payload: { content: "<p>新正文内容</p>" },
+    });
+    expect(put.statusCode).toBe(200);
+    expect(put.json().updatedAt).toBeTruthy();
+    expect(readFileSync(mdPath, "utf8")).toBe("<p>新正文内容</p>");
+    // 详情中的正文来自 md 文件
     detail = (
       await app.inject(`/api/requirements/${requirement.id}/issues/${issue.id}`)
     ).json<IssueDetail>();
-    expect(detail.activities.filter((item) => item.activityType === "status_change")).toHaveLength(3);
+    expect(detail.description).toBe("<p>新正文内容</p>");
     // closed 状态已退役：非法枚举被拒绝
     const closed = await app.inject({
       method: "PATCH",
@@ -228,12 +235,12 @@ describe("issues API with real SQLite", () => {
     const inProgress = await app.inject({
       method: "PATCH",
       url: `/api/requirements/${requirement.id}/issues/${designIssue.id}`,
-      payload: { status: "in_progress" },
+      payload: { status: "processing" },
     });
     expect(inProgress.statusCode).toBe(200);
     const processing = (
       await app.inject(
-        `/api/requirements/${requirement.id}/issues?status=in_progress`,
+        `/api/requirements/${requirement.id}/issues?status=processing`,
       )
     ).json<IssueListResult>();
     expect(processing.items.map((item) => item.id)).toEqual([designIssue.id]);
@@ -367,6 +374,10 @@ describe("issues API with real SQLite", () => {
       )
     ).json<IssueAssetListResult>();
     expect(list.total).toBe(2);
+    // assetId 取自关联行（SELECT 别名 asset_id），前端解除关联依赖该字段
+    expect([...list.items.map((item) => item.assetId)].sort((a, b) => a - b)).toEqual(
+      [assetId, folder.id].sort((a, b) => a - b),
+    );
     // 取消关联后产出物本体不受影响：节点仍可直接再次关联
     expect(
       (
