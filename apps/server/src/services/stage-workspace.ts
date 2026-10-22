@@ -6,6 +6,12 @@ import { randomUUID } from "node:crypto";
 import { DomainError, RequirementService } from "./requirements.js";
 import { RequirementDirectoryResolver } from "./requirement-directory.js";
 
+/**
+ * @deprecated 旧阶段工作区 JSON（`requirement_workspaces`）的读写实现，仅为
+ * `GET/PUT /api/requirements/:id/workspace` 的旧客户端兼容保留。进度语义以需求字段、
+ * 阶段历史与问题/产出物统计（`RequirementProgressService`）为准。图片上传与读取方法
+ * （`/api/requirements/:id/images`）仍在使用，不要随旧接口一并删除。
+ */
 export class StageWorkspaceService {
   private readonly directories: RequirementDirectoryResolver;
   constructor(

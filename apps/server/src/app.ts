@@ -416,6 +416,8 @@ export async function createApp(
     },
   );
   const webRoot = join(projectRoot, "apps", "web", "dist");
+  // legacy：阶段工作区 JSON 接口，Web 已不再调用；进度以需求字段、阶段历史与问题/产出物统计为准。
+  // 图片接口仍在用（富文本描述上传），与旧工作区 JSON 共用 workspaceService。
   app.get<{ Params: { id: string } }>(
     "/api/requirements/:id/workspace",
     async (request) => workspaceService.get(parseId(request.params.id)),

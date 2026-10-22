@@ -40,7 +40,7 @@ npm start
 - 需求文档知识库：多层级文件夹、Markdown 文件、外部链接，磁盘为唯一事实来源，支持外部修改刷新。
 - 需求问题跟踪：问题、活动记录与文件关联。
 - 需求物理目录自动初始化：可读目录名（`REQ-xxxx 名称`）、默认目录与系统级资源、失败可重试。
-- 前后端共享契约、真实 SQLite 集成测试、浏览器验收和 CI 配置模板。
+- 前后端共享契约、真实 SQLite 集成测试、浏览器验收和 GitHub Actions CI 流水线。
 
 未实现：测试闭环、任务历史、通知、自定义字段、表格视图持久化、FTS5、备份恢复。MCP 提供只读查询与默认关闭的受控写入（问题更新、评论、产出物关联），详见 `docs/mcp.md`。软删除数据目前保留在数据库中，回收站界面随后建设。
 
@@ -98,14 +98,14 @@ Markdown 中插入的图片真实写入当前需求根目录的 `images/`，正�
 
 ## MCP（stdio）
 
-M3 提供独立 stdio MCP Server，M4 完成安全攻击用例与敏感端点收敛，M5 使用 Qoder Desktop 作为真实 MCP Client 完成三个只读场景与两条经授权的受控写入；与 HTTP 服务共用服务容器，不监听端口：
+M3 提供独立 stdio MCP Server，M4 完成安全攻击用例与敏感端点收敛，M5 使用 Qoder Desktop 作为真实 MCP Client 完成三个只读场景与两条经授权的受控写入，M6 补齐逐工具参数/返回说明、安装配置、权限与安全、自动化测试与版本兼容性文档；与 HTTP 服务共用服务容器，不监听端口：
 
 ```powershell
 npm run build -w @superpm/server
 npm run mcp -w @superpm/server
 ```
 
-默认只注册 9 个业务只读工具（`requirement.*`、`issue.*`、`artifact.*`）与 `system.info`；显式设置 `SUPERPM_MCP_WRITE=1` 后，额外开放 4 个受控写入工具与 `write.prepare`。写入必须先取得 5 分钟有效、一次性、绑定参数与幂等键的确认令牌，调用来源记为 `mcp:<客户端名>` 并写入 `mcp_audit`。需求创建、问题创建、文件写入/删除、SQL 与任意路径能力仍不开放。M4 安全用例覆盖非法参数、SQL/提示注入、路径穿越、符号链接、敏感信息泄露、数据库/文件系统异常与未授权写入；Harness 配置、确认流程、工具入参与排查见 `docs/mcp.md`。
+默认只注册 9 个业务只读工具（`requirement.*`、`issue.*`、`artifact.*`）与 `system.info`；显式设置 `SUPERPM_MCP_WRITE=1` 后，额外开放 4 个受控写入工具与 `write.prepare`。写入必须先取得 5 分钟有效、一次性、绑定参数与幂等键的确认令牌，调用来源记为 `mcp:<客户端名>` 并写入 `mcp_audit`。需求创建、问题创建、文件写入/删除、SQL 与任意路径能力仍不开放。M4 安全用例覆盖非法参数、SQL/提示注入、路径穿越、符号链接、敏感信息泄露、数据库/文件系统异常与未授权写入。运行环境、Harness 配置、逐工具入参与返回、错误码、自动化测试与版本兼容性见 `docs/mcp.md`。
 
 ## 检查
 
@@ -119,7 +119,7 @@ npm run test:e2e
 
 集成与浏览器测试各使用临时 SQLite 和 Workspace，与默认业务数据隔离。浏览器验收需先构建前端；`npm run test:e2e` 会自动构建并启动隔离服务。
 
-CI 模板保存在 `docs/ci/ci.yml`，包含安装、类型检查、测试、构建和浏览器验收。当前 GitHub OAuth 凭证缺少 `workflow` 权限，首版尚未启用自动 CI；授权该权限后，将模板复制到 `.github/workflows/ci.yml` 并提交即可。
+CI 流水线位于 `.github/workflows/ci.yml`（与模板 `docs/ci/ci.yml` 一致），在 Windows runner 上执行安装、类型检查、单元测试、构建与 Playwright 浏览器验收。仓库的 GitHub OAuth 凭证此前缺少 `workflow` 权限，推送该文件时需先授权 `workflow` scope；推送后本流水线才会在 GitHub 上实际运行。
 
 ## API
 
@@ -150,6 +150,6 @@ CI 模板保存在 `docs/ci/ci.yml`，包含安装、类型检查、测试、构
 
 ## 后续实施顺序
 
-需求视图与富文本 → 文件实体/版本/关联 → 问题、决策、跟进 → 测试用例/执行/复测 → 每日任务 → FTS5 与 Context API → 备份恢复 → MCP 只读业务工具（M2，已完成）→ MCP 受控写入（M3，已完成）→ MCP 安全测试（M4，已完成）→ MCP 真实 Harness 试运行（M5，已完成）。
+需求视图与富文本 → 文件实体/版本/关联 → 问题、决策、跟进 → 测试用例/执行/复测 → 每日任务 → FTS5 与 Context API → 备份恢复 → MCP 只读业务工具（M2，已完成）→ MCP 受控写入（M3，已完成）→ MCP 安全测试（M4，已完成）→ MCP 真实 Harness 试运行（M5，已完成）→ MCP 文档收尾（M6，已完成）。
 
 需求参考保留在根目录开发文档；当前明确的两级需求、Drizzle 选型与交付边界见 `docs/superpowers/specs/2026-10-13-foundation-design.md`。

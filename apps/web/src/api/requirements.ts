@@ -34,8 +34,10 @@ export const requirementApi = {
     request<StageHistory[]>(`/requirements/${id}/history`),
   relations: (id: number) =>
     request<RequirementRelations>(`/requirements/${id}/relations`),
+  /** @deprecated 旧阶段工作区 JSON，服务端仅为兼容保留；勿在新代码中调用。 */
   workspace: (id: number) =>
     request<StageWorkspace>(`/requirements/${id}/workspace`),
+  /** @deprecated 旧阶段工作区 JSON，服务端仅为兼容保留；勿在新代码中调用。 */
   saveWorkspace: (id: number, data: StageWorkspace) =>
     request<StageWorkspace>(`/requirements/${id}/workspace`, {
       method: "PUT",

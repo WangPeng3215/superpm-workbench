@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync, readFileSync, existsSync } from "node:fs";
+import {
+  mkdtempSync,
+  rmSync,
+  readFileSync,
+  existsSync,
+  writeFileSync,
+} from "node:fs";
 import { dateFields } from "@superpm/shared";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -686,6 +692,53 @@ describe("requirements API with real SQLite", () => {
         })
       ).statusCode,
     ).toBe(404);
+  });
+  it("rejects tampered relative paths outside the requirement directory", async () => {
+    const requirement = await create();
+    const created = await app.inject({
+      method: "POST",
+      url: `/api/requirements/${requirement.id}/files`,
+      payload: {
+        phase: "analysis",
+        category: "other",
+        name: "资料.md",
+        data: Buffer.from("secret").toString("base64"),
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const fileId = created.json<RequirementFile>().id;
+    writeFileSync(join(directory, "workspace", "outside.md"), "outside");
+    writeFileSync(join(directory, "escape.md"), "escape");
+    const setPath = (value: string) => {
+      const db = new Database(join(directory, "test.sqlite"));
+      db.prepare("UPDATE requirement_files SET relative_path=? WHERE id=?").run(
+        value,
+        fileId,
+      );
+      db.close();
+    };
+    // 仍在 workspace 内、但不在该需求目录下
+    setPath("outside.md");
+    const outside = await app.inject(
+      `/api/requirements/${requirement.id}/files/${fileId}/content`,
+    );
+    expect(outside.statusCode).toBe(400);
+    expect(outside.json().error.code).toBe("INVALID_PATH");
+    // 越出 workspace 的路径在读取与写入时都被拒绝
+    setPath("../escape.md");
+    const escapedRead = await app.inject(
+      `/api/requirements/${requirement.id}/files/${fileId}/content`,
+    );
+    expect(escapedRead.statusCode).toBe(400);
+    expect(escapedRead.json().error.code).toBe("INVALID_PATH");
+    const escapedWrite = await app.inject({
+      method: "PUT",
+      url: `/api/requirements/${requirement.id}/files/${fileId}/content`,
+      payload: { content: "overwritten" },
+    });
+    expect(escapedWrite.statusCode).toBe(400);
+    expect(escapedWrite.json().error.code).toBe("INVALID_PATH");
+    expect(readFileSync(join(directory, "escape.md"), "utf8")).toBe("escape");
   });
   it("roundtrips text content near the 200KB limit", async () => {
     const requirement = await create();

@@ -19,12 +19,19 @@ import {
   type RequirementFileList,
   type Stage,
 } from "@superpm/shared";
-import { existsSync, lstatSync, readFileSync, writeFileSync } from "node:fs";
-import { extname, join, relative, sep } from "node:path";
+import {
+  existsSync,
+  lstatSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, extname, isAbsolute, join, relative, sep } from "node:path";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { DomainError, RequirementService } from "./requirements.js";
 import { RequirementDirectoryResolver } from "./requirement-directory.js";
+import { resolveWorkspacePath } from "../storage/workspace.js";
 import { allowSystemOpen } from "../config/index.js";
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
@@ -413,13 +420,29 @@ export class RequirementFileService {
   }
   // 解析本地文件绝对路径：优先使用入库的相对路径；旧数据惰性回填
   private resolveLocalPath(file: RequirementFile) {
-    if (file.relativePath) return join(this.root, file.relativePath);
+    if (file.relativePath) return this.tamperedSafePath(file);
     const legacy = this.legacyPath(file);
     const relativePath = relative(this.root, legacy).split(sep).join("/");
     this.db
       .prepare("UPDATE requirement_files SET relative_path=? WHERE id=?")
       .run(relativePath, file.id);
     return legacy;
+  }
+  // 库中相对路径可能被篡改：必须仍在 Workspace 与该需求目录内，且不经过符号链接目录
+  private tamperedSafePath(file: RequirementFile) {
+    const target = resolveWorkspacePath(this.root, file.relativePath!);
+    const requirementRoot = this.directories.tryResolveReadOnly(
+      file.requirementId,
+      "",
+    );
+    if (!requirementRoot)
+      throw new DomainError("INVALID_PATH", "需求目录不存在或尚未初始化");
+    const parent = dirname(target);
+    const resolvedParent = existsSync(parent) ? realpathSync(parent) : parent;
+    const distance = relative(requirementRoot, resolvedParent);
+    if (distance.startsWith("..") || isAbsolute(distance))
+      throw new DomainError("INVALID_PATH", "文件路径必须位于需求目录内");
+    return target;
   }
   // 旧版推导规则：requirements/{id}/{phase}/{分类目录}/{file_name}
   private legacyPath(file: RequirementFile) {
