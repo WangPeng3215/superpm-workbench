@@ -123,32 +123,50 @@ test("stage workspace persists analysis docs and issue resolution", async ({
   await expect(recordEditor).toBeVisible();
   await recordEditor.fill("# 阶段验收内容");
   await expect(page.getByText("已自动保存到本地文件")).toBeVisible();
-  // 切到 UI 设计阶段：详情表单保存当前阶段，问题页签展示该阶段问题，新建问题
+  // 切到 UI 设计阶段：详情表单保存当前阶段，问题页签可记录全部阶段问题，新建问题
   await switchStage(page, "UI 设计");
-  await page.getByRole("tab", { name: "需求问题" }).click();
-  const issuesPanel = page.locator(".issues-panel");
-  await issuesPanel.getByRole("button", { name: /新建问题/ }).click();
-  await issuesPanel.getByPlaceholder("问题标题（必填）").fill("设计评审阻塞");
-  await issuesPanel.getByRole("button", { name: "创建", exact: true }).click();
+  await page.getByRole("tab", { name: "问题记录" }).click();
+  const issuesPanel = page.locator(".issue-app, .issue-empty");
+  await issuesPanel.getByRole("button", { name: /新增/ }).first().click();
+  const createDialog = page.locator(".el-dialog:visible");
+  await createDialog.getByPlaceholder("一句话说清问题").fill("设计评审阻塞");
+  await createDialog.getByRole("button", { name: "创建问题" }).click();
   await expect(
-    issuesPanel.getByRole("button", { name: "设计评审阻塞" }),
+    page.locator(".issue-row").filter({ hasText: "设计评审阻塞" }),
   ).toBeVisible();
-  // 切到需求测试阶段：新建问题并在详情中标记解决
+  // 切到需求测试阶段：新建问题并填写结论后标记解决
   await switchStage(page, "需求测试");
-  await page.getByRole("tab", { name: "需求问题" }).click();
-  await issuesPanel.getByRole("button", { name: /新建问题/ }).click();
-  await issuesPanel.getByPlaceholder("问题标题（必填）").fill("测试问题");
-  await issuesPanel.getByRole("button", { name: "创建", exact: true }).click();
-  await issuesPanel.getByRole("button", { name: "测试问题" }).click();
-  // 状态下拉自由流转：待处理 → 已解决（无需填写解决说明）
-  await issuesPanel.locator(".issue-status-select").click();
+  await page.getByRole("tab", { name: "问题记录" }).click();
+  await issuesPanel.getByRole("button", { name: /新增/ }).first().click();
+  await page
+    .locator(".el-dialog:visible")
+    .getByPlaceholder("一句话说清问题")
+    .fill("测试问题");
+  await page
+    .locator(".el-dialog:visible")
+    .getByRole("button", { name: "创建问题" })
+    .click();
+  await expect(
+    page.locator(".issue-row").filter({ hasText: "测试问题" }),
+  ).toBeVisible();
+  // 先填写解决方案，再标记已解决（服务端强制结论非空）
+  await page
+    .locator('.rich-document[aria-label="解决方案或最终结论"]')
+    .fill("测试通过，关闭问题");
+  const resolved = page.waitForResponse(
+    (response) =>
+      response.request().method() === "PATCH" &&
+      /\/issues\/\d+$/.test(new URL(response.request().url()).pathname),
+  );
+  await issuesPanel.locator(".meta-field--status .el-select").click();
   await page
     .locator(".el-select-dropdown:visible .el-select-dropdown__item")
     .filter({ hasText: "已解决" })
     .click();
-  await expect(
-    issuesPanel.locator(".issues-head").getByText("已解决"),
-  ).toBeVisible();
+  await resolved;
+  await expect(issuesPanel.locator(".meta-field--status")).toContainText(
+    "已解决",
+  );
   // 服务端持久化校验：需求记忆文档内容与各阶段问题状态
   const found = await (
     await request.get(`/api/requirements?q=${encodeURIComponent(name)}`)
@@ -162,11 +180,11 @@ test("stage workspace persists analysis docs and issue resolution", async ({
   ).json();
   expect(record.content).toContain("阶段验收内容");
   const design = await (
-    await request.get(`/api/requirements/${id}/issues?phase=design`)
+    await request.get(`/api/requirements/${id}/issues?stage=design`)
   ).json();
   expect(design.items[0].title).toBe("设计评审阻塞");
   const testing = await (
-    await request.get(`/api/requirements/${id}/issues?phase=testing`)
+    await request.get(`/api/requirements/${id}/issues?stage=testing`)
   ).json();
   expect(testing.items[0].status).toBe("resolved");
   expect(testing.items[0].resolvedAt).toBeTruthy();

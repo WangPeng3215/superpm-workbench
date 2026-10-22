@@ -4,7 +4,12 @@ import {
   text,
   type AnySQLiteColumn,
 } from "drizzle-orm/sqlite-core";
-import type { Requirement, RequirementFile, Stage } from "@superpm/shared";
+import type {
+  IssueType,
+  Requirement,
+  RequirementFile,
+  Stage,
+} from "@superpm/shared";
 export const requirements = sqliteTable("requirements", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   requirementNo: text("requirement_no").notNull().unique(),
@@ -71,22 +76,22 @@ export const requirementFiles = sqliteTable("requirement_files", {
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });
-// 问题表：phase 限定 design/development/testing
+// 问题表：stage 为产生阶段，四阶段均可记录
 export const issues = sqliteTable("issues", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   requirementId: integer("requirement_id")
     .notNull()
     .references(() => requirements.id),
-  phase: text("phase").$type<"design" | "development" | "testing">().notNull(),
+  stage: text("stage").$type<Stage>().notNull(),
   issueKey: text("issue_key"),
   title: text("title").notNull(),
-  // 正文列：迁移 0009 起正文唯一权威存储为工作区 md 文件（requirements/{rid}/issues/{id}.md），两列仅存量兼容
+  // 描述列：迁移 0009 起正文唯一权威存储为工作区 md 文件（requirements/{rid}/issues/{id}.md），两列仅存量兼容
   description: text("description").notNull().default(""),
   descriptionHtml: text("description_html").notNull().default(""),
-  issueType: text("issue_type"),
+  issueType: text("issue_type").$type<IssueType>(),
   // 库内列默认值仍为历史值 'open'（SQLite 低成本改默认需重建表），业务层写入始终显式指定状态
   status: text("status")
-    .$type<"pending" | "processing" | "testing" | "resolved">()
+    .$type<"pending" | "to_confirm" | "processing" | "resolved" | "wont_fix">()
     .notNull()
     .default("pending"),
   solution: text("solution"),

@@ -13,6 +13,7 @@ import type {
 import Database from "better-sqlite3";
 import { createApp } from "../src/app";
 import { authedInject } from "./auth-helper";
+import { requirementRootRelative } from "./workspace-helper";
 
 describe("requirements API with real SQLite", () => {
   let app: FastifyInstance;
@@ -233,7 +234,7 @@ describe("requirements API with real SQLite", () => {
       status: "ok",
     });
     expect((await app.inject("/api/system")).json()).toMatchObject({
-      schemaVersion: 9,
+      schemaVersion: 11,
       workspacePath: join(directory, "workspace"),
     });
     expect((await app.inject("/api/requirements")).json().total).toBe(0);
@@ -400,8 +401,7 @@ describe("requirements API with real SQLite", () => {
         join(
           directory,
           "workspace",
-          "requirements",
-          String(requirement.id),
+          ...(await requirementRootRelative(app, requirement.id)).split("/"),
           "analysis",
           "analysis.md",
         ),
@@ -442,8 +442,7 @@ describe("requirements API with real SQLite", () => {
         join(
           directory,
           "workspace",
-          "requirements",
-          String(requirement.id),
+          ...(await requirementRootRelative(app, requirement.id)).split("/"),
           "images",
           url.split("/").pop(),
         ),
@@ -522,7 +521,9 @@ describe("requirements API with real SQLite", () => {
     ).toBe(204);
     const inspection = new Database(join(directory, "test.sqlite"));
     const row = inspection
-      .prepare("SELECT is_deleted, resource_type FROM requirement_files WHERE id=?")
+      .prepare(
+        "SELECT is_deleted, resource_type FROM requirement_files WHERE id=?",
+      )
       .get(fileId) as { is_deleted: number; resource_type: string };
     inspection.close();
     expect(row).toMatchObject({ is_deleted: 1, resource_type: "link" });
@@ -616,7 +617,10 @@ describe("requirements API with real SQLite", () => {
       payload: { status: "archived" },
     });
     expect(archived.statusCode).toBe(200);
-    expect(archived.json()).toMatchObject({ status: "archived", isFinal: false });
+    expect(archived.json()).toMatchObject({
+      status: "archived",
+      isFinal: false,
+    });
     // 同时提交 isFinal 与 status 被拒绝
     const conflict = await app.inject({
       method: "PATCH",
@@ -646,11 +650,14 @@ describe("requirements API with real SQLite", () => {
     });
     expect(created.statusCode).toBe(201);
     const file = created.json() as RequirementFile;
-    // 新文件统一落 files/ 目录并记录相对路径
-    expect(file.relativePath).toBe(
-      `requirements/${requirement.id}/files/${file.fileName}`,
+    // 新文件统一落 files/ 目录并记录相对路径；需求根目录按「需求编号 + 名称」命名
+    const rootRelative = await requirementRootRelative(app, requirement.id);
+    expect(file.relativePath).toBe(`${rootRelative}/files/${file.fileName}`);
+    const absolute = join(
+      directory,
+      "workspace",
+      ...file.relativePath!.split("/"),
     );
-    const absolute = join(directory, "workspace", ...file.relativePath!.split("/"));
     expect(existsSync(absolute)).toBe(true);
     expect(
       (
@@ -662,7 +669,9 @@ describe("requirements API with real SQLite", () => {
     ).toBe(204);
     // 列表中消失，磁盘文件保留
     const groups = (
-      await app.inject(`/api/requirements/${requirement.id}/files?phase=analysis&all=true`)
+      await app.inject(
+        `/api/requirements/${requirement.id}/files?phase=analysis&all=true`,
+      )
     ).json<RequirementFileList>().groups;
     expect(
       groups.find((group) => group.category === "other")!.files,
@@ -761,7 +770,9 @@ describe("requirements API with real SQLite", () => {
     expect(row).toMatchObject({ status: "missing", is_deleted: 0 });
     // 列表可见且带 missing 状态
     const groups = (
-      await app.inject(`/api/requirements/${requirement.id}/files?phase=analysis&all=true`)
+      await app.inject(
+        `/api/requirements/${requirement.id}/files?phase=analysis&all=true`,
+      )
     ).json<RequirementFileList>().groups;
     const listed = groups
       .find((group) => group.category === "other")!
@@ -771,7 +782,9 @@ describe("requirements API with real SQLite", () => {
   it("returns the full category skeleton with empty groups when nothing is stored", async () => {
     const requirement = await create();
     const all = (
-      await app.inject(`/api/requirements/${requirement.id}/files?phase=all&all=true`)
+      await app.inject(
+        `/api/requirements/${requirement.id}/files?phase=all&all=true`,
+      )
     ).json<RequirementFileList>();
     expect(all.groups).toHaveLength(7);
     expect(all.groups.map((group) => group.category)).toEqual([
@@ -783,7 +796,11 @@ describe("requirements API with real SQLite", () => {
       "uiAssets",
       "other",
     ]);
-    expect(all.groups.every((group) => group.total === 0 && group.files.length === 0)).toBe(true);
+    expect(
+      all.groups.every(
+        (group) => group.total === 0 && group.files.length === 0,
+      ),
+    ).toBe(true);
     expect(all.editorFile).toBeNull();
   });
   it("rejects file payloads just above the 5MB limit", async () => {
@@ -829,7 +846,9 @@ describe("requirements API with real SQLite", () => {
       "other",
     ]);
     const testing = (
-      await app.inject(`/api/requirements/${requirement.id}/files?phase=testing`)
+      await app.inject(
+        `/api/requirements/${requirement.id}/files?phase=testing`,
+      )
     ).json<RequirementFileList>();
     expect(testing.groups.map((group) => group.category)).toEqual([
       "testReport",
@@ -839,7 +858,9 @@ describe("requirements API with real SQLite", () => {
     ]);
     // 分析记录仍是 analysis 阶段的默认编辑器文件
     const analysis = (
-      await app.inject(`/api/requirements/${requirement.id}/files?phase=analysis`)
+      await app.inject(
+        `/api/requirements/${requirement.id}/files?phase=analysis`,
+      )
     ).json<RequirementFileList>();
     expect(analysis.editorFile).toMatchObject({
       name: "分析记录",

@@ -4,32 +4,42 @@ import type {
   IssueAssetRelation,
   IssueDetail,
   IssueListResult,
-  IssuePhase,
+  IssueStage,
   IssueStatus,
+  IssueType,
 } from "@superpm/shared";
 import { request } from "./client";
 
+export interface IssueListParams {
+  stage?: IssueStage;
+  status?: IssueStatus;
+  type?: IssueType;
+  q?: string;
+}
 export interface IssueCreatePayload {
-  phase: IssuePhase;
+  stage?: IssueStage;
   title: string;
   description?: string;
-  issueType?: string;
+  type?: IssueType | null;
 }
 export interface IssueUpdatePayload {
   title?: string;
   description?: string;
-  issueType?: string | null;
+  stage?: IssueStage;
+  type?: IssueType | null;
   status?: IssueStatus;
   solution?: string;
 }
 export const issueApi = {
-  list: (id: number, phase?: IssuePhase, status?: IssueStatus) => {
-    const params = new URLSearchParams();
-    if (phase) params.set("phase", phase);
-    if (status) params.set("status", status);
-    const query = params.toString();
+  list: (id: number, params: IssueListParams = {}) => {
+    const query = new URLSearchParams();
+    if (params.stage) query.set("stage", params.stage);
+    if (params.status) query.set("status", params.status);
+    if (params.type) query.set("type", params.type);
+    if (params.q?.trim()) query.set("q", params.q.trim());
+    const suffix = query.toString();
     return request<IssueListResult>(
-      `/requirements/${id}/issues${query ? `?${query}` : ""}`,
+      `/requirements/${id}/issues${suffix ? `?${suffix}` : ""}`,
     );
   },
   detail: (id: number, issueId: number) =>

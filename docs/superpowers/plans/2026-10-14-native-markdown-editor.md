@@ -1,30 +1,41 @@
-# Native Markdown Editor Implementation Plan
+# Native Markdown Storage Implementation Plan
 
 > **For agentic workers:** Execute the following focused tasks in the current workspace. Do not commit or modify user data.
 
-**Goal:** Replace the analysis rich-text editor with a real Markdown source editor and make newly uploaded Markdown files reliably visible and openable.
+**Goal:** Persist requirement documents as native Markdown while keeping the existing WYSIWYG editor, so files on disk stay readable and diff-friendly.
 
-**Architecture:** Add a reusable `MarkdownEditor.vue` backed by CodeMirror. Keep the disk-backed file API and existing save/navigation coordination, but track raw content instead of rendered HTML. Use marked and DOMPurify only for preview.
+**Architecture:** Keep the disk-backed content API and the Tiptap editor. Convert in the browser: Markdown → editor HTML on load, editor HTML → Markdown on save. Image references stay relative to the document directory and are swapped to a preview URL only inside the editor.
 
-**Tech Stack:** Vue 3, CodeMirror 6, marked, DOMPurify, Element Plus, Playwright.
+**Tech Stack:** Vue 3, Tiptap 3, turndown + turndown-plugin-gfm, marked, Element Plus, Fastify, Playwright, vitest.
+
+## Decision
+
+A CodeMirror source editor was considered and explicitly rejected by the user: the editor stays WYSIWYG and the conversion happens on read/save. Structural loss (loose lists collapse to tight, underline stays inline HTML) is accepted.
 
 ## Tasks
 
-- [ ] Add `tests/e2e/markdown-editor.spec.ts`: real file-input upload, full information-area clicks, source roundtrip, syntax tools, safe preview and legacy HTML preservation. Observe upload/row-click failures before fixing.
-- [ ] Install CodeMirror core, state, view, commands and Markdown language support in `apps/web`.
-- [ ] Add `apps/web/src/features/requirements/MarkdownEditor.vue` with source/split/preview modes, local image upload, `update:modelValue` and `waitForUpload`.
-- [ ] Update `RequirementAnalysisPanel.vue` to read/write raw content, open uploaded drafts, and enlarge the file-open target without changing destructive actions.
-- [ ] Adapt `tests/e2e/analysis-files.spec.ts` to Markdown syntax and retain all concurrency checks.
-- [ ] Update README and mark the earlier rich-text design superseded for analysis files.
-- [ ] Run `npm run test:e2e -- tests/e2e/analysis-files.spec.ts tests/e2e/markdown-editor.spec.ts`, `npm run typecheck`, `npm test`, and targeted formatting/diff checks.
+- [x] Add `apps/web/src/features/requirements/doc-markdown.ts`: `markdownToHtml`, `htmlToMarkdown`, `documentToEditorHtml`, `isLegacyHtmlContent`, plus `apps/web/src/types/turndown-plugin-gfm.d.ts` for typings.
+- [x] Use a custom `Marked` instance so task lists render the Tiptap DOM shape (`<ul data-type="taskList"><li data-type="taskItem" data-checked>`), and custom turndown rules for list indentation, ordered-list `start`, task items, tables (Tiptap emits `colgroup`), strikethrough and underline.
+- [x] Keep image path conversion in `doc-images.ts`; convert display URLs back to relative paths before serialization.
+- [x] Switch `DocTabEditor.vue` to Markdown storage.
+- [x] Switch the issue body in `RequirementIssuesPanel.vue` to Markdown storage.
+- [x] Register the Tiptap table extensions so Markdown tables survive an edit round-trip.
+- [x] Rewrite image references inside descendant documents when a folder is renamed or moved.
+- [x] Add `apps/web/tests/doc-markdown.test.ts` and include `apps/web/tests` in the vitest workspace config.
+- [x] Update README and the browser tests that asserted stored HTML.
 
 ## Storage contract
 
 ```typescript
-const recordContent = ref("");
-const savedContent = ref("");
-recordContent.value = result.content;
-savedContent.value = result.content;
+const stored = htmlToMarkdown(toStoredHtml(html.value, requirementId));
+await artifactApi.saveContent(node.id, stored);
 ```
 
-The content PUT sends `recordContent` unchanged; preview HTML never enters the persistence path. Legacy HTML remains untouched unless the user edits it.
+Only Markdown reaches the content API. Legacy HTML files are displayed as-is and rewritten to Markdown on their first save.
+
+## Verification results
+
+- `npm test`: 113 tests pass (9 files).
+- `npm run typecheck`: all workspaces pass.
+- `npm run test:e2e`: 34 browser tests pass, including the new Markdown table round-trip case.
+- Removed unused CodeMirror dependencies from `apps/web`.

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import Database from "better-sqlite3";
 import type { FastifyInstance } from "fastify";
 import type {
+  ArtifactImageUploadResult,
   Issue,
   IssueAssetListResult,
   IssueDetail,
@@ -12,11 +13,16 @@ import type {
 } from "@superpm/shared";
 import { createApp } from "../src/app";
 import { authedInject } from "./auth-helper";
+import { requirementRootPath } from "./workspace-helper";
 
 describe("issues API with real SQLite", () => {
   let app: FastifyInstance;
   let directory: string;
-  const create = async (payload: object = { name: "需求工作台", proposedAt: "2026-10-15" }) => {
+  const png =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jfEsAAAAASUVORK5CYII=";
+  const create = async (
+    payload: object = { name: "需求工作台", proposedAt: "2026-10-15" },
+  ) => {
     const response = await app.inject({
       method: "POST",
       url: "/api/requirements",
@@ -30,7 +36,7 @@ describe("issues API with real SQLite", () => {
       method: "POST",
       url: `/api/requirements/${requirementId}/issues`,
       payload: {
-        phase: "design",
+        stage: "design",
         title: "按钮样式与设计稿不一致",
         ...(payload ?? {}),
       },
@@ -38,6 +44,16 @@ describe("issues API with real SQLite", () => {
     expect(response.statusCode).toBe(201);
     return response.json() as Issue;
   };
+  const patchIssue = (
+    requirementId: number,
+    issueId: number,
+    payload: object,
+  ) =>
+    app.inject({
+      method: "PATCH",
+      url: `/api/requirements/${requirementId}/issues/${issueId}`,
+      payload,
+    });
   beforeEach(async () => {
     directory = mkdtempSync(join(tmpdir(), "superpm-issues-"));
     app = await createApp({
@@ -53,37 +69,59 @@ describe("issues API with real SQLite", () => {
     rmSync(directory, { recursive: true, force: true });
   });
 
-  it("returns empty lists for a requirement without any issue", async () => {
+  it("returns empty lists and zero counts for a requirement without any issue", async () => {
     const requirement = await create();
     const all = (
       await app.inject(`/api/requirements/${requirement.id}/issues`)
     ).json<IssueListResult>();
-    expect(all).toMatchObject({ total: 0 });
-    expect(all.items).toEqual([]);
-    // 各阶段过滤同样为空数组
-    for (const phase of ["design", "development", "testing"]) {
+    expect(all).toEqual({
+      items: [],
+      total: 0,
+      statusCounts: {
+        pending: 0,
+        to_confirm: 0,
+        processing: 0,
+        resolved: 0,
+        wont_fix: 0,
+      },
+    });
+    // 四阶段、状态与类型过滤同样为空数组
+    for (const stage of ["analysis", "design", "development", "testing"]) {
       const scoped = (
         await app.inject(
-          `/api/requirements/${requirement.id}/issues?phase=${phase}`,
+          `/api/requirements/${requirement.id}/issues?stage=${stage}`,
         )
       ).json<IssueListResult>();
       expect(scoped.total).toBe(0);
       expect(scoped.items).toEqual([]);
     }
+    for (const status of ["pending", "processing", "resolved"]) {
+      const scoped = (
+        await app.inject(
+          `/api/requirements/${requirement.id}/issues?status=${status}`,
+        )
+      ).json<IssueListResult>();
+      expect(scoped.total).toBe(0);
+    }
+    const typed = (
+      await app.inject(`/api/requirements/${requirement.id}/issues?type=ui`)
+    ).json<IssueListResult>();
+    expect(typed.items).toEqual([]);
   });
-  it("creates issues with an initial system activity and rejects invalid phases", async () => {
+  it("creates issues with an initial system activity and validates the new enums", async () => {
     const requirement = await create();
     const issue = await createIssue(requirement.id, {
       description: "间距偏差 4px",
-      issueType: "ui",
+      type: "ui",
     });
     expect(issue).toMatchObject({
       requirementId: requirement.id,
-      phase: "design",
+      stage: "design",
       status: "pending",
       title: "按钮样式与设计稿不一致",
       description: "间距偏差 4px",
-      issueType: "ui",
+      type: "ui",
+      solution: "",
       issueKey: null,
       isDeleted: false,
       resolvedAt: null,
@@ -97,69 +135,134 @@ describe("issues API with real SQLite", () => {
       activityType: "system",
       actorType: "system",
     });
-    // 需求分析阶段不允许创建问题
-    const rejected = await app.inject({
-      method: "POST",
-      url: `/api/requirements/${requirement.id}/issues`,
-      payload: { phase: "analysis", title: "不该被创建" },
+    // 未指定阶段时取需求当前阶段（默认需求分析），四阶段均可记录问题
+    const defaulted = (
+      await app.inject({
+        method: "POST",
+        url: `/api/requirements/${requirement.id}/issues`,
+        payload: { title: "未指定阶段的问题" },
+      })
+    ).json<Issue>();
+    expect(defaulted.stage).toBe("analysis");
+    const analysisStage = await createIssue(requirement.id, {
+      stage: "analysis",
+      type: "analysis",
+      title: "需求分析阶段的问题",
     });
-    expect(rejected.statusCode).toBe(400);
-    // 空标题被拒绝
-    const noTitle = await app.inject({
-      method: "POST",
-      url: `/api/requirements/${requirement.id}/issues`,
-      payload: { phase: "design", title: "  " },
+    expect(analysisStage).toMatchObject({
+      stage: "analysis",
+      type: "analysis",
     });
-    expect(noTitle.statusCode).toBe(400);
+    // 非法阶段、类型与空标题被拒绝
+    for (const payload of [
+      { stage: "deploy", title: "非法阶段" },
+      { stage: "design", type: "defect", title: "旧类型" },
+      { stage: "design", title: "  " },
+      { stage: "design" },
+    ]) {
+      const rejected = await app.inject({
+        method: "POST",
+        url: `/api/requirements/${requirement.id}/issues`,
+        payload,
+      });
+      expect(rejected.statusCode).toBe(400);
+    }
   });
-  it("transitions status freely without solution and persists description as a md file", async () => {
+  it("requires a solution before resolving and treats wont_fix as not resolved", async () => {
     const requirement = await create();
-    const issue = await createIssue(requirement.id, {
-      description: "间距偏差 4px",
+    const issue = await createIssue(requirement.id);
+    // 无解决方案不能标记已解决
+    const blocked = await patchIssue(requirement.id, issue.id, {
+      status: "resolved",
     });
-    // 创建后正文落盘为 md 文件（description/description_html 列不再写入）
-    const mdPath = join(
-      directory,
-      "workspace",
-      "requirements",
-      String(requirement.id),
-      "issues",
-      `${issue.id}.md`,
-    );
-    expect(readFileSync(mdPath, "utf8")).toBe("间距偏差 4px");
-    // 无解决说明直接标记解决：四态自由流转，写 resolved_at 与状态历史
-    const resolved = await app.inject({
-      method: "PATCH",
-      url: `/api/requirements/${requirement.id}/issues/${issue.id}`,
-      payload: { status: "resolved" },
+    expect(blocked.statusCode).toBe(400);
+    expect(blocked.json().error).toMatchObject({ code: "VALIDATION_ERROR" });
+    expect(blocked.json().error.message).toContain("解决方案");
+    // 先保存解决方案：独立于状态更新，并写一条 solution 历史
+    const saved = await patchIssue(requirement.id, issue.id, {
+      solution: "按新稿执行，验收通过",
+    });
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json<Issue>()).toMatchObject({
+      solution: "按新稿执行，验收通过",
+      status: "pending",
+    });
+    // 同时提交空方案与已解决同样被拒绝（以合并后的方案为准）
+    const emptied = await patchIssue(requirement.id, issue.id, {
+      solution: "",
+      status: "resolved",
+    });
+    expect(emptied.statusCode).toBe(400);
+    // 有方案后允许解决，写 resolved_at 与状态历史
+    const resolved = await patchIssue(requirement.id, issue.id, {
+      status: "resolved",
     });
     expect(resolved.statusCode).toBe(200);
     expect(resolved.json<Issue>()).toMatchObject({ status: "resolved" });
     expect(resolved.json<Issue>().resolvedAt).toBeTruthy();
-    let detail = (
+    // 暂不处理不是已解决：不要求方案，且清空解决时间
+    const wontFix = await patchIssue(requirement.id, issue.id, {
+      status: "wont_fix",
+    });
+    expect(wontFix.statusCode).toBe(200);
+    expect(wontFix.json<Issue>()).toMatchObject({
+      status: "wont_fix",
+      resolvedAt: null,
+    });
+    // 标题/阶段/类型可独立更新
+    const processing = await patchIssue(requirement.id, issue.id, {
+      title: "重新描述的问题",
+      stage: "analysis",
+      type: "other",
+      status: "processing",
+    });
+    expect(processing.statusCode).toBe(200);
+    expect(processing.json<Issue>()).toMatchObject({
+      title: "重新描述的问题",
+      stage: "analysis",
+      type: "other",
+      status: "processing",
+    });
+    const detail = (
       await app.inject(`/api/requirements/${requirement.id}/issues/${issue.id}`)
     ).json<IssueDetail>();
     expect(
-      detail.activities.find((item) => item.activityType === "status_change"),
-    ).toMatchObject({ oldStatus: "pending", newStatus: "resolved" });
-    // 已解决 → 测试中 → 待处理：任意方向可流转；回到待处理清空解决时间
-    const testing = await app.inject({
-      method: "PATCH",
-      url: `/api/requirements/${requirement.id}/issues/${issue.id}`,
-      payload: { status: "testing" },
+      detail.activities.filter((item) => item.activityType === "solution"),
+    ).toHaveLength(1);
+    const statusChanges = detail.activities.filter(
+      (item) => item.activityType === "status_change",
+    );
+    expect(statusChanges.map((item) => [item.oldStatus, item.newStatus])).toEqual(
+      [
+        ["pending", "resolved"],
+        ["resolved", "wont_fix"],
+        ["wont_fix", "processing"],
+      ],
+    );
+    // 旧枚举与任意值都被拒绝
+    for (const status of ["open", "closed", "testing", "in_progress"]) {
+      const legacy = await patchIssue(requirement.id, issue.id, { status });
+      expect(legacy.statusCode).toBe(400);
+    }
+    // 空更新被拒绝
+    expect(
+      (await patchIssue(requirement.id, issue.id, {})).statusCode,
+    ).toBe(400);
+  });
+  it("persists description to a md file and supports direct content endpoints", async () => {
+    const requirement = await create();
+    const issue = await createIssue(requirement.id, {
+      description: "间距偏差 4px",
     });
-    expect(testing.statusCode).toBe(200);
-    expect(testing.json<Issue>()).toMatchObject({ status: "testing" });
-    const reopened = await app.inject({
-      method: "PATCH",
-      url: `/api/requirements/${requirement.id}/issues/${issue.id}`,
-      payload: { status: "pending" },
-    });
-    expect(reopened.statusCode).toBe(200);
-    expect(reopened.json<Issue>()).toMatchObject({
-      status: "pending",
-      resolvedAt: null,
-    });
+    // 创建后正文落盘为 md 文件（description/description_html 列不再写入）；
+    // 需求根目录按「需求编号 + 名称」命名，经目录映射接口解析
+    const rootPath = await requirementRootPath(
+      app,
+      join(directory, "workspace"),
+      requirement.id,
+    );
+    const mdPath = join(rootPath, "issues", `${issue.id}.md`);
+    expect(readFileSync(mdPath, "utf8")).toBe("间距偏差 4px");
     // 正文端点：GET 读取 md 文件内容，PUT 写入并刷新 updated_at
     const got = await app.inject(
       `/api/requirements/${requirement.id}/issues/${issue.id}/description`,
@@ -174,18 +277,21 @@ describe("issues API with real SQLite", () => {
     expect(put.statusCode).toBe(200);
     expect(put.json().updatedAt).toBeTruthy();
     expect(readFileSync(mdPath, "utf8")).toBe("<p>新正文内容</p>");
+    // PATCH 的 description 字段同样落盘
+    const patched = await patchIssue(requirement.id, issue.id, {
+      description: "## 复现步骤\n\n1. 打开页面",
+    });
+    expect(patched.statusCode).toBe(200);
+    expect(readFileSync(mdPath, "utf8")).toBe("## 复现步骤\n\n1. 打开页面");
     // 详情中的正文来自 md 文件
-    detail = (
+    const detail = (
       await app.inject(`/api/requirements/${requirement.id}/issues/${issue.id}`)
     ).json<IssueDetail>();
-    expect(detail.description).toBe("<p>新正文内容</p>");
-    // closed 状态已退役：非法枚举被拒绝
-    const closed = await app.inject({
-      method: "PATCH",
-      url: `/api/requirements/${requirement.id}/issues/${issue.id}`,
-      payload: { status: "closed" },
-    });
-    expect(closed.statusCode).toBe(400);
+    expect(detail.description).toBe("## 复现步骤\n\n1. 打开页面");
+    const list = (
+      await app.inject(`/api/requirements/${requirement.id}/issues`)
+    ).json<IssueListResult>();
+    expect(list.items[0].description).toBe("## 复现步骤\n\n1. 打开页面");
   });
   it("appends comments without rewriting history and updates timestamps", async () => {
     const requirement = await create();
@@ -218,43 +324,123 @@ describe("issues API with real SQLite", () => {
     });
     expect(empty.statusCode).toBe(400);
   });
-  it("lists issues with phase and status filters and soft-deletes cleanly", async () => {
+  it("lists issues with stage/status/type/keyword filters, counts and updated-desc order", async () => {
     const requirement = await create();
-    const designIssue = await createIssue(requirement.id, { title: "设计问题一" });
-    await createIssue(requirement.id, { title: "设计问题二" });
-    await createIssue(requirement.id, {
-      phase: "development",
+    const ui = await createIssue(requirement.id, {
+      stage: "design",
+      type: "ui",
+      title: "按钮样式不一致",
+      description: "登录页间距偏差 4px",
+    });
+    const development = await createIssue(requirement.id, {
+      stage: "development",
+      type: "development",
       title: "接口报错",
+      description: "保存时返回 500",
     });
-    // phase 过滤
-    const design = (
-      await app.inject(`/api/requirements/${requirement.id}/issues?phase=design`)
+    const testing = await createIssue(requirement.id, {
+      stage: "testing",
+      type: "testing",
+      title: "回归失败",
+      description: "冒烟用例未通过",
+    });
+    // 直接固定 updated_at，验证列表严格按最近更新时间倒序
+    const inspection = new Database(join(directory, "test.sqlite"));
+    const setUpdatedAt = inspection.prepare(
+      "UPDATE issues SET updated_at=? WHERE id=?",
+    );
+    setUpdatedAt.run("2026-10-01T00:00:00.000Z", development.id);
+    setUpdatedAt.run("2026-10-02T00:00:00.000Z", testing.id);
+    setUpdatedAt.run("2026-10-03T00:00:00.000Z", ui.id);
+    inspection.close();
+    const ordered = (
+      await app.inject(`/api/requirements/${requirement.id}/issues`)
     ).json<IssueListResult>();
-    expect(design.total).toBe(2);
-    // status 过滤
-    const inProgress = await app.inject({
-      method: "PATCH",
-      url: `/api/requirements/${requirement.id}/issues/${designIssue.id}`,
-      payload: { status: "processing" },
+    expect(ordered.items.map((item) => item.id)).toEqual([
+      ui.id,
+      testing.id,
+      development.id,
+    ]);
+    // 状态筛选：待确认新枚举可自由流转，计数不受状态筛选影响
+    expect(
+      (await patchIssue(requirement.id, ui.id, { status: "processing" }))
+        .statusCode,
+    ).toBe(200);
+    expect(
+      (
+        await patchIssue(requirement.id, development.id, {
+          status: "resolved",
+          solution: "已修复空指针",
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect(
+      (
+        await patchIssue(requirement.id, testing.id, { status: "to_confirm" })
+      ).statusCode,
+    ).toBe(200);
+    const all = (
+      await app.inject(`/api/requirements/${requirement.id}/issues`)
+    ).json<IssueListResult>();
+    expect(all.total).toBe(3);
+    expect(all.statusCounts).toEqual({
+      pending: 0,
+      to_confirm: 1,
+      processing: 1,
+      resolved: 1,
+      wont_fix: 0,
     });
-    expect(inProgress.statusCode).toBe(200);
     const processing = (
       await app.inject(
         `/api/requirements/${requirement.id}/issues?status=processing`,
       )
     ).json<IssueListResult>();
-    expect(processing.items.map((item) => item.id)).toEqual([designIssue.id]);
-    // 全部列表
-    const all = (
-      await app.inject(`/api/requirements/${requirement.id}/issues`)
+    expect(processing.items.map((item) => item.id)).toEqual([ui.id]);
+    // 状态筛选不改变计数，供状态标签展示实时数量
+    expect(processing.statusCounts).toEqual(all.statusCounts);
+    // 阶段 / 类型 / 关键词（标题与正文）过滤
+    const byStage = (
+      await app.inject(
+        `/api/requirements/${requirement.id}/issues?stage=development`,
+      )
     ).json<IssueListResult>();
-    expect(all.total).toBe(3);
+    expect(byStage.items.map((item) => item.id)).toEqual([development.id]);
+    const byType = (
+      await app.inject(
+        `/api/requirements/${requirement.id}/issues?type=ui`,
+      )
+    ).json<IssueListResult>();
+    expect(byType.items.map((item) => item.id)).toEqual([ui.id]);
+    const byDescription = (
+      await app.inject(
+        `/api/requirements/${requirement.id}/issues?q=${encodeURIComponent("间距")}`,
+      )
+    ).json<IssueListResult>();
+    expect(byDescription.items.map((item) => item.id)).toEqual([ui.id]);
+    const byTitle = (
+      await app.inject(
+        `/api/requirements/${requirement.id}/issues?q=${encodeURIComponent("接口")}`,
+      )
+    ).json<IssueListResult>();
+    expect(byTitle.items.map((item) => item.id)).toEqual([development.id]);
+    // 组合过滤：阶段 + 状态，计数按阶段收窄
+    const combined = (
+      await app.inject(
+        `/api/requirements/${requirement.id}/issues?stage=design&status=resolved`,
+      )
+    ).json<IssueListResult>();
+    expect(combined.total).toBe(0);
+    expect(combined.statusCounts).toMatchObject({
+      processing: 1,
+      to_confirm: 0,
+      resolved: 0,
+    });
     // 软删除：列表消失，行保留且不可访问
     expect(
       (
         await app.inject({
           method: "DELETE",
-          url: `/api/requirements/${requirement.id}/issues/${designIssue.id}`,
+          url: `/api/requirements/${requirement.id}/issues/${ui.id}`,
         })
       ).statusCode,
     ).toBe(204);
@@ -265,7 +451,7 @@ describe("issues API with real SQLite", () => {
     expect(
       (
         await app.inject(
-          `/api/requirements/${requirement.id}/issues/${designIssue.id}`,
+          `/api/requirements/${requirement.id}/issues/${ui.id}`,
         )
       ).statusCode,
     ).toBe(404);
@@ -274,7 +460,7 @@ describe("issues API with real SQLite", () => {
       (
         await app.inject({
           method: "DELETE",
-          url: `/api/requirements/${requirement.id}/issues/${designIssue.id}`,
+          url: `/api/requirements/${requirement.id}/issues/${ui.id}`,
         })
       ).statusCode,
     ).toBe(404);
@@ -285,25 +471,16 @@ describe("issues API with real SQLite", () => {
     const issue = await createIssue(first.id);
     // 跨需求访问被拒绝
     expect(
-      (
-        await app.inject(`/api/requirements/${second.id}/issues/${issue.id}`)
-      ).statusCode,
+      (await app.inject(`/api/requirements/${second.id}/issues/${issue.id}`))
+        .statusCode,
     ).toBe(404);
     // 更新与删除同样受需求归属约束
     expect(
-      (
-        await app.inject({
-          method: "PATCH",
-          url: `/api/requirements/${second.id}/issues/${issue.id}`,
-          payload: { title: "越权修改" },
-        })
-      ).statusCode,
+      (await patchIssue(second.id, issue.id, { title: "越权修改" })).statusCode,
     ).toBe(404);
     // 更新标题成功路径
-    const renamed = await app.inject({
-      method: "PATCH",
-      url: `/api/requirements/${first.id}/issues/${issue.id}`,
-      payload: { title: "修正后的问题标题" },
+    const renamed = await patchIssue(first.id, issue.id, {
+      title: "修正后的问题标题",
     });
     expect(renamed.statusCode).toBe(200);
     expect(renamed.json<Issue>().title).toBe("修正后的问题标题");
@@ -316,7 +493,11 @@ describe("issues API with real SQLite", () => {
       payload: { parentId: null, name },
     });
     expect(response.statusCode).toBe(201);
-    return response.json() as { id: number; name: string; relativePath: string };
+    return response.json() as {
+      id: number;
+      name: string;
+      relativePath: string;
+    };
   };
   it("links artifacts to issues with dedup and keeps nodes untouched after unlink", async () => {
     const requirement = await create();
@@ -356,7 +537,10 @@ describe("issues API with real SQLite", () => {
       payload: { parentId: null, name: "设计稿" },
     });
     expect(folderResponse.statusCode).toBe(201);
-    const folder = folderResponse.json() as { id: number; relativePath: string };
+    const folder = folderResponse.json() as {
+      id: number;
+      relativePath: string;
+    };
     const folderLinked = await app.inject({
       method: "POST",
       url: `/api/requirements/${requirement.id}/issues/${issue.id}/assets`,
@@ -375,9 +559,9 @@ describe("issues API with real SQLite", () => {
     ).json<IssueAssetListResult>();
     expect(list.total).toBe(2);
     // assetId 取自关联行（SELECT 别名 asset_id），前端解除关联依赖该字段
-    expect([...list.items.map((item) => item.assetId)].sort((a, b) => a - b)).toEqual(
-      [assetId, folder.id].sort((a, b) => a - b),
-    );
+    expect(
+      [...list.items.map((item) => item.assetId)].sort((a, b) => a - b),
+    ).toEqual([assetId, folder.id].sort((a, b) => a - b));
     // 取消关联后产出物本体不受影响：节点仍可直接再次关联
     expect(
       (
@@ -418,7 +602,10 @@ describe("issues API with real SQLite", () => {
     const first = await create({ name: "需求一", proposedAt: "2026-10-15" });
     const second = await create({ name: "需求二", proposedAt: "2026-10-15" });
     const issue = await createIssue(first.id);
-    const foreignArtifact = await createArtifact(second.id, "别的需求的文件.md");
+    const foreignArtifact = await createArtifact(
+      second.id,
+      "别的需求的文件.md",
+    );
     // 跨需求关联被拒绝
     const cross = await app.inject({
       method: "POST",
@@ -459,6 +646,73 @@ describe("issues API with real SQLite", () => {
       ).statusCode,
     ).toBe(404);
   });
+  it("protects images referenced by issue descriptions and solutions", async () => {
+    const requirement = await create();
+    const issue = await createIssue(requirement.id, {
+      description: "问题正文",
+    });
+    const uploaded = (
+      await app.inject({
+        method: "POST",
+        url: `/api/requirements/${requirement.id}/artifacts/images`,
+        payload: {
+          nodeId: null,
+          mime: "image/png",
+          data: png,
+          fileName: "现场截图.png",
+        },
+      })
+    ).json<ArtifactImageUploadResult>();
+    // 解决方案引用图片：删除被拦截并指出问题来源
+    expect(
+      (
+        await patchIssue(requirement.id, issue.id, {
+          solution: `![现场截图](${uploaded.relativePath})`,
+        })
+      ).statusCode,
+    ).toBe(200);
+    const blockedBySolution = await app.inject({
+      method: "DELETE",
+      url: `/api/artifacts/nodes/${uploaded.node.id}`,
+    });
+    expect(blockedBySolution.statusCode).toBe(409);
+    expect(blockedBySolution.json().error.message).toContain(
+      `问题 #${issue.id}`,
+    );
+    // 问题描述 md 文件引用图片同样受保护
+    expect(
+      (
+        await patchIssue(requirement.id, issue.id, {
+          solution: "",
+          description: `![现场截图](${uploaded.relativePath})`,
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect(
+      (
+        await app.inject({
+          method: "DELETE",
+          url: `/api/artifacts/nodes/${uploaded.node.id}`,
+        })
+      ).statusCode,
+    ).toBe(409);
+    // 解除引用后可删除图片
+    expect(
+      (
+        await patchIssue(requirement.id, issue.id, {
+          description: "",
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect(
+      (
+        await app.inject({
+          method: "DELETE",
+          url: `/api/artifacts/nodes/${uploaded.node.id}`,
+        })
+      ).statusCode,
+    ).toBe(204);
+  });
   it("cleans up link rows when an issue is soft-deleted", async () => {
     const requirement = await create();
     const issue = await createIssue(requirement.id);
@@ -484,9 +738,7 @@ describe("issues API with real SQLite", () => {
     expect(rows.count).toBe(0);
     // 产出物本体不受问题删除影响：节点详情仍可访问
     expect(
-      (
-        await app.inject(`/api/artifacts/nodes/${assetId}`)
-      ).statusCode,
+      (await app.inject(`/api/artifacts/nodes/${assetId}`)).statusCode,
     ).toBe(200);
   });
 });

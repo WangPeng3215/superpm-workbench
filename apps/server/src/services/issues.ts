@@ -1,18 +1,12 @@
 import type Database from "better-sqlite3";
 import { z } from "zod";
-import {
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readFileSync,
-  realpathSync,
-  writeFileSync,
-} from "node:fs";
-import { isAbsolute, join, relative } from "node:path";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   issueAssetLinkSchema,
   issueCommentSchema,
   issueCreateSchema,
+  issueStatuses,
   issueUpdateSchema,
   type Issue,
   type IssueActivity,
@@ -20,14 +14,25 @@ import {
   type IssueAssetListResult,
   type IssueDetail,
   type IssueListResult,
+  type IssueStage,
   type IssueStatus,
+  type IssueType,
 } from "@superpm/shared";
 import { DomainError, RequirementService } from "./requirements.js";
+import { RequirementDirectoryResolver } from "./requirement-directory.js";
 
 // 正文保存端点的入参校验（与通用更新分离：正文只写 md 文件，不进数据库列）
 const issueDescriptionSaveSchema = z
   .object({ content: z.string().max(200000) })
   .strict();
+
+export interface IssueListQuery {
+  stage?: IssueStage;
+  status?: IssueStatus;
+  type?: IssueType;
+  // 标题 + 描述关键词（描述存于 md 文件，读取后在服务层过滤）
+  q?: string;
+}
 
 interface LinkRow {
   issue_id: number;
@@ -46,10 +51,10 @@ interface LinkRow {
 interface IssueRow {
   id: number;
   requirement_id: number;
-  phase: Issue["phase"];
+  stage: Issue["stage"];
   issue_key: string | null;
   title: string;
-  issue_type: Issue["issueType"];
+  issue_type: Issue["type"];
   status: IssueStatus;
   solution: string | null;
   created_at: string;
@@ -72,13 +77,13 @@ function toIssue(row: IssueRow, description: string): Issue {
   return {
     id: row.id,
     requirementId: row.requirement_id,
-    phase: row.phase,
+    stage: row.stage,
     issueKey: row.issue_key,
     title: row.title,
     description,
-    issueType: row.issue_type,
+    type: row.issue_type,
     status: row.status,
-    solution: row.solution,
+    solution: row.solution ?? "",
     isDeleted: row.is_deleted === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -98,60 +103,74 @@ function toActivity(row: ActivityRow): IssueActivity {
     createdAt: row.created_at,
   };
 }
+function emptyStatusCounts(): Record<IssueStatus, number> {
+  return Object.fromEntries(
+    issueStatuses.map((status) => [status, 0]),
+  ) as Record<IssueStatus, number>;
+}
 const LOCAL_ACTOR = { actorType: "user" as const, actorName: "local-user" };
 
-// 问题正文 md 文件路径：requirements/{rid}/issues/{id}.md（迁移 0009 起正文的唯一权威存储）。
-// 逐级解析并拒绝符号链接与越界（与 artifacts 服务同一套防护）。
+// 问题正文 md 文件路径：需求根目录下 issues/{id}.md（迁移 0009 起正文的唯一权威存储）。
+// 需求根目录由 RequirementDirectoryResolver 统一解析（可读目录名 + 路径安全）。
 function issueDescriptionFile(
-  workspacePath: string,
+  resolver: RequirementDirectoryResolver,
   requirementId: number,
   issueId: number,
 ): string {
-  const root = realpathSync(workspacePath);
-  let current = root;
-  for (const segment of ["requirements", String(requirementId), "issues"]) {
-    current = join(current, segment);
-    if (!existsSync(current)) mkdirSync(current);
-    if (lstatSync(current).isSymbolicLink())
-      throw new DomainError("INVALID_PATH", "路径不能包含符号链接");
-    const resolved = realpathSync(current);
-    const distance = relative(root, resolved);
-    if (distance.startsWith("..") || isAbsolute(distance))
-      throw new DomainError("INVALID_PATH", "路径越界");
-  }
-  return join(current, `${issueId}.md`);
+  const directory = resolver.resolve(requirementId, "issues", true);
+  return join(directory, `${issueId}.md`);
 }
 
 export class IssueService {
+  private readonly directories?: RequirementDirectoryResolver;
   constructor(
     private db: Database.Database,
     private requirements: RequirementService,
     // 工作区根目录：正文 md 文件存放位置；未提供时正文读写退化为空串/跳过（仅测试场景）
     private workspacePath?: string,
-  ) {}
-  list(requirementId: number, phase?: string, status?: string): IssueListResult {
+    directories?: RequirementDirectoryResolver,
+  ) {
+    this.directories =
+      directories ??
+      (workspacePath
+        ? new RequirementDirectoryResolver(db, workspacePath)
+        : undefined);
+  }
+  list(requirementId: number, query: IssueListQuery = {}): IssueListResult {
     this.requirements.get(requirementId);
     const conditions = ["requirement_id=? AND is_deleted=0"];
     const params: (string | number)[] = [requirementId];
-    if (phase) {
-      conditions.push("phase=?");
-      params.push(phase);
+    if (query.stage) {
+      conditions.push("stage=?");
+      params.push(query.stage);
     }
-    if (status) {
-      conditions.push("status=?");
-      params.push(status);
+    if (query.type) {
+      conditions.push("issue_type=?");
+      params.push(query.type);
     }
     const rows = this.db
       .prepare(
-        `SELECT * FROM issues WHERE ${conditions.join(" AND ")} ORDER BY id DESC`,
+        `SELECT * FROM issues WHERE ${conditions.join(" AND ")} ORDER BY updated_at DESC, id DESC`,
       )
       .all(...params) as IssueRow[];
-    return {
-      items: rows.map((row) =>
+    const keyword = query.q?.trim().toLowerCase() ?? "";
+    const matched = rows
+      .map((row) =>
         toIssue(row, this.readDescription(row.requirement_id, row.id)),
-      ),
-      total: rows.length,
-    };
+      )
+      .filter(
+        (issue) =>
+          !keyword ||
+          issue.title.toLowerCase().includes(keyword) ||
+          issue.description.toLowerCase().includes(keyword),
+      );
+    // 计数只按关键词/类型/阶段过滤，不受状态筛选影响
+    const statusCounts = emptyStatusCounts();
+    for (const issue of matched) statusCounts[issue.status] += 1;
+    const items = query.status
+      ? matched.filter((issue) => issue.status === query.status)
+      : matched;
+    return { items, total: items.length, statusCounts };
   }
   detail(requirementId: number, issueId: number): IssueDetail {
     const issue = this.row(requirementId, issueId);
@@ -165,15 +184,22 @@ export class IssueService {
     return { ...issue, activities };
   }
   create(requirementId: number, input: unknown) {
-    this.requirements.get(requirementId);
+    const requirement = this.requirements.get(requirementId);
     const data = issueCreateSchema.parse(input);
     const now = new Date().toISOString();
     return this.db.transaction(() => {
       const result = this.db
         .prepare(
-          "INSERT INTO issues(requirement_id, phase, title, issue_type, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'pending', ?, ?)",
+          "INSERT INTO issues(requirement_id, stage, title, issue_type, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'pending', ?, ?)",
         )
-        .run(requirementId, data.phase, data.title, data.issueType ?? null, now, now);
+        .run(
+          requirementId,
+          data.stage ?? requirement.currentStage,
+          data.title,
+          data.type ?? null,
+          now,
+          now,
+        );
       const issueId = Number(result.lastInsertRowid);
       // 正文直接落盘为 md 文件；写盘失败随事务回滚，不产生半成品问题
       this.writeDescription(requirementId, issueId, data.description);
@@ -189,31 +215,33 @@ export class IssueService {
   update(requirementId: number, issueId: number, input: unknown) {
     const issue = this.row(requirementId, issueId);
     const patch = issueUpdateSchema.parse(input);
+    const nextSolution = patch.solution ?? issue.solution;
+    // 「已解决」必须有正式结论；暂不处理不要求解决说明
+    if (patch.status === "resolved" && !nextSolution.trim())
+      throw new DomainError(
+        "VALIDATION_ERROR",
+        "请先填写解决方案/最终结论，再将问题标记为已解决",
+        400,
+      );
     const now = new Date().toISOString();
     return this.db.transaction(() => {
       // solution 变更：更新快照列并追加一条 solution 历史
       if (patch.solution !== undefined && patch.solution !== issue.solution) {
         this.db
-          .prepare("UPDATE issues SET solution=?, updated_at=? WHERE id=?")
-          .run(patch.solution, now, issueId);
-        this.db
           .prepare(
             "INSERT INTO issue_activities(issue_id, activity_type, content, actor_type, actor_name, created_at) VALUES (?, 'solution', ?, ?, ?, ?)",
           )
-          .run(issueId, patch.solution, LOCAL_ACTOR.actorType, LOCAL_ACTOR.actorName, now);
+          .run(
+            issueId,
+            patch.solution,
+            LOCAL_ACTOR.actorType,
+            LOCAL_ACTOR.actorName,
+            now,
+          );
       }
-      // 状态变更：更新状态与时间戳列并追加 status_change 历史；
-      // 四态自由流转：回到 pending 清空解决时间、置为 resolved 记录解决时间，其余保留
+      // 状态变更：只允许在已解决时保留解决时间，离开已解决即清空
+      const nextStatus = patch.status ?? issue.status;
       if (patch.status && patch.status !== issue.status) {
-        const resolvedAt =
-          patch.status === "resolved"
-            ? now
-            : patch.status === "pending"
-              ? null
-              : issue.resolvedAt;
-        this.db
-          .prepare("UPDATE issues SET status=?, updated_at=?, resolved_at=? WHERE id=?")
-          .run(patch.status, now, resolvedAt, issueId);
         this.db
           .prepare(
             "INSERT INTO issue_activities(issue_id, activity_type, content, old_status, new_status, actor_type, actor_name, created_at) VALUES (?, 'status_change', '', ?, ?, ?, ?, ?)",
@@ -227,21 +255,29 @@ export class IssueService {
             now,
           );
       }
-      // 正文：内容变化时写入 md 文件（文件是唯一权威存储）
-      const descChanged =
-        patch.description !== undefined && patch.description !== issue.description;
-      if (patch.description !== undefined && descChanged)
+      const resolvedAt =
+        nextStatus === "resolved"
+          ? issue.status === "resolved"
+            ? (issue.resolvedAt ?? now)
+            : now
+          : null;
+      // 标题/类型/阶段/状态/方案一次写回；描述单独落盘为 md 文件
+      this.db
+        .prepare(
+          "UPDATE issues SET title=?, stage=?, issue_type=?, status=?, solution=?, resolved_at=?, updated_at=? WHERE id=?",
+        )
+        .run(
+          patch.title ?? issue.title,
+          patch.stage ?? issue.stage,
+          patch.type === undefined ? issue.type : patch.type,
+          nextStatus,
+          nextSolution || null,
+          resolvedAt,
+          now,
+          issueId,
+        );
+      if (patch.description !== undefined && patch.description !== issue.description)
         this.writeDescription(requirementId, issueId, patch.description);
-      // 其余字段直接更新（标题/类型不进历史时间线）
-      if (patch.title !== undefined || patch.issueType !== undefined || descChanged)
-        this.db
-          .prepare("UPDATE issues SET title=?, issue_type=?, updated_at=? WHERE id=?")
-          .run(
-            patch.title ?? issue.title,
-            patch.issueType === undefined ? issue.issueType : patch.issueType,
-            now,
-            issueId,
-          );
       return this.row(requirementId, issueId);
     })();
   }
@@ -278,7 +314,7 @@ export class IssueService {
     return this.detail(requirementId, issueId);
   }
   remove(requirementId: number, issueId: number) {
-    // 软删除：仅标记索引行；问题与产出物的关联行随之清理（md 文件保留）
+    // 软删除：仅标记索引行；问题与产出物的关联行随之清理（md 文件与 images/ 图片保留）
     this.row(requirementId, issueId);
     this.db.transaction(() => {
       this.db
@@ -313,14 +349,19 @@ export class IssueService {
   }
   // 建立关联：问题与 artifact 节点必须同属一个需求；重复关联被拒绝；文件夹与文件均可
   linkAsset(requirementId: number, issueId: number, input: unknown) {
-    const issue = this.row(requirementId, issueId);
+    this.row(requirementId, issueId);
     const data = issueAssetLinkSchema.parse(input);
     const node = this.db
       .prepare(
         "SELECT id, node_type, name, relative_path FROM artifact_nodes WHERE id=? AND requirement_id=?",
       )
       .get(data.assetId, requirementId) as
-      | { id: number; node_type: IssueAssetLink["asset"]["nodeType"]; name: string; relative_path: string }
+      | {
+          id: number;
+          node_type: IssueAssetLink["asset"]["nodeType"];
+          name: string;
+          relative_path: string;
+        }
       | undefined;
     if (!node)
       throw new DomainError("NOT_FOUND", "产出物不存在或不属于该需求", 404);
@@ -364,14 +405,18 @@ export class IssueService {
   }
   // 读取正文 md 文件；工作区未配置或文件缺失时返回空串
   private readDescription(requirementId: number, issueId: number): string {
-    if (!this.workspacePath) return "";
-    const file = issueDescriptionFile(this.workspacePath, requirementId, issueId);
+    if (!this.directories) return "";
+    const file = issueDescriptionFile(this.directories, requirementId, issueId);
     return existsSync(file) ? readFileSync(file, "utf8") : "";
   }
-  private writeDescription(requirementId: number, issueId: number, content: string) {
-    if (!this.workspacePath) return;
+  private writeDescription(
+    requirementId: number,
+    issueId: number,
+    content: string,
+  ) {
+    if (!this.directories) return;
     writeFileSync(
-      issueDescriptionFile(this.workspacePath, requirementId, issueId),
+      issueDescriptionFile(this.directories, requirementId, issueId),
       content,
       "utf8",
     );

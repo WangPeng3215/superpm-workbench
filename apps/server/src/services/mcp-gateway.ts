@@ -7,7 +7,6 @@ import {
   type McpAssetUpdateStatusInput,
   type McpIssueActivitiesInput,
   type McpIssueCommentInput,
-  type McpIssueCreateInput,
   type McpIssueGetInput,
   type McpIssueLinkAssetInput,
   type McpIssueListInput,
@@ -100,7 +99,6 @@ interface McpToolInputs {
   "issue.list": McpIssueListInput;
   "issue.get": McpIssueGetInput;
   "issue.activities": McpIssueActivitiesInput;
-  "issue.create": McpIssueCreateInput;
   "issue.update": McpIssueUpdateInput;
   "issue.comment": McpIssueCommentInput;
   "issue.linkAsset": McpIssueLinkAssetInput;
@@ -122,15 +120,14 @@ export function buildMcpTools(deps: McpGatewayDeps): McpGateway {
     "requirement.get": (input) => deps.requirements.get(input.id),
     "asset.list": (input) => deps.files.list(input.requirementId, input.phase, input.all),
     "asset.get": (input) => deps.files.content(input.requirementId, input.assetId),
-    "issue.list": (input) => deps.issues.list(input.requirementId, input.phase, input.status),
+    "issue.list": (input) => {
+      const { requirementId, ...query } = input;
+      return deps.issues.list(requirementId, query);
+    },
     "issue.get": (input) => deps.issues.detail(input.requirementId, input.issueId),
     "issue.activities": (input) => ({
       items: deps.issues.detail(input.requirementId, input.issueId).activities,
     }),
-    "issue.create": (input) => {
-      const { requirementId, ...payload } = input;
-      return deps.issues.create(requirementId, payload);
-    },
     "issue.update": (input) => {
       const { requirementId, issueId, ...patch } = input;
       // solution 守卫：AI 提交 solution 不得隐式把问题置为已解决——

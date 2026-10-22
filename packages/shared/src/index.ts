@@ -395,44 +395,65 @@ export const assetCategories: AssetCategoryDef[] = [
   { key: "uiAssets", label: "UI 设计稿", defaultPhase: "design" },
   { key: "other", label: "其他文件", defaultPhase: "analysis" },
 ];
-// 问题管理：Issue 仅存在于 UI 设计/开发跟进/需求测试三个阶段
-export const issuePhases = ["design", "development", "testing"] as const;
-export type IssuePhase = (typeof issuePhases)[number];
-export const issueStatuses = ["pending", "processing", "testing", "resolved"] as const;
+// 问题记录：四个需求阶段均可记录问题（V1.0 文档 §3）
+export const issueStages = stages;
+export type IssueStage = Stage;
+export const issueStatuses = [
+  "pending",
+  "to_confirm",
+  "processing",
+  "resolved",
+  "wont_fix",
+] as const;
 export type IssueStatus = (typeof issueStatuses)[number];
 export const issueStatusLabels: Record<IssueStatus, string> = {
-  pending: "待处理",
+  pending: "待分析",
+  to_confirm: "待确认",
   processing: "处理中",
-  testing: "测试中",
   resolved: "已解决",
+  wont_fix: "暂不处理",
 };
-export const issueTypes = ["ui", "development", "defect", "change", "question"] as const;
+export const issueTypes = [
+  "analysis",
+  "ui",
+  "development",
+  "testing",
+  "other",
+] as const;
 export type IssueType = (typeof issueTypes)[number];
 export const issueTypeLabels: Record<IssueType, string> = {
-  ui: "UI",
-  development: "开发",
-  defect: "缺陷",
-  change: "变更",
-  question: "疑问",
+  analysis: "需求分析疑问",
+  ui: "UI 设计疑问",
+  development: "开发疑问",
+  testing: "测试疑问",
+  other: "其他",
 };
-export const issueActivityTypes = ["comment", "solution", "status_change", "system"] as const;
+export const issueActivityTypes = [
+  "comment",
+  "solution",
+  "status_change",
+  "system",
+] as const;
 export type IssueActivityType = (typeof issueActivityTypes)[number];
 export const issueCreateSchema = z
   .object({
-    phase: z.enum(issuePhases),
+    // 未指定时默认取需求当前阶段（由服务层补齐）
+    stage: z.enum(issueStages).optional(),
     title: z.string().trim().min(1, "请输入问题标题").max(200),
-    // 正文（md 文件内容）：迁移 0009 起唯一权威存储为工作区 md 文件
+    // 描述（Markdown 原文）：迁移 0009 起权威存储为工作区 md 文件
     description: z.string().max(200000).default(""),
-    issueType: z.enum(issueTypes).optional(),
+    type: z.enum(issueTypes).nullable().optional(),
   })
   .strict();
 export const issueUpdateSchema = z
   .object({
     title: z.string().trim().min(1, "请输入问题标题").max(200).optional(),
     description: z.string().max(200000).optional(),
-    issueType: z.enum(issueTypes).nullable().optional(),
+    stage: z.enum(issueStages).optional(),
+    type: z.enum(issueTypes).nullable().optional(),
     status: z.enum(issueStatuses).optional(),
-    solution: z.string().max(10000).optional(),
+    // 解决方案/最终结论（Markdown 原文）；改为「已解决」前必须非空
+    solution: z.string().max(200000).optional(),
   })
   .strict()
   .refine((value) => Object.keys(value).length > 0, "请提交需要更新的字段");
@@ -442,14 +463,15 @@ export const issueCommentSchema = z
 export interface Issue {
   id: number;
   requirementId: number;
-  phase: IssuePhase;
+  stage: IssueStage;
   issueKey: string | null;
   title: string;
-  // 正文：工作区 md 文件内容（迁移 0009 起 description/description_html 列仅存量兼容）
+  // 描述：工作区 md 文件内容（迁移 0009 起 description/description_html 列仅存量兼容）
   description: string;
-  issueType: IssueType | null;
+  type: IssueType | null;
   status: IssueStatus;
-  solution: string | null;
+  // 解决方案/最终结论：Markdown 原文（数据库列 solution）
+  solution: string;
   isDeleted: boolean;
   createdAt: string;
   updatedAt: string;
@@ -472,6 +494,8 @@ export interface IssueDetail extends Issue {
 export interface IssueListResult {
   items: Issue[];
   total: number;
+  // 各状态数量（不计入 status 筛选，供状态筛选标签展示实时计数）
+  statusCounts: Record<IssueStatus, number>;
 }
 // 问题与产出物关联（artifacts 体系）：同一问题与同一 artifact 节点仅允许一条关联记录；
 // assetId 指向 artifact_nodes.id，文件夹与文件均可关联
@@ -521,7 +545,8 @@ export function resolveCategoryOpenAction(
   files: Pick<RequirementFile, "id" | "isFinal">[],
 ): CategoryOpenAction {
   if (files.length === 0) return { action: "empty" };
-  if (files.length === 1) return { action: "open_single", assetId: files[0].id };
+  if (files.length === 1)
+    return { action: "open_single", assetId: files[0].id };
   const confirmed = files.filter((file) => file.isFinal);
   if (confirmed.length === 1)
     return { action: "open_single", assetId: confirmed[0].id };
@@ -608,7 +633,8 @@ export const artifactNamePattern = /^[^\\/:*?"<>|\x00-\x1f]+$/;
 export function isValidArtifactName(name: string): boolean {
   const trimmed = name.trim();
   if (!trimmed || trimmed !== name) return false;
-  if (trimmed === "." || trimmed === ".." || trimmed.includes("..")) return false;
+  if (trimmed === "." || trimmed === ".." || trimmed.includes(".."))
+    return false;
   if (/[. ]$/.test(trimmed)) return false;
   return artifactNamePattern.test(trimmed) && trimmed.length <= 200;
 }
@@ -685,7 +711,11 @@ export const artifactContentSaveSchema = z
 export const artifactLinkCreateSchema = z
   .object({
     folderNodeId: z.number().int().positive().nullable().default(null),
-    name: z.string().trim().min(1, "请输入链接名称").max(200, "名称最多 200 字"),
+    name: z
+      .string()
+      .trim()
+      .min(1, "请输入链接名称")
+      .max(200, "名称最多 200 字"),
     url: z.string().trim().min(1, "请填写链接地址").max(2000),
     description: z.string().trim().max(2000).optional(),
   })
@@ -698,10 +728,7 @@ export const artifactLinkUpdateSchema = z
     description: z.string().trim().max(2000).nullable().optional(),
   })
   .strict()
-  .refine(
-    (value) => Object.keys(value).length > 0,
-    "请提交需要更新的字段",
-  );
+  .refine((value) => Object.keys(value).length > 0, "请提交需要更新的字段");
 export const artifactRefreshSchema = z
   .object({ relativePath: z.string().max(2000).optional() })
   .strict();
@@ -759,6 +786,100 @@ export interface ArtifactRefreshResult {
   added: number;
   updated: number;
   missing: number;
+}
+// ===== 需求物理目录映射与初始化（V1.1 文档 §12，迁移 0010）=====
+// 物理根目录名 = 需求编号 + 空格 + 需求名称；数据库以需求 ID 关联，不依赖目录名识别需求
+export const requirementImagesFolder = "images";
+export const requirementDefaultFolders = [
+  "需求分析",
+  "PRD",
+  "原型图",
+  "资料",
+] as const;
+export const requirementWorkspaceStatuses = [
+  "pending",
+  "completed",
+  "failed",
+] as const;
+export type RequirementWorkspaceStatus =
+  (typeof requirementWorkspaceStatuses)[number];
+export const requirementWorkspaceStatusLabels: Record<
+  RequirementWorkspaceStatus,
+  string
+> = {
+  pending: "待初始化",
+  completed: "已初始化",
+  failed: "初始化失败",
+};
+// 初始化阶段标识：失败时记录到该阶段，便于定位与重试
+export const requirementWorkspaceStages = [
+  "resolve",
+  "create-directory",
+  "memory",
+  "folders",
+  "index",
+] as const;
+export type RequirementWorkspaceStage =
+  (typeof requirementWorkspaceStages)[number];
+// 初始化阶段的中文名：失败时前端直接展示「在哪一步失败」
+export const requirementWorkspaceStageLabels: Record<
+  RequirementWorkspaceStage,
+  string
+> = {
+  resolve: "解析目录",
+  "create-directory": "创建目录",
+  memory: "生成需求记忆",
+  folders: "创建默认目录",
+  index: "登记索引",
+};
+// 目录名清洗：去掉 Windows 保留字符与控制字符，压缩空白，去首尾点/空格
+export function requirementDirectoryName(
+  requirementNo: string,
+  name: string,
+): string {
+  const clean = (value: string) =>
+    value
+      .replace(/[\\/:*?"<>|\x00-\x1f]/g, "-")
+      .replace(/\s+/g, " ")
+      .replace(/^[.\s]+|[.\s]+$/g, "");
+  const no = clean(requirementNo) || "REQ";
+  const title = clean(name).slice(0, 80);
+  return title ? `${no} ${title}` : no;
+}
+// 系统级资源（文档 §12.3）：需求记忆文件与 images 目录不可通过普通操作删除/改名/移动
+export function isProtectedArtifactPath(relativePath: string): boolean {
+  return (
+    relativePath === artifactMemoryName ||
+    relativePath === requirementImagesFolder
+  );
+}
+export interface RequirementWorkspaceState {
+  requirementId: number;
+  // 物理根目录名（需求编号 + 名称）与相对工作区根目录的路径
+  directoryName: string;
+  relativePath: string;
+  status: RequirementWorkspaceStatus;
+  failureStage: RequirementWorkspaceStage | null;
+  failureReason: string | null;
+  initializedAt: string | null;
+  directoryExists: boolean;
+  // 缺失的系统级资源与默认目录名（磁盘比对结果，供「修复默认结构」提示）
+  missingResources: string[];
+}
+// 图片上传（文档 §12.4）：nodeId 为当前编辑的文档节点，用于按文档所在目录计算相对路径
+export const artifactImageUploadSchema = z
+  .object({
+    nodeId: z.number().int().positive().nullable().default(null),
+    mime: z.string().min(1, "缺少图片类型"),
+    data: z.string().min(1, "缺少图片数据"),
+    fileName: z.string().trim().max(200).optional(),
+  })
+  .strict();
+export interface ArtifactImageUploadResult {
+  node: ArtifactNode;
+  // 相对当前文档所在目录的 Markdown 图片路径（如 ../images/x.png）
+  relativePath: string;
+  markdown: string;
 }
 // MCP 工具契约层（阶段 10）：契约只声明、不执行，网关见 apps/server mcp-gateway
 export * from "./mcp-contract.js";

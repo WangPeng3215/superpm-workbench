@@ -55,23 +55,18 @@ describe("MCP 契约与服务网关", () => {
   const createRequirement = (name = "登录流程优化") =>
     requirements.create({ name, proposedAt: "2026-10-15" }) as Requirement;
 
-  const createIssueViaMcp = (
+  // 正式问题记录只能由用户界面创建：测试直接调用业务服务，不经过 MCP
+  const createIssueDirect = (
     requirementId: number,
-    idempotencyKey: string,
     title = "按钮样式与设计稿不一致",
-  ) =>
-    gateway.call(
-      "issue.create",
-      { requirementId, phase: "design", title },
-      { idempotencyKey },
-    ) as Issue;
+  ) => issues.create(requirementId, { stage: "design", title }) as Issue;
 
-  it("契约完整性：14 个工具、只读/写各 7、幂等标注与错误码白名单一致", () => {
-    expect(mcpToolContracts).toHaveLength(14);
+  it("契约完整性：13 个工具、只读 7 / 写 6、幂等标注与错误码白名单一致", () => {
+    expect(mcpToolContracts).toHaveLength(13);
     const readonly = mcpToolContracts.filter((contract) => contract.kind === "readonly");
     const mutating = mcpToolContracts.filter((contract) => contract.kind === "mutating");
     expect(readonly).toHaveLength(7);
-    expect(mutating).toHaveLength(7);
+    expect(mutating).toHaveLength(6);
     expect(readonly.map((contract) => contract.name).sort()).toEqual(
       [...mcpReadonlyToolNames].sort(),
     );
@@ -110,7 +105,7 @@ describe("MCP 契约与服务网关", () => {
       },
       { idempotencyKey: "asset-1" },
     ) as RequirementFile;
-    const issue = createIssueViaMcp(requirement.id, "issue-1");
+    const issue = createIssueDirect(requirement.id);
 
     const listed = gateway.call("requirement.list", {}) as RequirementListResult;
     expect(listed.total).toBe(1);
@@ -144,23 +139,71 @@ describe("MCP 契约与服务网关", () => {
     expect(asset.content).toBe("本项目背景说明正文");
   });
 
-  it("issue.create 幂等：同幂等键只创建一条且返回同 id，不同键各建一条", () => {
+  it("MCP 不提供 issue.create：AI 无法写入正式问题记录", () => {
     const requirement = createRequirement();
-    const first = createIssueViaMcp(requirement.id, "same-key");
-    // 同键重放：直接返回首次结果，即使入参不同也不生效
-    const replay = createIssueViaMcp(requirement.id, "same-key", "不同标题也不会生效");
-    expect(replay.id).toBe(first.id);
-    expect(replay.title).toBe(first.title);
-    expect(issues.list(requirement.id).total).toBe(1);
-
-    const second = createIssueViaMcp(requirement.id, "other-key", "第二个问题");
-    expect(second.id).not.toBe(first.id);
-    expect(issues.list(requirement.id).total).toBe(2);
+    expect(mcpToolContracts.map((contract) => contract.name)).not.toContain(
+      "issue.create",
+    );
+    const rejected = gateway.call(
+      "issue.create",
+      {
+        requirementId: requirement.id,
+        stage: "design",
+        title: "AI 自行创建的问题",
+      },
+      { idempotencyKey: "create-1" },
+    ) as StructuredError;
+    expect(rejected).toMatchObject({ error: { code: "NOT_FOUND" } });
+    expect(issues.list(requirement.id).total).toBe(0);
   });
 
-  it("solution 守卫：一次调用既提交 solution 又置 resolved 被拒，两步显式调用成功", () => {
+  it("issue.update 幂等：同幂等键只生效一次且返回首次结果", () => {
     const requirement = createRequirement();
-    const issue = createIssueViaMcp(requirement.id, "guard-issue");
+    const issue = createIssueDirect(requirement.id);
+    const first = gateway.call(
+      "issue.update",
+      { requirementId: requirement.id, issueId: issue.id, title: "第一次修改" },
+      { idempotencyKey: "same-key" },
+    ) as Issue;
+    expect(first.title).toBe("第一次修改");
+    // 同键重放：直接返回首次结果，即使入参不同也不生效
+    const replay = gateway.call(
+      "issue.update",
+      {
+        requirementId: requirement.id,
+        issueId: issue.id,
+        title: "同键重放不会生效",
+      },
+      { idempotencyKey: "same-key" },
+    ) as Issue;
+    expect(replay.id).toBe(first.id);
+    expect(replay.title).toBe("第一次修改");
+    const detail = gateway.call("issue.get", {
+      requirementId: requirement.id,
+      issueId: issue.id,
+    }) as IssueDetail;
+    expect(detail.title).toBe("第一次修改");
+    // 不同键正常工作
+    const second = gateway.call(
+      "issue.update",
+      { requirementId: requirement.id, issueId: issue.id, title: "第二次修改" },
+      { idempotencyKey: "other-key" },
+    ) as Issue;
+    expect(second.title).toBe("第二次修改");
+  });
+
+  it("solution 守卫：无方案不能解决；一次调用既提交 solution 又置 resolved 被拒，两步显式调用成功", () => {
+    const requirement = createRequirement();
+    const issue = createIssueDirect(requirement.id);
+    // 服务层守卫：没有正式结论不得标记已解决
+    const missingSolution = gateway.call(
+      "issue.update",
+      { requirementId: requirement.id, issueId: issue.id, status: "resolved" },
+      { idempotencyKey: "guard-0" },
+    ) as StructuredError;
+    expect(missingSolution).toMatchObject({
+      error: { code: "VALIDATION_ERROR" },
+    });
     const rejected = gateway.call(
       "issue.update",
       {
@@ -175,7 +218,7 @@ describe("MCP 契约与服务网关", () => {
     // 被拒调用不得产生任何副作用
     expect(
       gateway.call("issue.get", { requirementId: requirement.id, issueId: issue.id }) as IssueDetail,
-    ).toMatchObject({ status: "pending", solution: null });
+    ).toMatchObject({ status: "pending", solution: "" });
 
     // 第一步：显式保存解决方案（状态保持不变）
     const saved = gateway.call(
@@ -223,7 +266,6 @@ describe("MCP 契约与服务网关", () => {
       "asset.updateStatus",
       "issue.activities",
       "issue.comment",
-      "issue.create",
       "issue.get",
       "issue.linkAsset",
       "issue.list",
@@ -238,7 +280,7 @@ describe("MCP 契约与服务网关", () => {
 
   it("issue.comment 幂等：同幂等键不重复追加活动", () => {
     const requirement = createRequirement();
-    const issue = createIssueViaMcp(requirement.id, "comment-issue");
+    const issue = createIssueDirect(requirement.id);
     gateway.call(
       "issue.comment",
       { requirementId: requirement.id, issueId: issue.id, content: "已与设计师确认" },
@@ -271,22 +313,27 @@ describe("MCP 契约与服务网关", () => {
 
   it("幂等保护：mutating 工具缺少幂等键被拒且不产生副作用，只读工具无需幂等键", () => {
     const requirement = createRequirement();
-    const rejected = gateway.call("issue.create", {
+    const issue = createIssueDirect(requirement.id, "原始标题");
+    const rejected = gateway.call("issue.update", {
       requirementId: requirement.id,
-      phase: "design",
+      issueId: issue.id,
       title: "无键调用",
     }) as StructuredError;
     expect(rejected).toMatchObject({ error: { code: "VALIDATION_ERROR" } });
-    expect(issues.list(requirement.id).total).toBe(0);
+    const unchanged = gateway.call("issue.get", {
+      requirementId: requirement.id,
+      issueId: issue.id,
+    }) as IssueDetail;
+    expect(unchanged.title).toBe("原始标题");
 
-    // 只读工具不需要幂等键；列表仅包含 setUp 创建的需求，被拒调用未产生额外副作用
+    // 只读工具不需要幂等键；被拒调用未产生额外副作用
     const listed = gateway.call("requirement.list", {}) as RequirementListResult;
     expect(listed.total).toBe(1);
   });
 
   it("issue.linkAsset / issue.unlinkAsset：关联去重返回 CONFLICT，取消后可复检", () => {
     const requirement = createRequirement();
-    const issue = createIssueViaMcp(requirement.id, "link-issue");
+    const issue = createIssueDirect(requirement.id);
     // 问题关联已切换到 artifacts 体系：直接向 artifact_nodes 插入一个文件节点
     const now = "2026-01-01T00:00:00.000Z";
     const node = db
@@ -362,7 +409,7 @@ describe("MCP 契约与服务网关", () => {
     ) as RequirementFile;
     expect(finalized).toMatchObject({ id: asset.id, status: "final", description: "已确认版本" });
 
-    const issue = createIssueViaMcp(requirement.id, "activities-issue");
+    const issue = createIssueDirect(requirement.id);
     gateway.call(
       "issue.comment",
       { requirementId: requirement.id, issueId: issue.id, content: "进展更新" },

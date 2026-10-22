@@ -3,19 +3,27 @@ import { onBeforeUnmount, ref, watch } from "vue";
 import { useEditor, EditorContent } from "@tiptap/vue-3";
 import StarterKit from "@tiptap/starter-kit";
 import Image from "@tiptap/extension-image";
+import { TableKit } from "@tiptap/extension-table";
 import { TaskItem, TaskList } from "@tiptap/extension-list";
 import { Placeholder } from "@tiptap/extensions";
 import DOMPurify from "dompurify";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { requirementApi } from "../../api/requirements";
+import { artifactApi } from "../../api/artifacts";
+import { errorMessage } from "../../api/client";
+import { imageDisplayUrl } from "./doc-images";
 
 const props = defineProps<{
   html: string;
   text?: string;
   requirementId?: number;
+  // 当前编辑的文档节点：图片相对路径以文档所在目录为基准（文档 §12.4）
+  nodeId?: number | null;
   label?: string;
+  placeholder?: string;
   fillHeight?: boolean;
   fillCard?: boolean;
+  // 紧凑模式：单行工具条 + 较低的编辑区，用于问题记录等并排双编辑器
+  compact?: boolean;
 }>();
 const emit = defineEmits<{
   "update:html": [html: string];
@@ -65,15 +73,40 @@ const editor = useEditor({
       },
     }),
     Image.configure({ allowBase64: false }),
+    // 表格：Markdown 表格需要可编辑承载，否则读入的表格会在保存时被丢弃
+    TableKit.configure({ table: { resizable: false } }),
     TaskList,
     TaskItem.configure({ nested: true }),
-    Placeholder.configure({ placeholder: "在这里输入或粘贴内容…" }),
+    Placeholder.configure({
+      placeholder: props.placeholder ?? "在这里输入或粘贴内容…",
+    }),
   ],
   content: toHtml(props.html, props.text ?? ""),
   editorProps: {
     attributes: {
       class: "rich-document",
       "aria-label": props.label ?? "需求描述内容",
+    },
+    // 粘贴图片：阻止把本地图片当作 HTML/文件路径插入，统一走 images/ 上传
+    handlePaste: (_view, event) => {
+      const files = imageFilesFrom(event.clipboardData);
+      if (!files.length) return false;
+      event.preventDefault();
+      void insertImages(files);
+      return true;
+    },
+    // 拖拽图片：按落点插入，多图一次上传后整体插入
+    handleDrop: (view, event, _slice, moved) => {
+      if (moved) return false;
+      const files = imageFilesFrom(event.dataTransfer);
+      if (!files.length) return false;
+      event.preventDefault();
+      const position = view.posAtCoords({
+        left: event.clientX,
+        top: event.clientY,
+      });
+      void insertImages(files, position?.pos);
+      return true;
     },
   },
   onUpdate: ({ editor: instance }) => {
@@ -107,10 +140,7 @@ function indentList(outdent: boolean) {
   if (!instance) return;
   const type = instance.isActive("taskItem") ? "taskItem" : "listItem";
   const chain = instance.chain().focus();
-  (outdent
-    ? chain.liftListItem(type)
-    : chain.sinkListItem(type)
-  ).run();
+  (outdent ? chain.liftListItem(type) : chain.sinkListItem(type)).run();
 }
 async function setLink() {
   const instance = editor.value;
@@ -147,50 +177,90 @@ async function setLink() {
     .setLink({ href: value })
     .run();
 }
-async function upload(event: Event) {
-  const target = event.target as HTMLInputElement;
-  const file = target.files?.[0];
-  if (!file) return;
+const failedImages = new Set<string>();
+function onImageError(event: Event) {
+  const target = event.target as HTMLElement | null;
+  if (!target || target.tagName !== "IMG") return;
+  const image = target as HTMLImageElement;
+  image.classList.add("image-broken");
+  image.title = "图片加载失败，请检查图片文件是否仍存在";
+  if (failedImages.has(image.src)) return;
+  failedImages.add(image.src);
+  ElMessage.warning("有图片加载失败，请检查图片文件是否仍存在");
+}
+async function readBase64(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(",")[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+// 粘贴、拖拽与文件选择共用：先上传到需求根目录 images/，再以可访问地址插入
+async function insertImages(files: File[], at?: number) {
+  if (!files.length) return;
   if (!props.requirementId) {
     ElMessage.info("请先保存需求，再插入本地图片");
     return;
   }
   uploading.value = true;
   try {
-    if (file.size > 5 * 1024 * 1024) throw new Error("图片不能超过 5 MB");
-    const data = await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result).split(",")[1]);
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    });
-    const result = await requirementApi.uploadImage(
-      props.requirementId,
-      data,
-      file.type,
-    );
-    editor.value
-      ?.chain()
-      .focus()
-      .setImage({ src: result.url, alt: file.name })
-      .run();
+    const nodes = [];
+    for (const file of files) {
+      if (!file.type.startsWith("image/"))
+        throw new Error("仅支持插入图片文件");
+      if (file.size > 5 * 1024 * 1024) throw new Error("图片不能超过 5 MB");
+      const data = await readBase64(file);
+      // 后端写入需求根目录 images/，返回相对当前文档目录的路径（文档 §12.4）
+      const result = await artifactApi.uploadImage(props.requirementId, {
+        nodeId: props.nodeId ?? null,
+        mime: file.type,
+        data,
+        fileName: file.name,
+      });
+      nodes.push({
+        type: "image",
+        attrs: {
+          // 编辑器内用可访问地址预览，保存时再转回相对路径
+          src: imageDisplayUrl(
+            props.requirementId,
+            result.relativePath,
+            props.nodeId,
+          ),
+          alt: file.name,
+        },
+      });
+    }
+    const chain = editor.value?.chain().focus();
+    if (!chain) return;
+    if (at === undefined) chain.insertContent(nodes).run();
+    else chain.insertContentAt(at, nodes).run();
   } catch (error) {
     ElMessage.error(errorMessage(error));
   } finally {
     uploading.value = false;
-    if (input.value) input.value.value = "";
   }
 }
-onBeforeUnmount(() => editor.value?.destroy());
-function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : "图片上传失败";
+function imageFilesFrom(data: DataTransfer | null) {
+  return Array.from(data?.files ?? []).filter((file) =>
+    file.type.startsWith("image/"),
+  );
 }
+async function upload(event: Event) {
+  const target = event.target as HTMLInputElement;
+  const file = target.files?.[0];
+  if (!file) return;
+  await insertImages([file]);
+  if (input.value) input.value.value = "";
+}
+onBeforeUnmount(() => editor.value?.destroy());
 </script>
 <template>
   <div
     class="inline-rich"
-    :class="{ 'fill-height': fillHeight, 'fill-card': fillCard }"
+    :class="{ 'fill-height': fillHeight, 'fill-card': fillCard, compact }"
     v-if="editor"
+    @error.capture="onImageError"
   >
     <div class="rich-toolbar">
       <div class="toolbar-group">
@@ -294,7 +364,7 @@ function errorMessage(error: unknown) {
           正文
         </button>
         <button
-          v-for="level in ([1, 2, 3] as const)"
+          v-for="level in [1, 2, 3] as const"
           :key="level"
           :class="{ active: editor.isActive('heading', { level }) }"
           :aria-label="`标题 ${level}`"
@@ -670,6 +740,45 @@ function errorMessage(error: unknown) {
   grid-template-rows: auto minmax(200px, 1fr);
   flex: 1 1 auto;
 }
+/* 紧凑模式：工具条固定单行横向滚动，编辑区高度收敛，适合并排两个编辑器 */
+.inline-rich.compact .rich-toolbar {
+  flex-wrap: nowrap;
+  max-height: none;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 5px 8px;
+  scrollbar-width: none;
+}
+.inline-rich.compact .rich-toolbar::-webkit-scrollbar {
+  display: none;
+}
+/* 窄容器（移动端堆叠 / 平板双栏）工具条改为换行展示，避免按钮被裁切 */
+@container (max-width: 600px) {
+  .inline-rich.compact .rich-toolbar {
+    flex-wrap: wrap;
+    overflow: visible;
+    row-gap: 4px;
+  }
+}
+.inline-rich.compact :deep(.rich-document) {
+  min-height: 168px;
+  max-height: 360px;
+  padding: 12px 14px;
+}
+.inline-rich :deep(.rich-document img) {
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+}
+.inline-rich :deep(.rich-document img.image-broken) {
+  min-height: 40px;
+  padding: 10px;
+  outline: 1px dashed var(--tone-red-bd);
+  outline-offset: 2px;
+  background: var(--tone-red-bg);
+  color: var(--tone-red-fg);
+  font-size: 12px;
+}
 .inline-rich.fill-card :deep(.rich-document) {
   height: 100%;
   min-height: 0;
@@ -747,6 +856,39 @@ function errorMessage(error: unknown) {
   height: auto;
   border-radius: 4px;
 }
+/* 表格（Markdown 表格的编辑承载）：边框与表头样式对齐正文排版 */
+.inline-rich :deep(.rich-document table) {
+  width: 100%;
+  margin: 0 0 10px;
+  border-collapse: collapse;
+  table-layout: auto;
+}
+.inline-rich :deep(.rich-document th),
+.inline-rich :deep(.rich-document td) {
+  min-width: 60px;
+  padding: 6px 10px;
+  border: 1px solid var(--border-base);
+  vertical-align: top;
+  text-align: left;
+}
+.inline-rich :deep(.rich-document th) {
+  background: var(--bg-subtle);
+  font-weight: 600;
+}
+.inline-rich :deep(.rich-document th p),
+.inline-rich :deep(.rich-document td p) {
+  margin: 0;
+}
+.inline-rich :deep(.rich-document .selectedCell::after) {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--brand) 12%, transparent);
+  pointer-events: none;
+}
+.inline-rich :deep(.rich-document .column-resize-handle) {
+  display: none;
+}
 .inline-rich :deep(.rich-document ul[data-type="taskList"]) {
   list-style: none;
   padding-left: 2px;
@@ -764,8 +906,7 @@ function errorMessage(error: unknown) {
   margin: 5px 0 0;
   accent-color: var(--brand);
 }
-.inline-rich
-  :deep(.rich-document p.is-editor-empty:first-child::before) {
+.inline-rich :deep(.rich-document p.is-editor-empty:first-child::before) {
   content: attr(data-placeholder);
   color: var(--text-faint);
   float: left;

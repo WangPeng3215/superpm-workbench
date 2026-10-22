@@ -1,20 +1,22 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { marked } from "marked";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import {
+  Aim,
+  ArrowLeft,
   ArrowRight,
-  ChatDotRound,
-  CircleCheck,
-  Close,
+  Brush,
+  Cpu,
+  DataAnalysis,
   Delete,
   Document,
-  Download,
   Folder,
-  InfoFilled,
   Link,
+  MoreFilled,
   Plus,
-  Switch,
+  RefreshRight,
+  Search,
+  WarningFilled,
 } from "@element-plus/icons-vue";
 import {
   issueAssetRelationLabels,
@@ -23,12 +25,12 @@ import {
   issueTypes,
   issueTypeLabels,
   stageLabels,
+  stages,
   type Issue,
-  type IssueActivity,
   type IssueAssetLink,
   type IssueDetail,
   type IssueLinkedArtifact,
-  type IssuePhase,
+  type IssueStage,
   type IssueStatus,
   type IssueType,
 } from "@superpm/shared";
@@ -36,474 +38,26 @@ import { issueApi, type IssueUpdatePayload } from "../../api/issues";
 import { artifactApi } from "../../api/artifacts";
 import { errorMessage } from "../../api/client";
 import InlineRichTextEditor from "./InlineRichTextEditor.vue";
+import { toDisplayHtml, toStoredHtml } from "./doc-images";
+import { documentToEditorHtml, htmlToMarkdown } from "./doc-markdown";
 
+// 问题记录（开发文档 V1.0）：左栏台账 + 右栏详情。
+// 标题/类型/阶段/状态/描述/结论全部自动保存；描述与结论各自保存为 Markdown，
+// 图片统一落到需求根目录 images/，编辑器内写相对路径。
 const props = defineProps<{
   requirementId: number;
-  phase: IssuePhase;
-  requirementName?: string;
+  currentStage?: IssueStage;
 }>();
 
-// 正文加载：md 文件内容可能是纯 markdown 或编辑器 html，统一转为编辑器可回显的 html
-const htmlSourcePattern =
-  /^\s*<(?:!doctype|h[1-6]|p|ul|ol|li|div|table|pre|blockquote|img)\b/i;
-function toEditorHtml(content: string) {
-  const trimmed = content.trim();
-  if (!trimmed) return "";
-  if (htmlSourcePattern.test(trimmed)) return trimmed;
-  return String(marked.parse(content, { async: false }));
+interface Snapshot {
+  title: string;
+  type: IssueType | null;
+  stage: IssueStage;
+  status: IssueStatus;
+  descHtml: string;
+  solHtml: string;
 }
-
-// ===== 左栏：问题列表 =====
-const issues = ref<Issue[]>([]);
-const loading = ref(false);
-// 状态筛选：空串表示全部
-const statusFilter = ref<IssueStatus | "">("");
-
-async function loadList() {
-  loading.value = true;
-  try {
-    const result = await issueApi.list(
-      props.requirementId,
-      props.phase,
-      statusFilter.value || undefined,
-    );
-    // 服务端按创建倒序返回，这里按更新时间倒序展示
-    issues.value = [...result.items].sort((a, b) =>
-      b.updatedAt.localeCompare(a.updatedAt),
-    );
-    // 清理已不存在（删除/被过滤）的选择项
-    const alive = new Set(issues.value.map((issue) => issue.id));
-    selectedIds.value = selectedIds.value.filter((id) => alive.has(id));
-  } catch (error) {
-    ElMessage.error(errorMessage(error));
-  } finally {
-    loading.value = false;
-  }
-}
-
-// 切换阶段：关闭详情并重新拉取（状态筛选一并还原）
-watch(
-  () => props.phase,
-  () => {
-    cancelDescSave();
-    descDirty.value = false;
-    detail.value = undefined;
-    selectedIds.value = [];
-    if (statusFilter.value === "") {
-      void loadList();
-    } else {
-      statusFilter.value = ""; // 触发筛选 watcher 重新拉取
-    }
-  },
-);
-watch(statusFilter, () => void loadList());
-onMounted(loadList);
-onBeforeUnmount(() => {
-  cancelDescSave();
-  void flushDescSave(); // 卸载前保存未落盘的正文
-});
-
-// ===== 多选导出 Markdown =====
-const selectedIds = ref<number[]>([]);
-const exporting = ref(false);
-function isSelected(id: number) {
-  return selectedIds.value.includes(id);
-}
-function onItemCheck(issue: Issue, checked: boolean | string | number) {
-  if (checked === true) {
-    if (!selectedIds.value.includes(issue.id))
-      selectedIds.value = [...selectedIds.value, issue.id];
-  } else {
-    selectedIds.value = selectedIds.value.filter((id) => id !== issue.id);
-  }
-}
-const allSelected = computed(
-  () =>
-    issues.value.length > 0 &&
-    issues.value.every((issue) => selectedIds.value.includes(issue.id)),
-);
-function toggleAll(checked: boolean | string | number) {
-  selectedIds.value = checked === true ? issues.value.map((i) => i.id) : [];
-}
-
-function downloadTextFile(fileName: string, content: string) {
-  const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = fileName;
-  anchor.click();
-  URL.revokeObjectURL(url);
-}
-
-function buildExportMarkdown(name: string, details: IssueDetail[]): string {
-  const blocks = details.map((issue) => {
-    const lines: string[] = [];
-    lines.push(`# ${name}-${issue.title}`);
-    lines.push("");
-    lines.push(
-      `- 分类：${issue.issueType ? issueTypeLabels[issue.issueType] : "未分类"}`,
-    );
-    lines.push(`- 状态：${issueStatusLabels[issue.status]}`);
-    lines.push(`- 阶段：${stageLabels[issue.phase]}`);
-    lines.push(`- 编号：${issue.issueKey ?? `#${issue.id}`}`);
-    lines.push(`- 创建时间：${formatTime(issue.createdAt)}`);
-    lines.push(`- 更新时间：${formatTime(issue.updatedAt)}`);
-    lines.push("");
-    lines.push("## 问题描述");
-    lines.push("");
-    lines.push(issue.description.trim() || "暂无描述");
-    lines.push("");
-    lines.push("## 解决说明");
-    lines.push("");
-    lines.push(issue.solution?.trim() || "暂无");
-    lines.push("");
-    lines.push("## 动态时间线");
-    lines.push("");
-    if (!issue.activities.length) lines.push("暂无动态");
-    for (const activity of issue.activities)
-      lines.push(`- [${formatTime(activity.createdAt)}] ${activityText(activity)}`);
-    return lines.join("\n");
-  });
-  return blocks.join("\n\n---\n\n") + "\n";
-}
-
-async function exportSelected() {
-  if (!selectedIds.value.length || exporting.value) return;
-  exporting.value = true;
-  try {
-    const details: IssueDetail[] = [];
-    for (const id of selectedIds.value)
-      details.push(await issueApi.detail(props.requirementId, id));
-    const name = props.requirementName?.trim() || `需求${props.requirementId}`;
-    const now = new Date();
-    const pad = (value: number) => String(value).padStart(2, "0");
-    const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}`;
-    downloadTextFile(`${name}-问题记录-${stamp}.md`, buildExportMarkdown(name, details));
-    ElMessage.success(`已导出 ${details.length} 条问题`);
-  } catch (error) {
-    ElMessage.error(errorMessage(error));
-  } finally {
-    exporting.value = false;
-  }
-}
-
-// ===== 新建问题：内联小表单 =====
-const showCreate = ref(false);
-const creating = ref(false);
-const createTitle = ref("");
-const createDescription = ref("");
-const createType = ref<IssueType | "">("");
-const typeOptions = issueTypes.map((value) => ({
-  value,
-  label: issueTypeLabels[value],
-}));
-
-function toggleCreate() {
-  showCreate.value = !showCreate.value;
-  createTitle.value = "";
-  createDescription.value = "";
-  createType.value = "";
-}
-
-async function submitCreate() {
-  const title = createTitle.value.trim();
-  if (!title) {
-    ElMessage.warning("请输入问题标题");
-    return;
-  }
-  creating.value = true;
-  try {
-    await issueApi.create(props.requirementId, {
-      phase: props.phase,
-      title,
-      description: createDescription.value.trim(),
-      issueType: createType.value || undefined,
-    });
-    ElMessage.success("问题已创建");
-    showCreate.value = false;
-    createTitle.value = "";
-    createDescription.value = "";
-    createType.value = "";
-    await loadList();
-  } catch (error) {
-    ElMessage.error(errorMessage(error));
-  } finally {
-    creating.value = false;
-  }
-}
-
-// ===== 右栏：问题详情（md 编辑器） =====
-const detail = ref<IssueDetail>();
-const detailLoading = ref(false);
-// 状态流转请求进行中，防止重复提交
-const acting = ref(false);
-const commentText = ref("");
-const sending = ref(false);
-
-// 正文草稿：html 与纯文本双写，防抖自动保存
-const descHtml = ref("");
-const descText = ref("");
-const descDirty = ref(false);
-let saveTimer: number | undefined;
-
-function onDescHtml(html: string) {
-  descHtml.value = html;
-  scheduleDescSave();
-}
-function onDescText(text: string) {
-  descText.value = text;
-  scheduleDescSave();
-}
-function scheduleDescSave() {
-  descDirty.value = true;
-  cancelDescSave();
-  saveTimer = window.setTimeout(() => {
-    saveTimer = undefined;
-    void flushDescSave();
-  }, 800);
-}
-function cancelDescSave() {
-  if (saveTimer !== undefined) {
-    window.clearTimeout(saveTimer);
-    saveTimer = undefined;
-  }
-}
-async function flushDescSave() {
-  cancelDescSave();
-  if (!descDirty.value || !detail.value) return;
-  descDirty.value = false;
-  try {
-    // 正文（编辑器 html）落盘为 md 文件内容，由服务端写入工作区
-    const updated = await issueApi.update(props.requirementId, detail.value.id, {
-      description: descHtml.value,
-    });
-    if (detail.value?.id === updated.id)
-      detail.value = { ...detail.value, ...updated };
-    syncListIssue(updated);
-  } catch (error) {
-    // 保存失败恢复脏标记：关闭/切换时会再次提示
-    descDirty.value = true;
-    ElMessage.error(errorMessage(error));
-  }
-}
-
-async function openDetail(issue: Issue) {
-  if (detail.value?.id === issue.id) return;
-  await flushDescSave(); // 切换前保存当前正文
-  detailLoading.value = true;
-  try {
-    const loaded = await issueApi.detail(props.requirementId, issue.id);
-    detail.value = loaded;
-    descHtml.value = toEditorHtml(loaded.description);
-    descText.value =
-      new DOMParser().parseFromString(descHtml.value, "text/html").body
-        .textContent ?? "";
-    descDirty.value = false;
-    commentText.value = "";
-    await loadAssets();
-  } catch (error) {
-    ElMessage.error(errorMessage(error));
-  } finally {
-    detailLoading.value = false;
-  }
-}
-
-async function closeDetail() {
-  if (descDirty.value) {
-    try {
-      await ElMessageBox.confirm(
-        "正文修改尚未保存，关闭前将自动保存。",
-        "关闭问题详情",
-        {
-          confirmButtonText: "保存并关闭",
-          cancelButtonText: "取消",
-          type: "info",
-        },
-      );
-    } catch {
-      return; // 取消关闭：留在详情
-    }
-  }
-  await flushDescSave();
-  detail.value = undefined;
-  // 详情内的编辑/流转会改变列表数据，关闭时重新拉取
-  void loadList();
-}
-
-function syncListIssue(updated: Issue) {
-  const index = issues.value.findIndex((item) => item.id === updated.id);
-  if (index < 0) return;
-  const next = [...issues.value];
-  next[index] = updated;
-  issues.value = next;
-}
-
-async function applyUpdate(payload: IssueUpdatePayload, successText: string) {
-  if (!detail.value || acting.value) return;
-  acting.value = true;
-  try {
-    const updated = await issueApi.update(
-      props.requirementId,
-      detail.value.id,
-      payload,
-    );
-    if (detail.value?.id === updated.id)
-      detail.value = { ...detail.value, ...updated };
-    syncListIssue(updated);
-    ElMessage.success(successText);
-  } catch (error) {
-    ElMessage.error(errorMessage(error));
-  } finally {
-    acting.value = false;
-  }
-}
-
-// 状态自由流转：四态下拉任选，切换即保存（服务端无解决说明前置校验，不再弹窗）
-function onStatusChange(value: unknown) {
-  if (typeof value !== "string") return;
-  void applyUpdate({ status: value as IssueStatus }, "状态已更新");
-}
-
-async function sendComment() {
-  const content = commentText.value.trim();
-  if (!content || !detail.value || sending.value) return;
-  sending.value = true;
-  try {
-    // 评论接口返回最新详情（含新活动），直接替换
-    const result = await issueApi.comment(
-      props.requirementId,
-      detail.value.id,
-      content,
-    );
-    detail.value = result;
-    syncListIssue(result);
-    commentText.value = "";
-    ElMessage.success("评论已发送");
-  } catch (error) {
-    ElMessage.error(errorMessage(error));
-  } finally {
-    sending.value = false;
-  }
-}
-
-async function removeIssue() {
-  if (!detail.value) return;
-  try {
-    await ElMessageBox.confirm(
-      "删除后该问题及其动态不可恢复，确定删除吗？",
-      "删除问题",
-      {
-        confirmButtonText: "删除",
-        cancelButtonText: "取消",
-        type: "warning",
-      },
-    );
-  } catch {
-    return;
-  }
-  const issueId = detail.value.id;
-  try {
-    await issueApi.remove(props.requirementId, issueId);
-    ElMessage.success("问题已删除");
-    detail.value = undefined;
-    await loadList();
-  } catch (error) {
-    ElMessage.error(errorMessage(error));
-  }
-}
-
-// ===== 关联产出物（artifacts 体系：文件夹 + 文件） =====
-const assets = ref<IssueAssetLink[]>([]);
-const linkDialogVisible = ref(false);
-const linkSaving = ref(false);
-const linkedIds = computed(() => new Set(assets.value.map((l) => l.assetId)));
-
-async function loadAssets() {
-  if (!detail.value) return;
-  try {
-    const result = await issueApi.listAssets(
-      props.requirementId,
-      detail.value.id,
-    );
-    assets.value = result.items;
-  } catch (error) {
-    ElMessage.error(errorMessage(error));
-  }
-}
-
-// 已关联条目按相对路径组织成文件夹 + 文件树形展示
-interface AssetDisplayNode {
-  key: string;
-  name: string;
-  nodeType: IssueLinkedArtifact["nodeType"];
-  link: IssueAssetLink | null;
-  children: AssetDisplayNode[];
-}
-const assetRows = computed<{ node: AssetDisplayNode; depth: number }[]>(() => {
-  const roots: AssetDisplayNode[] = [];
-  const index = new Map<string, AssetDisplayNode>();
-  const links = [...assets.value].sort((a, b) =>
-    a.asset.relativePath.localeCompare(b.asset.relativePath, "zh-Hans-CN"),
-  );
-  for (const link of links) {
-    const segments = link.asset.relativePath.split("/");
-    let prefix = "";
-    let siblings = roots;
-    segments.forEach((segment, position) => {
-      prefix = prefix ? `${prefix}/${segment}` : segment;
-      const isLeaf = position === segments.length - 1;
-      let node = index.get(prefix);
-      if (!node) {
-        node = {
-          key: prefix,
-          name: segment,
-          nodeType: isLeaf ? link.asset.nodeType : "folder",
-          link: isLeaf ? link : null,
-          children: [],
-        };
-        index.set(prefix, node);
-        siblings.push(node);
-      } else if (isLeaf) {
-        node.link = link; // 文件夹本身被关联
-      }
-      siblings = node.children;
-    });
-  }
-  // 文件夹在前、名称升序
-  const sortNodes = (nodes: AssetDisplayNode[]) => {
-    nodes.sort((a, b) =>
-      a.nodeType === b.nodeType
-        ? a.name.localeCompare(b.name, "zh-Hans-CN")
-        : a.nodeType === "folder"
-          ? -1
-          : 1,
-    );
-    for (const node of nodes) sortNodes(node.children);
-  };
-  sortNodes(roots);
-  const rows: { node: AssetDisplayNode; depth: number }[] = [];
-  const walk = (nodes: AssetDisplayNode[], depth: number) => {
-    for (const node of nodes) {
-      rows.push({ node, depth });
-      if (node.children.length) walk(node.children, depth + 1);
-    }
-  };
-  walk(roots, 0);
-  return rows;
-});
-
-async function unlink(node: AssetDisplayNode) {
-  if (!node.link || !detail.value) return;
-  try {
-    await issueApi.unlinkAsset(props.requirementId, detail.value.id, node.link.assetId);
-    await loadAssets();
-  } catch (error) {
-    ElMessage.error(errorMessage(error));
-  }
-}
-
-// 关联选择器：递归拉取 artifacts 目录树，文件夹可展开，文件夹/文件均可勾选
+type SaveUi = "saved" | "pending" | "saving" | "failed";
 interface ArtifactTreeItem {
   id: number;
   name: string;
@@ -511,14 +65,706 @@ interface ArtifactTreeItem {
   disabled: boolean;
   children: ArtifactTreeItem[];
 }
+
+const typeOptions = issueTypes.map((value) => ({
+  value,
+  label: issueTypeLabels[value],
+}));
+const stageOptions = stages.map((value) => ({
+  value,
+  label: stageLabels[value],
+}));
+
+function emptyStatusCounts(): Record<IssueStatus, number> {
+  return { pending: 0, to_confirm: 0, processing: 0, resolved: 0, wont_fix: 0 };
+}
+
+// ===== 列表与筛选 =====
+const issues = ref<Issue[]>([]);
+const statusCounts = ref<Record<IssueStatus, number>>(emptyStatusCounts());
+const listLoading = ref(true);
+const listError = ref("");
+const statusFilter = ref<IssueStatus | "">("");
+const typeFilter = ref<IssueType | "">("");
+const keyword = ref("");
+const selectedId = ref<number | null>(null);
+const mobileDetailOpen = ref(false);
+let listSeq = 0;
+let refreshTimer: number | undefined;
+
+// ===== 详情与自动保存 =====
+const detail = ref<IssueDetail>();
+const detailLoading = ref(false);
+const detailError = ref("");
+const titleDraft = ref("");
+const typeDraft = ref<IssueType | null>(null);
+const stageDraft = ref<IssueStage>("analysis");
+const statusDraft = ref<IssueStatus>("pending");
+const descHtml = ref("");
+const solHtml = ref("");
+const snapshot = ref<Snapshot | null>(null);
+const saving = ref(false);
+const saveFailed = ref(false);
+const saveError = ref("");
+const lastSavedAt = ref<string | null>(null);
+const titleEl = ref<HTMLTextAreaElement>();
+const descEditor = ref<InstanceType<typeof InlineRichTextEditor>>();
+const solEditor = ref<InstanceType<typeof InlineRichTextEditor>>();
+let titleObserver: ResizeObserver | undefined;
+let detailSeq = 0;
+let saveTimer: number | undefined;
+let saveTask: Promise<boolean> | undefined;
+
+// ===== 关联产出物 =====
+const assets = ref<IssueAssetLink[]>([]);
+const linkDialogVisible = ref(false);
 const treeLoading = ref(false);
+const linkSaving = ref(false);
 const artifactTree = ref<ArtifactTreeItem[]>([]);
 const checkedIds = ref<number[]>([]);
 const expandedIds = ref<Set<number>>(new Set());
+const linkedIds = computed(() => new Set(assets.value.map((item) => item.assetId)));
+const sortedAssets = computed(() =>
+  [...assets.value].sort((a, b) =>
+    a.asset.relativePath.localeCompare(b.asset.relativePath, "zh-Hans-CN"),
+  ),
+);
 
+// ===== 新建 =====
+const createOpen = ref(false);
+const creating = ref(false);
+const createTitle = ref("");
+const createType = ref<IssueType | "">("");
+const createStage = ref<IssueStage>("analysis");
+const createDesc = ref("");
+const createTitleInput = ref<{ focus: () => void }>();
+
+// ===== 派生状态 =====
+const totalCount = computed(() =>
+  issueStatuses.reduce((sum, status) => sum + statusCounts.value[status], 0),
+);
+const hasFilters = computed(
+  () => Boolean(statusFilter.value || typeFilter.value || keyword.value.trim()),
+);
+const showFullEmpty = computed(
+  () =>
+    !listLoading.value &&
+    !listError.value &&
+    !hasFilters.value &&
+    totalCount.value === 0,
+);
+const dirty = computed(() => {
+  const saved = snapshot.value;
+  if (!detail.value || !saved) return false;
+  return (
+    titleDraft.value.trim() !== saved.title ||
+    typeDraft.value !== saved.type ||
+    stageDraft.value !== saved.stage ||
+    statusDraft.value !== saved.status ||
+    descHtml.value !== saved.descHtml ||
+    solHtml.value !== saved.solHtml
+  );
+});
+const saveUi = computed<SaveUi>(() => {
+  if (saving.value) return "saving";
+  if (saveFailed.value) return "failed";
+  if (dirty.value) return "pending";
+  return "saved";
+});
+const saveLabel = computed(() => {
+  if (saving.value) return "保存中…";
+  if (saveFailed.value) return saveError.value || "保存失败，内容已保留";
+  if (dirty.value) return "有未保存的修改";
+  return lastSavedAt.value
+    ? `已自动保存 · ${formatClock(lastSavedAt.value)}`
+    : "所有修改已自动保存";
+});
+const solutionEmpty = computed(() => !htmlHasContent(solHtml.value));
+const needsSolution = computed(
+  () => statusDraft.value === "resolved" && solutionEmpty.value,
+);
+
+// ===== 展示辅助 =====
+function typeTone(type: IssueType | null): string {
+  switch (type) {
+    case "analysis":
+      return "tone-purple";
+    case "ui":
+      return "tone-teal";
+    case "development":
+      return "tone-blue";
+    case "testing":
+      return "tone-amber";
+    default:
+      return "tone-slate";
+  }
+}
+function statusTone(status: IssueStatus): string {
+  switch (status) {
+    case "pending":
+      return "tone-amber";
+    case "to_confirm":
+      return "tone-purple";
+    case "processing":
+      return "tone-blue";
+    case "resolved":
+      return "tone-green";
+    default:
+      return "tone-slate";
+  }
+}
+function typeIcon(type: IssueType | null) {
+  switch (type) {
+    case "analysis":
+      return DataAnalysis;
+    case "ui":
+      return Brush;
+    case "development":
+      return Cpu;
+    case "testing":
+      return Aim;
+    default:
+      return MoreFilled;
+  }
+}
+function pad2(value: number) {
+  return String(value).padStart(2, "0");
+}
+function parseDate(iso: string) {
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+function formatShort(iso: string) {
+  const date = parseDate(iso);
+  if (!date) return iso;
+  const now = new Date();
+  const day =
+    date.getFullYear() === now.getFullYear()
+      ? `${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`
+      : `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+  return `${day} ${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
+}
+function formatFull(iso: string) {
+  const date = parseDate(iso);
+  if (!date) return iso;
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())} ${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
+}
+function formatClock(iso: string) {
+  const date = parseDate(iso);
+  return date ? `${pad2(date.getHours())}:${pad2(date.getMinutes())}` : iso;
+}
+// 列表摘要：Markdown 收敛成一行纯文本，图片/链接不占篇幅
+function excerpt(issue: Issue) {
+  const text = issue.description
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/[#>*_`~]+/g, " ")
+    .replace(/^\s*[-+]\s+/gm, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return text || "暂无描述";
+}
+function htmlHasContent(html: string) {
+  if (!html.trim()) return false;
+  const container = document.createElement("div");
+  container.innerHTML = html;
+  return Boolean(container.textContent?.trim()) || Boolean(container.querySelector("img"));
+}
+
+// ===== 列表加载 =====
+async function loadList(
+  options: { quiet?: boolean; selectFirst?: boolean } = {},
+) {
+  const seq = ++listSeq;
+  if (!options.quiet) {
+    listLoading.value = true;
+    listError.value = "";
+  }
+  try {
+    const result = await issueApi.list(props.requirementId, {
+      status: statusFilter.value || undefined,
+      type: typeFilter.value || undefined,
+      q: keyword.value.trim() || undefined,
+    });
+    if (seq !== listSeq) return;
+    issues.value = result.items;
+    statusCounts.value = result.statusCounts;
+    listError.value = "";
+    // 首次进入或删除当前问题后自动选中第一条，减少一次点击
+    if (
+      options.selectFirst !== false &&
+      !selectedId.value &&
+      !detail.value &&
+      result.items.length
+    ) {
+      void openIssue(result.items[0].id);
+    }
+  } catch (error) {
+    if (seq !== listSeq) return;
+    const message = errorMessage(error);
+    if (options.quiet) return;
+    if (!issues.value.length) listError.value = message;
+    else ElMessage.error(message);
+  } finally {
+    if (seq === listSeq && !options.quiet) listLoading.value = false;
+  }
+}
+function scheduleQuietRefresh() {
+  if (refreshTimer) window.clearTimeout(refreshTimer);
+  refreshTimer = window.setTimeout(() => {
+    refreshTimer = undefined;
+    void loadList({ quiet: true });
+  }, 400);
+}
+function onStatusFilterChange(value: unknown) {
+  statusFilter.value =
+    typeof value === "string" &&
+    (issueStatuses as readonly string[]).includes(value)
+      ? (value as IssueStatus)
+      : "";
+  void loadList();
+}
+function onTypeFilterChange(value: unknown) {
+  typeFilter.value =
+    typeof value === "string" &&
+    (issueTypes as readonly string[]).includes(value)
+      ? (value as IssueType)
+      : "";
+  void loadList();
+}
+function runSearchNow() {
+  void loadList();
+}
+function clearFilters() {
+  statusFilter.value = "";
+  typeFilter.value = "";
+  keyword.value = "";
+  void loadList();
+}
+
+// ===== 详情加载 =====
+async function openIssue(
+  id: number,
+  options: { force?: boolean } = {},
+) {
+  if (!options.force && selectedId.value === id && detail.value) {
+    mobileDetailOpen.value = true;
+    return;
+  }
+  if (detail.value) {
+    const saved = await flush();
+    if (!saved) {
+      ElMessage.error("当前问题尚未保存成功，请重试后再切换");
+      return;
+    }
+  }
+  const seq = ++detailSeq;
+  selectedId.value = id;
+  mobileDetailOpen.value = true;
+  detail.value = undefined;
+  snapshot.value = null;
+  assets.value = [];
+  detailError.value = "";
+  detailLoading.value = true;
+  try {
+    const loaded = await issueApi.detail(props.requirementId, id);
+    if (seq !== detailSeq) return;
+    hydrate(loaded);
+    await loadAssets();
+  } catch (error) {
+    if (seq !== detailSeq) return;
+    detailError.value = errorMessage(error);
+    ElMessage.error(detailError.value);
+  } finally {
+    if (seq === detailSeq) detailLoading.value = false;
+  }
+}
+function hydrate(loaded: IssueDetail) {
+  detail.value = loaded;
+  titleDraft.value = loaded.title;
+  typeDraft.value = loaded.type;
+  stageDraft.value = loaded.stage;
+  statusDraft.value = loaded.status;
+  const description = toDisplayHtml(
+    documentToEditorHtml(loaded.description),
+    props.requirementId,
+  );
+  const solution = toDisplayHtml(
+    documentToEditorHtml(loaded.solution),
+    props.requirementId,
+  );
+  descHtml.value = description;
+  solHtml.value = solution;
+  snapshot.value = {
+    title: loaded.title,
+    type: loaded.type,
+    stage: loaded.stage,
+    status: loaded.status,
+    descHtml: description,
+    solHtml: solution,
+  };
+  lastSavedAt.value = loaded.updatedAt;
+  saveFailed.value = false;
+  saveError.value = "";
+  saving.value = false;
+  // 详情在窄屏可能下一帧才从隐藏切到显示，用 ResizeObserver 在真实布局后补量标题高度
+  void nextTick(() => {
+    resizeTitle();
+    titleObserver?.disconnect();
+    if (titleEl.value) {
+      titleObserver = new ResizeObserver(() => resizeTitle());
+      titleObserver.observe(titleEl.value);
+    }
+  });
+}
+
+// ===== 自动保存 =====
+function currentSolutionMarkdown() {
+  return htmlToMarkdown(toStoredHtml(solHtml.value, props.requirementId));
+}
+function buildPatch(): IssueUpdatePayload {
+  const saved = snapshot.value;
+  const patch: IssueUpdatePayload = {};
+  if (!saved) return patch;
+  const title = titleDraft.value.trim();
+  if (title && title !== saved.title) patch.title = title;
+  if (typeDraft.value !== saved.type) patch.type = typeDraft.value;
+  if (stageDraft.value !== saved.stage) patch.stage = stageDraft.value;
+  if (statusDraft.value !== saved.status) patch.status = statusDraft.value;
+  if (descHtml.value !== saved.descHtml)
+    patch.description = htmlToMarkdown(
+      toStoredHtml(descHtml.value, props.requirementId),
+    );
+  if (solHtml.value !== saved.solHtml)
+    patch.solution = currentSolutionMarkdown();
+  return patch;
+}
+// 只确认本次请求提交过的字段，避免旧响应覆盖保存期间的新输入
+function acknowledge(
+  patch: IssueUpdatePayload,
+  sentDescHtml: string,
+  sentSolHtml: string,
+) {
+  const saved = snapshot.value;
+  if (!saved) return;
+  snapshot.value = {
+    title: patch.title ?? saved.title,
+    type: patch.type === undefined ? saved.type : patch.type,
+    stage: patch.stage ?? saved.stage,
+    status: patch.status ?? saved.status,
+    descHtml: patch.description === undefined ? saved.descHtml : sentDescHtml,
+    solHtml: patch.solution === undefined ? saved.solHtml : sentSolHtml,
+  };
+}
+async function persist(): Promise<boolean> {
+  const current = detail.value;
+  if (!current) return true;
+  const issueId = current.id;
+  try {
+    while (dirty.value && detail.value?.id === issueId) {
+      if (!titleDraft.value.trim()) {
+        saveFailed.value = true;
+        saveError.value = "问题标题不能为空";
+        return false;
+      }
+      if (statusDraft.value === "resolved" && !currentSolutionMarkdown().trim()) {
+        saveFailed.value = true;
+        saveError.value = "请先填写解决方案 / 最终结论，再标记为已解决";
+        return false;
+      }
+      const patch = buildPatch();
+      if (!Object.keys(patch).length) break;
+      const sentDescHtml = descHtml.value;
+      const sentSolHtml = solHtml.value;
+      saving.value = true;
+      saveFailed.value = false;
+      saveError.value = "";
+      try {
+        const updated = await issueApi.update(
+          props.requirementId,
+          issueId,
+          patch,
+        );
+        if (detail.value?.id !== issueId) return true;
+        acknowledge(patch, sentDescHtml, sentSolHtml);
+        detail.value = {
+          ...detail.value,
+          issueKey: updated.issueKey,
+          title: updated.title,
+          description: updated.description,
+          type: updated.type,
+          stage: updated.stage,
+          status: updated.status,
+          solution: updated.solution,
+          resolvedAt: updated.resolvedAt,
+          updatedAt: updated.updatedAt,
+        };
+        lastSavedAt.value = updated.updatedAt;
+        patchListRow(updated);
+        scheduleQuietRefresh();
+      } catch (error) {
+        if (detail.value?.id === issueId) {
+          saveFailed.value = true;
+          saveError.value = errorMessage(error);
+        }
+        return false;
+      }
+    }
+    return true;
+  } finally {
+    saving.value = false;
+  }
+}
+function saveNow(): Promise<boolean> {
+  clearSaveTimer();
+  if (!saveTask) {
+    saveTask = (async () => {
+      let saved = await persist();
+      // 上一轮落盘期间产生的新修改（枚举切换不走防抖）在同一任务内继续保存
+      while (saved && dirty.value) saved = await persist();
+      return saved;
+    })().finally(() => {
+      saveTask = undefined;
+    });
+  }
+  return saveTask;
+}
+function scheduleSave() {
+  clearSaveTimer();
+  if (!detail.value) return;
+  saveTimer = window.setTimeout(() => {
+    saveTimer = undefined;
+    void saveNow();
+  }, 800);
+}
+function clearSaveTimer() {
+  if (saveTimer !== undefined) {
+    window.clearTimeout(saveTimer);
+    saveTimer = undefined;
+  }
+}
+function patchListRow(updated: Issue) {
+  const index = issues.value.findIndex((item) => item.id === updated.id);
+  if (index < 0) return;
+  const previousStatus = issues.value[index].status;
+  const next = [...issues.value];
+  next[index] = { ...next[index], ...updated };
+  next.sort(
+    (a, b) =>
+      b.updatedAt.localeCompare(a.updatedAt) || b.id - a.id,
+  );
+  issues.value = next;
+  if (previousStatus !== updated.status) {
+    const counts = { ...statusCounts.value };
+    counts[previousStatus] = Math.max(0, counts[previousStatus] - 1);
+    counts[updated.status] += 1;
+    statusCounts.value = counts;
+  }
+}
+// 页签切换/离开前调用：先等图片上传，再落盘所有未保存字段
+async function flush(): Promise<boolean> {
+  clearSaveTimer();
+  if (!detail.value) return true;
+  await Promise.allSettled([
+    descEditor.value?.waitForUpload(),
+    solEditor.value?.waitForUpload(),
+  ]);
+  if (!dirty.value) {
+    saveFailed.value = false;
+    return true;
+  }
+  return saveNow();
+}
+defineExpose({ flush });
+
+// ===== 标题 / 枚举字段 =====
+function onTitleEnter() {
+  titleEl.value?.blur();
+}
+function onTitleInput() {
+  if (titleDraft.value.includes("\n"))
+    titleDraft.value = titleDraft.value.replace(/\n+/g, " ");
+  scheduleSave();
+  void nextTick(resizeTitle);
+}
+function onTitleBlur() {
+  if (!titleDraft.value.trim()) {
+    titleDraft.value = snapshot.value?.title ?? detail.value?.title ?? "";
+    ElMessage.warning("问题标题不能为空，已恢复原标题");
+    void nextTick(resizeTitle);
+    if (dirty.value) scheduleSave();
+    else saveFailed.value = false;
+    return;
+  }
+  const trimmed = titleDraft.value.trim();
+  if (trimmed !== titleDraft.value) {
+    titleDraft.value = trimmed;
+    void nextTick(resizeTitle);
+  }
+  if (dirty.value) scheduleSave();
+}
+function resizeTitle() {
+  const el = titleEl.value;
+  if (!el) return;
+  el.style.height = "auto";
+  // 隐藏时 scrollHeight 为 0，回退到 rows=1 的自然高度
+  el.style.height = el.scrollHeight > 0 ? `${el.scrollHeight}px` : "";
+}
+function onTypeChange(value: unknown) {
+  typeDraft.value =
+    typeof value === "string" &&
+    (issueTypes as readonly string[]).includes(value)
+      ? (value as IssueType)
+      : null;
+  void saveNow();
+}
+function onStageChange(value: unknown) {
+  if (typeof value !== "string" || !(stages as readonly string[]).includes(value))
+    return;
+  stageDraft.value = value as IssueStage;
+  void saveNow();
+}
+function onStatusChange(value: unknown) {
+  if (
+    typeof value !== "string" ||
+    !(issueStatuses as readonly string[]).includes(value)
+  )
+    return;
+  const next = value as IssueStatus;
+  const previous = statusDraft.value;
+  if (next === "resolved" && !currentSolutionMarkdown().trim()) {
+    ElMessage.warning("请先填写解决方案 / 最终结论，再将问题标记为已解决");
+    statusDraft.value = previous;
+    return;
+  }
+  statusDraft.value = next;
+  void saveNow();
+}
+function onDescHtml(html: string) {
+  descHtml.value = html;
+  scheduleSave();
+}
+function onSolHtml(html: string) {
+  solHtml.value = html;
+  scheduleSave();
+}
+
+// ===== 新建问题 =====
+async function openCreate() {
+  if (detail.value) {
+    const saved = await flush();
+    if (!saved) {
+      ElMessage.error("当前问题尚未保存成功，请重试后再新增");
+      return;
+    }
+  }
+  createTitle.value = "";
+  createType.value = "";
+  createStage.value = props.currentStage ?? "analysis";
+  createDesc.value = "";
+  createOpen.value = true;
+  await nextTick();
+  createTitleInput.value?.focus();
+}
+async function submitCreate() {
+  const title = createTitle.value.trim();
+  if (!title) {
+    ElMessage.warning("请输入问题标题");
+    return;
+  }
+  if (creating.value) return;
+  creating.value = true;
+  try {
+    const created = await issueApi.create(props.requirementId, {
+      title,
+      type: createType.value || null,
+      stage: createStage.value,
+      description: createDesc.value.trim(),
+    });
+    createOpen.value = false;
+    ElMessage.success("问题已创建");
+    statusFilter.value = "";
+    typeFilter.value = "";
+    keyword.value = "";
+    selectedId.value = created.id;
+    detail.value = undefined;
+    snapshot.value = null;
+    mobileDetailOpen.value = true;
+    await loadList({ quiet: true });
+    await openIssue(created.id, { force: true });
+  } catch (error) {
+    ElMessage.error(errorMessage(error));
+  } finally {
+    creating.value = false;
+  }
+}
+
+// ===== 删除问题 =====
+async function removeIssue() {
+  const current = detail.value;
+  if (!current) return;
+  try {
+    await ElMessageBox.confirm(
+      "删除后该问题不可恢复；描述中已插入的图片文件不会被删除。",
+      "删除问题",
+      {
+        confirmButtonText: "删除",
+        cancelButtonText: "取消",
+        type: "warning",
+        confirmButtonClass: "el-button--danger",
+      },
+    );
+  } catch {
+    return;
+  }
+  clearSaveTimer();
+  try {
+    await issueApi.remove(props.requirementId, current.id);
+    ElMessage.success("问题已删除");
+    detail.value = undefined;
+    snapshot.value = null;
+    selectedId.value = null;
+    assets.value = [];
+    mobileDetailOpen.value = false;
+    await loadList();
+  } catch (error) {
+    ElMessage.error(errorMessage(error));
+  }
+}
+
+// ===== 关联产出物 =====
+async function loadAssets() {
+  const current = detail.value;
+  if (!current) {
+    assets.value = [];
+    return;
+  }
+  try {
+    const result = await issueApi.listAssets(props.requirementId, current.id);
+    if (detail.value?.id === current.id) assets.value = result.items;
+  } catch (error) {
+    ElMessage.error(errorMessage(error));
+  }
+}
+async function unlink(link: IssueAssetLink) {
+  const current = detail.value;
+  if (!current) return;
+  try {
+    await issueApi.unlinkAsset(
+      props.requirementId,
+      current.id,
+      link.assetId,
+    );
+    await loadAssets();
+  } catch (error) {
+    ElMessage.error(errorMessage(error));
+  }
+}
 async function loadTreeLevel(parentId: number | null): Promise<ArtifactTreeItem[]> {
   const directory = await artifactApi.list(props.requirementId, parentId);
-  const folderItems = await Promise.all(
+  const folders = await Promise.all(
     directory.folders.map(async (folder) => ({
       id: folder.id,
       name: folder.name,
@@ -527,16 +773,15 @@ async function loadTreeLevel(parentId: number | null): Promise<ArtifactTreeItem[
       children: await loadTreeLevel(folder.id),
     })),
   );
-  const fileItems = directory.files.map((file) => ({
+  const files = directory.files.map((file) => ({
     id: file.id,
     name: file.name,
     nodeType: "file" as const,
     disabled: linkedIds.value.has(file.id),
     children: [],
   }));
-  return [...folderItems, ...fileItems];
+  return [...folders, ...files];
 }
-
 async function openLinkDialog() {
   linkDialogVisible.value = true;
   treeLoading.value = true;
@@ -544,7 +789,6 @@ async function openLinkDialog() {
   expandedIds.value = new Set();
   try {
     artifactTree.value = await loadTreeLevel(null);
-    // 根层文件夹默认展开，深层按需点击
     for (const item of artifactTree.value)
       if (item.nodeType === "folder") expandedIds.value.add(item.id);
   } catch (error) {
@@ -553,7 +797,6 @@ async function openLinkDialog() {
     treeLoading.value = false;
   }
 }
-
 const treeRows = computed<{ item: ArtifactTreeItem; depth: number }[]>(() => {
   const rows: { item: ArtifactTreeItem; depth: number }[] = [];
   const walk = (items: ArtifactTreeItem[], depth: number) => {
@@ -566,14 +809,12 @@ const treeRows = computed<{ item: ArtifactTreeItem; depth: number }[]>(() => {
   walk(artifactTree.value, 0);
   return rows;
 });
-
 function toggleExpanded(item: ArtifactTreeItem) {
   const next = new Set(expandedIds.value);
   if (next.has(item.id)) next.delete(item.id);
   else next.add(item.id);
   expandedIds.value = next;
 }
-
 function onTreeCheck(item: ArtifactTreeItem, checked: boolean | string | number) {
   if (checked === true) {
     if (!checkedIds.value.includes(item.id))
@@ -582,10 +823,9 @@ function onTreeCheck(item: ArtifactTreeItem, checked: boolean | string | number)
     checkedIds.value = checkedIds.value.filter((id) => id !== item.id);
   }
 }
-
 async function confirmLink() {
-  if (!detail.value) return;
-  // 已关联的条目在弹窗中禁用，这里仅提交新增项
+  const current = detail.value;
+  if (!current) return;
   const targets = checkedIds.value.filter((id) => !linkedIds.value.has(id));
   if (!targets.length) {
     linkDialogVisible.value = false;
@@ -593,14 +833,13 @@ async function confirmLink() {
   }
   linkSaving.value = true;
   try {
-    for (const assetId of targets) {
+    for (const assetId of targets)
       await issueApi.linkAsset(
         props.requirementId,
-        detail.value.id,
+        current.id,
         assetId,
         "reference",
       );
-    }
     ElMessage.success("已关联产出物");
     linkDialogVisible.value = false;
     await loadAssets();
@@ -611,118 +850,80 @@ async function confirmLink() {
   }
 }
 
-// ===== 展示辅助 =====
-function typeTone(issue: Issue): string {
-  switch (issue.issueType) {
-    case "ui":
-      return "tone-teal";
-    case "development":
-      return "tone-blue";
-    case "defect":
-      return "tone-red";
-    case "change":
-      return "tone-purple";
-    case "question":
-      return "tone-amber";
-    default:
-      return "tone-gray";
-  }
+// ===== 生命周期 =====
+function onBeforeUnload(event: BeforeUnloadEvent) {
+  if (!dirty.value) return;
+  event.preventDefault();
+  event.returnValue = "";
 }
-
-function statusTone(status: IssueStatus): string {
-  switch (status) {
-    case "pending":
-      return "tone-amber";
-    case "processing":
-      return "tone-blue";
-    case "testing":
-      return "tone-purple";
-    case "resolved":
-      return "tone-green";
-  }
+function onWindowResize() {
+  void nextTick(resizeTitle);
 }
-
-const activityIcons = {
-  comment: ChatDotRound,
-  solution: CircleCheck,
-  status_change: Switch,
-  system: InfoFilled,
-} as const;
-
-function activityText(activity: IssueActivity): string {
-  if (activity.activityType === "status_change") {
-    const oldLabel = activity.oldStatus
-      ? issueStatusLabels[activity.oldStatus]
-      : "—";
-    const newLabel = activity.newStatus
-      ? issueStatusLabels[activity.newStatus]
-      : "—";
-    return `状态变更：${oldLabel} → ${newLabel}`;
-  }
-  if (activity.activityType === "comment") return `评论：${activity.content}`;
-  if (activity.activityType === "solution")
-    return `解决说明：${activity.content}`;
-  return activity.content; // system 初始记录
-}
-
-function formatTime(iso: string): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return iso;
-  const pad = (value: number) => String(value).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
+onMounted(() => {
+  window.addEventListener("beforeunload", onBeforeUnload);
+  window.addEventListener("resize", onWindowResize);
+  void loadList();
+});
+onBeforeUnmount(() => {
+  window.removeEventListener("beforeunload", onBeforeUnload);
+  window.removeEventListener("resize", onWindowResize);
+  titleObserver?.disconnect();
+  if (refreshTimer) window.clearTimeout(refreshTimer);
+  clearSaveTimer();
+  void flush();
+});
 </script>
 <template>
-  <aside
-    class="surface issues-panel"
-    :class="{ 'has-detail': !!detail }"
-    v-loading="loading || detailLoading"
+  <!-- 空台账：整块留白比双栏空壳更清楚 -->
+  <div v-if="showFullEmpty" class="issue-empty">
+    <div class="empty-ledger">
+      <span class="empty-kicker">问题记录</span>
+      <h2>先记下来，<br />再逐条解决。</h2>
+      <p>
+        分析、设计、开发和测试中的疑问都可以记录在这里。每条问题都有独立的描述、解决方案与关联产出物。
+      </p>
+      <button class="issue-primary" type="button" @click="openCreate()">
+        <el-icon :size="14"><Plus /></el-icon>
+        新增第一个问题
+      </button>
+    </div>
+    <div class="empty-side" aria-hidden="true">
+      <div class="empty-legend">
+        <span
+          v-for="status in issueStatuses"
+          :key="status"
+          class="empty-chip"
+          :class="statusTone(status)"
+          >{{ issueStatusLabels[status] }} <b>0</b></span
+        >
+      </div>
+      <div class="empty-rule"></div>
+      <div class="empty-lines">
+        <span class="empty-line" style="width: 88%"></span>
+        <span class="empty-line" style="width: 62%"></span>
+        <span class="empty-line" style="width: 76%"></span>
+        <span class="empty-line" style="width: 48%"></span>
+      </div>
+      <span class="empty-caption">每条疑问，都有落点</span>
+    </div>
+  </div>
+
+  <div
+    v-else
+    class="issue-app"
+    :class="{ 'detail-open': mobileDetailOpen && detail }"
   >
-    <!-- 左栏：问题列表（默认形态） -->
-    <section class="issues-left">
-      <header class="issues-toolbar">
-        <div class="status-filter" role="group" aria-label="按状态筛选">
-          <button
-            type="button"
-            :class="{ active: statusFilter === '' }"
-            @click="statusFilter = ''"
-          >
-            全部
-          </button>
-          <button
-            v-for="status in issueStatuses"
-            :key="status"
-            type="button"
-            :class="{ active: statusFilter === status }"
-            @click="statusFilter = status"
-          >
-            {{ issueStatusLabels[status] }}
-          </button>
-        </div>
-        <button class="issue-new" type="button" @click="toggleCreate">
-          <el-icon :size="13"><Plus /></el-icon>新建问题
-        </button>
-      </header>
-      <form v-if="showCreate" class="issue-create-form" @submit.prevent="submitCreate">
-        <el-input
-          v-model="createTitle"
-          maxlength="200"
-          placeholder="问题标题（必填）"
-        />
-        <el-input
-          v-model="createDescription"
-          type="textarea"
-          :rows="2"
-          maxlength="2000"
-          placeholder="问题描述（可选）"
-        />
-        <div class="issue-create-row">
+    <!-- ===== 左栏：台账 ===== -->
+    <aside class="issue-rail">
+      <header class="rail-head">
+        <div class="filter-row filter-row--selects">
           <el-select
-            v-model="createType"
-            class="issue-type-select"
-            placeholder="问题分类（可选）"
-            clearable
+            class="filter-select type-filter"
+            :model-value="typeFilter || 'all'"
+            aria-label="按问题类型筛选"
+            @change="onTypeFilterChange"
           >
+            <el-option label="全部类型" value="all" />
             <el-option
               v-for="option in typeOptions"
               :key="option.value"
@@ -730,109 +931,13 @@ function formatTime(iso: string): string {
               :value="option.value"
             />
           </el-select>
-          <button class="issue-btn issue-btn--primary" type="submit" :disabled="creating">
-            创建
-          </button>
-          <button
-            class="issue-btn"
-            type="button"
-            @click="showCreate = false"
-          >
-            取消
-          </button>
-        </div>
-      </form>
-      <div class="issue-list">
-        <div
-          v-for="issue in issues"
-          :key="issue.id"
-          class="issue-item"
-          :class="{ active: detail?.id === issue.id }"
-        >
-          <el-checkbox
-            class="issue-check"
-            :model-value="isSelected(issue.id)"
-            @change="onItemCheck(issue, $event)"
-          />
-          <el-tag
-            v-if="issue.issueType"
-            size="small"
-            class="enum-tag"
-            :class="typeTone(issue)"
-            >{{ issueTypeLabels[issue.issueType] }}</el-tag
-          >
-          <button class="issue-title" type="button" @click="openDetail(issue)">
-            {{ issue.title }}
-          </button>
-          <el-tag size="small" class="enum-tag" :class="statusTone(issue.status)"
-            >{{ issueStatusLabels[issue.status] }}</el-tag
-          >
-          <span class="issue-time">{{ formatTime(issue.updatedAt) }}</span>
-        </div>
-        <el-empty
-          v-if="!issues.length"
-          description="暂无问题"
-          :image-size="48"
-        />
-      </div>
-      <footer class="issues-footer">
-        <el-checkbox
-          class="select-all"
-          :model-value="allSelected"
-          :disabled="!issues.length"
-          @change="toggleAll($event)"
-          >全选</el-checkbox
-        >
-        <button
-          class="issue-btn issue-btn--primary issue-export"
-          type="button"
-          :disabled="!selectedIds.length || exporting"
-          @click="exportSelected"
-        >
-          <el-icon :size="12"><Download /></el-icon>导出 Markdown<template
-            v-if="selectedIds.length"
-          >
-            （{{ selectedIds.length }}）</template
-          >
-        </button>
-      </footer>
-    </section>
-    <!-- 右栏：问题详情（点击问题打开，可关闭） -->
-    <section v-if="detail" class="issues-right">
-      <header class="issues-head">
-        <strong class="issues-title">{{ detail.title }}</strong>
-        <el-tag size="small" class="enum-tag" :class="statusTone(detail.status)"
-          >{{ issueStatusLabels[detail.status] }}</el-tag
-        >
-        <button
-          class="issues-close"
-          type="button"
-          aria-label="关闭详情"
-          @click="closeDetail"
-        >
-          <el-icon :size="14"><Close /></el-icon>
-        </button>
-      </header>
-      <div class="issue-detail">
-        <!-- 正文 md 编辑器：随问题切换重建，编辑后防抖自动保存 -->
-        <InlineRichTextEditor
-          :key="detail.id"
-          :html="descHtml"
-          :text="descText"
-          :requirement-id="requirementId"
-          label="问题正文"
-          @update:html="onDescHtml"
-          @update:text="onDescText"
-        />
-        <!-- 状态自由流转：四态下拉任选，切换即保存 -->
-        <div class="issue-flow">
           <el-select
-            class="issue-status-select"
-            :model-value="detail.status"
-            :disabled="acting"
-            aria-label="问题状态"
-            @change="onStatusChange"
+            class="filter-select status-filter"
+            :model-value="statusFilter || 'all'"
+            aria-label="按问题状态筛选"
+            @change="onStatusFilterChange"
           >
+            <el-option label="全部状态" value="all" />
             <el-option
               v-for="status in issueStatuses"
               :key="status"
@@ -840,108 +945,319 @@ function formatTime(iso: string): string {
               :value="status"
             />
           </el-select>
-          <button
-            class="issue-btn issue-btn--danger"
-            type="button"
-            @click="removeIssue"
-          >
-            <el-icon :size="12"><Delete /></el-icon>删除问题
-          </button>
         </div>
-        <!-- 解决说明展示块 -->
-        <div v-if="detail.solution" class="issue-solution">
-          <span class="block-label">解决说明</span>
-          <p>{{ detail.solution }}</p>
-        </div>
-        <!-- 关联产出物：文件夹 + 文件树形展示 -->
-        <div class="issue-assets">
-          <div class="assets-head-row">
-            <span class="block-label">关联产出物</span>
-            <button class="issue-link-btn" type="button" @click="openLinkDialog">
-              <el-icon :size="12"><Link /></el-icon>关联产出物
-            </button>
-          </div>
-          <div
-            v-for="row in assetRows"
-            :key="row.node.key"
-            class="asset-row"
-            :style="{ paddingLeft: `${10 + row.depth * 16}px` }"
-          >
-            <el-icon
-              class="asset-icon"
-              :class="{ 'asset-icon--folder': row.node.nodeType === 'folder' }"
-              :size="13"
-            >
-              <Folder v-if="row.node.nodeType === 'folder'" />
-              <Document v-else />
-            </el-icon>
-            <span
-              class="asset-name"
-              :title="row.node.link?.asset.relativePath"
-              >{{ row.node.name }}</span
-            >
-            <el-tag v-if="row.node.link" size="small" effect="plain">{{
-              issueAssetRelationLabels[row.node.link.relationType]
-            }}</el-tag>
+
+        <div class="filter-row filter-row--search">
+          <label class="search-box">
+            <el-icon :size="13"><Search /></el-icon>
+            <input
+              v-model="keyword"
+              type="search"
+              placeholder="搜索标题或描述"
+              aria-label="搜索问题标题或描述"
+              @keydown.enter="runSearchNow()"
+            />
             <button
-              v-if="row.node.link"
-              class="issue-unlink"
+              v-if="keyword"
+              class="search-clear"
               type="button"
-              @click="unlink(row.node)"
+              aria-label="清空搜索"
+              @click="keyword = ''; runSearchNow()"
             >
-              解除
+              ×
             </button>
-          </div>
-          <p v-if="!assets.length" class="muted-line">暂无关联产出物</p>
-        </div>
-        <!-- 活动时间线（时间正序，服务端已排序） -->
-        <div class="issue-activities">
-          <span class="block-label">动态</span>
-          <div
-            v-for="activity in detail.activities"
-            :key="activity.id"
-            class="activity-row"
-          >
-            <el-icon
-              class="activity-icon"
-              :class="`activity--${activity.activityType}`"
-              :size="13"
-            >
-              <component :is="activityIcons[activity.activityType]" />
-            </el-icon>
-            <span class="activity-text">{{
-              activityText(activity)
-            }}</span>
-            <span class="activity-time">{{
-              formatTime(activity.createdAt)
-            }}</span>
-          </div>
-        </div>
-        <!-- 评论输入 -->
-        <div class="issue-comment">
-          <el-input
-            v-model="commentText"
-            type="textarea"
-            :rows="2"
-            maxlength="2000"
-            placeholder="填写处理说明…"
-          />
-          <button
-            class="issue-btn issue-btn--primary"
-            type="button"
-            :disabled="sending || !commentText.trim()"
-            @click="sendComment"
-          >
-            发送
+          </label>
+          <button class="search-button" type="button" @click="runSearchNow()">
+            搜索
+          </button>
+          <button class="issue-primary issue-primary--small" type="button" @click="openCreate()">
+            <el-icon :size="12"><Plus /></el-icon>
+            新增
           </button>
         </div>
+      </header>
+
+      <div class="rail-list" :class="{ 'is-refreshing': listLoading && issues.length }">
+        <div v-if="listError" class="rail-error">
+          <el-icon :size="15"><WarningFilled /></el-icon>
+          <p>{{ listError }}</p>
+          <button class="text-button" type="button" @click="loadList()">
+            <el-icon :size="12"><RefreshRight /></el-icon>重新加载
+          </button>
+        </div>
+        <div v-else-if="listLoading && !issues.length" class="list-skeleton">
+          <span v-for="index in 5" :key="index" class="skeleton-row"></span>
+        </div>
+        <template v-else>
+          <button
+            v-for="issue in issues"
+            :key="issue.id"
+            type="button"
+            class="issue-row"
+            :class="{ active: selectedId === issue.id && detail }"
+            @click="openIssue(issue.id)"
+          >
+            <span class="type-tile" :class="typeTone(issue.type)">
+              <el-icon :size="14"><component :is="typeIcon(issue.type)" /></el-icon>
+            </span>
+            <span class="row-main">
+              <span class="row-top">
+                <strong class="row-title">{{ issue.title }}</strong>
+                <span class="status-pill" :class="statusTone(issue.status)">{{
+                  issueStatusLabels[issue.status]
+                }}</span>
+              </span>
+              <span class="row-meta">
+                <span>{{ issue.type ? issueTypeLabels[issue.type] : "未分类" }}</span>
+                <span class="meta-sep">·</span>
+                <span>{{ stageLabels[issue.stage] }}</span>
+                <span class="row-time">{{ formatShort(issue.updatedAt) }}</span>
+              </span>
+              <span class="row-excerpt">{{ excerpt(issue) }}</span>
+            </span>
+          </button>
+          <div v-if="!issues.length" class="rail-empty">
+            <template v-if="hasFilters">
+              <p>没有符合条件的问题</p>
+              <button class="text-button" type="button" @click="clearFilters()">
+                清除筛选
+              </button>
+            </template>
+            <template v-else>
+              <p>还没有问题记录</p>
+              <button class="text-button" type="button" @click="openCreate()">
+                <el-icon :size="12"><Plus /></el-icon>新增第一个问题
+              </button>
+            </template>
+          </div>
+        </template>
+      </div>
+    </aside>
+
+    <!-- ===== 右栏：详情 ===== -->
+    <section class="detail-pane">
+      <template v-if="detail">
+        <header class="detail-head">
+          <button class="back-button" type="button" @click="mobileDetailOpen = false">
+            <el-icon :size="13"><ArrowLeft /></el-icon>
+            列表
+          </button>
+
+          <textarea
+            ref="titleEl"
+            v-model="titleDraft"
+            class="title-input"
+            :class="{ invalid: saveUi === 'failed' && !titleDraft.trim() }"
+            rows="1"
+            maxlength="200"
+            aria-label="问题标题"
+            placeholder="问题标题"
+            @input="onTitleInput"
+            @blur="onTitleBlur"
+            @keydown.enter.prevent="onTitleEnter()"
+          ></textarea>
+
+          <div class="meta-row">
+            <div class="meta-field meta-field--type">
+              <span class="meta-label">类型</span>
+              <el-select
+                :model-value="typeDraft"
+                size="small"
+                placeholder="未分类"
+                clearable
+                aria-label="问题类型"
+                @change="onTypeChange"
+              >
+                <el-option
+                  v-for="option in typeOptions"
+                  :key="option.value"
+                  :label="option.label"
+                  :value="option.value"
+                />
+              </el-select>
+            </div>
+            <div class="meta-field meta-field--stage">
+              <span class="meta-label">产生阶段</span>
+              <el-select
+                :model-value="stageDraft"
+                size="small"
+                aria-label="产生阶段"
+                @change="onStageChange"
+              >
+                <el-option
+                  v-for="option in stageOptions"
+                  :key="option.value"
+                  :label="option.label"
+                  :value="option.value"
+                />
+              </el-select>
+            </div>
+            <div class="meta-field meta-field--status">
+              <span class="meta-label">状态</span>
+              <div class="status-select" :class="statusTone(statusDraft)">
+                <el-select
+                  :model-value="statusDraft"
+                  size="small"
+                  aria-label="问题状态"
+                  @change="onStatusChange"
+                >
+                  <el-option
+                    v-for="status in issueStatuses"
+                    :key="status"
+                    :label="issueStatusLabels[status]"
+                    :value="status"
+                  />
+                </el-select>
+              </div>
+            </div>
+            <div class="meta-times">
+              <span>创建 {{ formatFull(detail.createdAt) }}</span>
+              <span>更新 {{ formatFull(detail.updatedAt) }}</span>
+              <span v-if="detail.resolvedAt" class="resolved-time"
+                >解决 {{ formatFull(detail.resolvedAt) }}</span
+              >
+              <button class="ghost-danger meta-delete" type="button" @click="removeIssue()">
+                <el-icon :size="11"><Delete /></el-icon>
+                删除
+              </button>
+            </div>
+          </div>
+        </header>
+
+        <div class="detail-body">
+          <section class="detail-section">
+            <div class="section-head">
+              <h3 class="section-title">问题描述</h3>
+              <span class="section-note">支持粘贴或拖入图片 · 自动保存</span>
+            </div>
+            <InlineRichTextEditor
+              ref="descEditor"
+              :key="`desc-${detail.id}`"
+              :html="descHtml"
+              :requirement-id="requirementId"
+              label="问题描述"
+              placeholder="描述问题现象、上下文或需要确认的点…"
+              compact
+              @update:html="onDescHtml"
+            />
+          </section>
+
+          <section class="detail-section">
+            <div class="section-head">
+              <h3 class="section-title">解决方案 / 最终结论</h3>
+              <span class="section-note" :class="{ 'is-warn': needsSolution }">
+                <el-icon v-if="needsSolution" :size="11"><WarningFilled /></el-icon>
+                {{
+                  needsSolution
+                    ? "标记为已解决前必须填写"
+                    : "支持 Markdown 与图片"
+                }}
+              </span>
+            </div>
+            <InlineRichTextEditor
+              ref="solEditor"
+              :key="`sol-${detail.id}`"
+              :html="solHtml"
+              :requirement-id="requirementId"
+              label="解决方案或最终结论"
+              placeholder="记录处理方案、最终结论，或暂不处理的原因…"
+              compact
+              @update:html="onSolHtml"
+            />
+          </section>
+
+          <section class="detail-section">
+            <div class="section-head">
+              <h3 class="section-title">
+                关联产出物
+                <span v-if="assets.length" class="section-count">{{ assets.length }}</span>
+              </h3>
+              <button class="text-button section-action" type="button" @click="openLinkDialog()">
+                <el-icon :size="12"><Link /></el-icon>
+                关联
+              </button>
+            </div>
+            <div v-if="assets.length" class="asset-chips">
+              <span
+                v-for="link in sortedAssets"
+                :key="link.assetId"
+                class="asset-chip"
+                :title="link.asset.relativePath"
+              >
+                <el-icon :size="12">
+                  <Folder v-if="link.asset.nodeType === 'folder'" />
+                  <Document v-else />
+                </el-icon>
+                <span class="asset-name">{{ link.asset.name }}</span>
+                <span
+                  v-if="link.relationType !== 'reference'"
+                  class="asset-rel"
+                  >{{ issueAssetRelationLabels[link.relationType] }}</span
+                >
+                <button
+                  class="chip-remove"
+                  type="button"
+                  :aria-label="`取消关联 ${link.asset.name}`"
+                  @click="unlink(link)"
+                >
+                  ×
+                </button>
+              </span>
+            </div>
+            <p v-else class="section-empty">
+              还没有关联产出物。把相关的设计稿、文档或文件链过来，方便追溯。
+            </p>
+          </section>
+        </div>
+
+        <footer class="save-bar" :class="`is-${saveUi}`" role="status" aria-live="polite">
+          <span class="save-dot" aria-hidden="true"></span>
+          <span class="save-text">{{ saveLabel }}</span>
+          <button
+            v-if="saveUi === 'failed'"
+            class="retry-button"
+            type="button"
+            @click="saveNow()"
+          >
+            重试
+          </button>
+          <span class="save-note">自动保存</span>
+        </footer>
+      </template>
+
+      <div v-else-if="detailLoading" class="detail-skeleton" aria-label="正在加载问题详情">
+        <span class="skeleton-line" style="width: 52%; height: 24px"></span>
+        <span class="skeleton-line" style="width: 38%; height: 12px"></span>
+        <span class="skeleton-block"></span>
+        <span class="skeleton-block"></span>
+      </div>
+
+      <div v-else-if="detailError" class="detail-state">
+        <el-icon :size="22"><WarningFilled /></el-icon>
+        <p>{{ detailError }}</p>
+        <button
+          v-if="selectedId"
+          class="text-button"
+          type="button"
+          @click="openIssue(selectedId, { force: true })"
+        >
+          <el-icon :size="12"><RefreshRight /></el-icon>重新加载
+        </button>
+      </div>
+
+      <div v-else class="detail-state detail-state--quiet">
+        <span class="state-mark">↳</span>
+        <p>从左侧选择一条问题，查看描述、结论与关联产出物。</p>
       </div>
     </section>
-    <!-- 关联产出物选择弹窗：artifacts 目录树，文件夹/文件均可勾选 -->
+  </div>
+
+  <!-- 弹窗挂在根级：空台账时双栏未渲染，弹窗仍需可用 -->
+    <!-- ===== 关联产出物弹窗 ===== -->
     <el-dialog
       v-model="linkDialogVisible"
       title="关联产出物"
-      width="440px"
+      width="min(460px, 92vw)"
       append-to-body
     >
       <div class="link-dialog-body" v-loading="treeLoading">
@@ -961,8 +1277,8 @@ function formatTime(iso: string): string {
           </span>
           <span v-else class="tree-caret tree-caret--leaf"></span>
           <el-icon
-            class="asset-icon"
-            :class="{ 'asset-icon--folder': row.item.nodeType === 'folder' }"
+            class="tree-icon"
+            :class="{ 'tree-icon--folder': row.item.nodeType === 'folder' }"
             :size="13"
           >
             <Folder v-if="row.item.nodeType === 'folder'" />
@@ -977,423 +1293,915 @@ function formatTime(iso: string): string {
             @change="onTreeCheck(row.item, $event)"
           />
         </div>
-        <el-empty
-          v-if="!artifactTree.length && !treeLoading"
-          description="暂无可关联的产出物"
-          :image-size="48"
-        />
+        <p v-if="!artifactTree.length && !treeLoading" class="section-empty">
+          暂无可关联的产出物。
+        </p>
       </div>
       <template #footer>
-        <button
-          class="issue-btn"
-          type="button"
-          @click="linkDialogVisible = false"
-        >
-          取消
-        </button>
-        <button
-          class="issue-btn issue-btn--primary"
-          type="button"
-          :disabled="linkSaving || !checkedIds.length"
-          @click="confirmLink"
+        <el-button @click="linkDialogVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="linkSaving"
+          :disabled="!checkedIds.length"
+          @click="confirmLink()"
         >
           确定关联
-        </button>
+        </el-button>
       </template>
     </el-dialog>
-  </aside>
+
+    <!-- ===== 新建问题弹窗 ===== -->
+    <el-dialog
+      v-model="createOpen"
+      title="新增问题"
+      width="min(520px, 92vw)"
+      :close-on-click-modal="false"
+      append-to-body
+    >
+      <div class="create-form">
+        <label class="create-field">
+          <span class="create-label">问题标题 <i>*</i></span>
+          <el-input
+            ref="createTitleInput"
+            v-model="createTitle"
+            maxlength="200"
+            placeholder="一句话说清问题"
+            @keydown.enter.prevent="submitCreate()"
+          />
+        </label>
+        <div class="create-row">
+          <label class="create-field">
+            <span class="create-label">问题类型</span>
+            <el-select v-model="createType" placeholder="未分类" clearable>
+              <el-option
+                v-for="option in typeOptions"
+                :key="option.value"
+                :label="option.label"
+                :value="option.value"
+              />
+            </el-select>
+          </label>
+          <label class="create-field">
+            <span class="create-label">产生阶段</span>
+            <el-select v-model="createStage">
+              <el-option
+                v-for="option in stageOptions"
+                :key="option.value"
+                :label="option.label"
+                :value="option.value"
+              />
+            </el-select>
+          </label>
+        </div>
+        <label class="create-field">
+          <span class="create-label">问题描述</span>
+          <el-input
+            v-model="createDesc"
+            type="textarea"
+            :rows="4"
+            maxlength="5000"
+            resize="none"
+            placeholder="可选。创建后可在详情中补充图片与 Markdown。"
+          />
+        </label>
+      </div>
+      <template #footer>
+        <el-button @click="createOpen = false">取消</el-button>
+        <el-button type="primary" :loading="creating" @click="submitCreate()">
+          创建问题
+        </el-button>
+      </template>
+    </el-dialog>
 </template>
 <style scoped>
-.issues-panel {
-  /* 两栏布局：左列表右详情；未打开详情时列表占满整行 */
-  display: flex;
-  flex-direction: row;
-  align-items: stretch;
-  min-width: 0;
-  /* 左栏 flex 子项：占满剩余高度；根容器不滚，滚动交给内部列表/详情区 */
-  flex: 1 1 auto;
+/* 状态/类型语义色：仅用于数据本身（点、标签、计数） */
+.tone-blue {
+  --tone-fg: var(--tone-blue-fg);
+  --tone-bg: var(--tone-blue-bg);
+  --tone-bd: var(--tone-blue-bd);
+}
+.tone-teal {
+  --tone-fg: var(--tone-teal-fg);
+  --tone-bg: var(--tone-teal-bg);
+  --tone-bd: var(--tone-teal-bd);
+}
+.tone-green {
+  --tone-fg: var(--tone-green-fg);
+  --tone-bg: var(--tone-green-bg);
+  --tone-bd: var(--tone-green-bd);
+}
+.tone-amber {
+  --tone-fg: var(--tone-amber-fg);
+  --tone-bg: var(--tone-amber-bg);
+  --tone-bd: var(--tone-amber-bd);
+}
+.tone-purple {
+  --tone-fg: var(--tone-purple-fg);
+  --tone-bg: var(--tone-purple-bg);
+  --tone-bd: var(--tone-purple-bd);
+}
+.tone-slate {
+  --tone-fg: var(--tone-slate-fg);
+  --tone-bg: var(--tone-slate-bg);
+  --tone-bd: var(--tone-slate-bd);
+}
+
+.issue-app {
+  display: grid;
+  grid-template-columns: 332px minmax(0, 1fr);
+  height: 100%;
   min-height: 0;
   overflow: hidden;
-}
-.issues-panel.has-detail .issues-left {
-  flex: 0 0 320px;
-  width: 320px;
-  border-right: 1px solid var(--border-soft);
-}
-.issues-left {
-  display: flex;
-  flex-direction: column;
-  flex: 1 1 auto;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-}
-.issues-right {
-  display: flex;
-  flex-direction: column;
-  flex: 1 1 auto;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-}
-.issues-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 10px 0;
-  flex: none;
-}
-/* 紧凑状态筛选按钮组 */
-.status-filter {
-  display: inline-flex;
-  gap: 2px;
-  padding: 2px;
   border: 1px solid var(--border-base);
-  border-radius: 8px;
+  border-radius: 12px;
   background: var(--bg-surface);
 }
-.status-filter button {
-  padding: 2px 8px;
-  border: 0;
-  border-radius: 6px;
-  background: none;
-  font-size: 11px;
-  color: var(--text-secondary);
-  cursor: pointer;
-  white-space: nowrap;
+.issue-rail {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-right: 1px solid var(--border-base);
+  background: var(--bg-subtle);
 }
-.status-filter button:hover {
+.rail-head {
+  display: grid;
+  flex: none;
+  gap: 8px;
+  padding: 13px 15px 10px;
+}
+.issue-primary {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 8px 13px;
+  border: 1px solid var(--brand);
+  border-radius: 8px;
+  background: var(--brand);
+  color: #fff;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+}
+.issue-primary:hover {
+  border-color: var(--brand-strong);
+  background: var(--brand-strong);
+}
+.issue-primary--small {
+  height: 30px;
+  padding: 0 11px;
+  font-size: 11.5px;
+}
+.issue-primary:focus-visible {
+  outline: 2px solid var(--brand-ring);
+  outline-offset: 2px;
+}
+
+.filter-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.filter-select {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.filter-select :deep(.el-select__wrapper) {
+  min-height: 30px;
+  border-radius: 7px;
+  background: var(--bg-surface);
+  box-shadow: 0 0 0 1px var(--border-base) inset;
+  font-size: 11.5px;
+}
+.filter-select :deep(.el-select__wrapper.is-focused) {
+  box-shadow: 0 0 0 1px var(--border-brand) inset;
+}
+.search-box {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--border-base);
+  border-radius: 7px;
+  background: var(--bg-surface);
+  color: var(--text-faint);
+}
+.search-box:focus-within {
+  border-color: var(--border-brand);
+  outline: 2px solid var(--brand-ring);
+  outline-offset: 0;
+}
+.search-box input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-body);
+  font: inherit;
+  font-size: 11.5px;
+}
+.search-box input::placeholder {
+  color: var(--text-faint);
+}
+.search-box input::-webkit-search-cancel-button {
+  display: none;
+}
+.search-clear {
+  flex: none;
+  padding: 0 1px;
+  border: 0;
+  background: none;
+  color: var(--text-faint);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+.search-clear:hover {
+  color: var(--text-regular);
+}
+.search-button {
+  flex: none;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border-base);
+  border-radius: 7px;
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.search-button:hover {
+  border-color: var(--border-brand);
   color: var(--brand);
+}
+.search-button:focus-visible {
+  outline: 2px solid var(--brand-ring);
+  outline-offset: 1px;
+}
+
+.rail-list {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 2px 9px 12px;
+  transition: opacity 0.15s ease;
+}
+.rail-list.is-refreshing {
+  opacity: 0.62;
+}
+.issue-row {
+  position: relative;
+  display: flex;
+  gap: 9px;
+  width: 100%;
+  flex: none;
+  padding: 10px 9px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.issue-row:hover {
+  border-color: var(--border-soft);
   background: var(--bg-hover);
 }
-.status-filter button.active {
-  background: var(--bg-brand-soft);
+.issue-row.active {
+  border-color: var(--border-base);
+  background: var(--bg-surface);
+}
+.issue-row.active::before {
+  position: absolute;
+  top: 11px;
+  bottom: 11px;
+  left: -1px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--brand);
+  content: "";
+}
+.issue-row:focus-visible {
+  outline: 2px solid var(--brand-ring);
+  outline-offset: -1px;
+}
+.type-tile {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  margin-top: 1px;
+  border: 1px solid var(--border-soft);
+  border-radius: 7px;
+  background: var(--bg-surface);
+  color: var(--tone-fg, var(--text-muted));
+}
+.issue-row:hover .type-tile {
+  background: var(--bg-subtle);
+}
+.issue-row.active .type-tile {
+  border-color: var(--border-base);
+  background: var(--bg-subtle);
+}
+.row-main {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.row-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.row-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-title);
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.status-pill {
+  flex: none;
+  height: 17px;
+  padding: 0 5px;
+  border: 1px solid var(--tone-bd, var(--border-base));
+  border-radius: 4px;
+  background: var(--tone-bg, var(--bg-subtle));
+  color: var(--tone-fg, var(--text-muted));
+  font-size: 9.5px;
+  font-weight: 600;
+  line-height: 15px;
+}
+.row-meta {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+.meta-sep {
+  color: var(--border-line);
+}
+.row-time {
+  flex: none;
+  margin-left: auto;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+.row-excerpt {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 10.8px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.rail-empty {
+  display: grid;
+  justify-items: center;
+  gap: 9px;
+  padding: 42px 14px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  text-align: center;
+}
+.rail-empty p {
+  margin: 0;
+}
+.rail-error {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  padding: 36px 16px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  text-align: center;
+}
+.rail-error p {
+  margin: 0;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.text-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
   color: var(--brand);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.text-button:hover {
+  text-decoration: underline;
+}
+.list-skeleton {
+  display: grid;
+  gap: 6px;
+  padding: 4px 1px;
+}
+.skeleton-row {
+  height: 76px;
+  border-radius: 9px;
+  background: var(--bg-hover);
+  animation: skeleton-pulse 1.2s ease-in-out infinite;
+}
+
+/* 右栏：白色纸面，标题、字段、正文按阅读顺序排列 */
+.detail-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg-surface);
+}
+.detail-head {
+  display: grid;
+  flex: none;
+  gap: 8px;
+  padding: 14px 24px 12px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.back-button {
+  display: none;
+  justify-self: start;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 6px;
+  border: 1px solid var(--border-base);
+  border-radius: 6px;
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.ghost-danger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-base);
+  border-radius: 6px;
+  background: var(--bg-surface);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+.ghost-danger:hover {
+  border-color: var(--tone-red-bd);
+  background: var(--tone-red-bg);
+  color: var(--tone-red-fg);
+}
+.title-input {
+  width: 100%;
+  margin: 0;
+  padding: 2px 5px;
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  outline: 0;
+  background: transparent;
+  color: var(--text-heading);
+  font: inherit;
+  font-size: 21px;
+  font-weight: 650;
+  line-height: 1.38;
+  letter-spacing: -0.35px;
+  resize: none;
+}
+.title-input:hover {
+  background: var(--bg-subtle);
+}
+.title-input:focus {
+  border-color: var(--border-brand);
+  background: var(--bg-surface);
+}
+.title-input.invalid {
+  border-color: var(--tone-red-bd);
+  background: var(--tone-red-bg);
+}
+.meta-row {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 8px 13px;
+}
+.meta-field {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.meta-label {
+  color: var(--text-muted);
+  font-size: 9.5px;
+  letter-spacing: 0.05em;
+}
+.meta-field :deep(.el-select) {
+  width: 142px;
+}
+.meta-field--stage :deep(.el-select) {
+  width: 118px;
+}
+.meta-field--status :deep(.el-select) {
+  width: 112px;
+}
+.meta-field :deep(.el-select__wrapper) {
+  min-height: 27px;
+  border-radius: 6px;
+  background: var(--bg-surface);
+  box-shadow: 0 0 0 1px var(--border-base) inset;
+  font-size: 11.5px;
+}
+.meta-field :deep(.el-select__wrapper.is-focused) {
+  box-shadow: 0 0 0 1px var(--brand) inset;
+}
+.status-select :deep(.el-select__wrapper) {
+  background: var(--tone-bg);
+  box-shadow: 0 0 0 1px var(--tone-bd) inset;
+}
+.status-select :deep(.el-select__selected-item) {
+  color: var(--tone-fg);
   font-weight: 600;
 }
-.issue-new {
+.status-select :deep(.el-select__caret) {
+  color: var(--tone-fg);
+}
+.status-select :deep(.el-select__wrapper.is-focused) {
+  box-shadow: 0 0 0 1px var(--tone-fg) inset;
+}
+.meta-times {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 2px 11px;
+  margin-left: auto;
+  padding-bottom: 5px;
+  color: var(--text-faint);
+  font-size: 9.5px;
+  font-variant-numeric: tabular-nums;
+}
+.resolved-time {
+  color: var(--tone-green-fg);
+}
+.meta-delete {
+  margin-left: 2px;
+  padding: 2px 6px;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.detail-body {
+  display: grid;
+  flex: 1 1 auto;
+  align-content: start;
+  gap: 21px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 18px 24px 24px;
+}
+.detail-section {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.section-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 20px;
+}
+.section-title {
+  margin: 0;
+  color: var(--text-title);
+  font-size: 11.5px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  line-height: 1.4;
+}
+.section-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 15px;
+  height: 15px;
+  margin-left: 4px;
+  padding: 0 4px;
+  border: 1px solid var(--border-base);
+  border-radius: 4px;
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  vertical-align: 1px;
+}
+.section-note {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   margin-left: auto;
-  padding: 4px 10px;
-  border-radius: 8px;
-  border: 1px solid var(--border-light, var(--border-base));
-  background: none;
-  color: var(--brand);
-  font-size: 12px;
-  cursor: pointer;
-  flex: none;
-}
-.issue-new:hover {
-  border-color: var(--brand);
-  background: var(--bg-brand-soft);
-}
-/* 内联新建表单 */
-.issue-create-form {
-  display: grid;
-  gap: 8px;
-  margin: 10px 10px 0;
-  padding: 10px;
-  border: 1px solid var(--border-base);
-  border-radius: 8px;
-  background: var(--bg-subtle);
-  flex: none;
-}
-.issue-create-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.issue-type-select {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-.issue-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  padding: 4px 12px;
-  border-radius: 8px;
-  border: 1px solid var(--border-base);
-  background: none;
-  color: var(--text-secondary);
-  font-size: 12px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.issue-btn:hover:not(:disabled) {
-  color: var(--brand);
-  border-color: var(--brand);
-}
-.issue-btn:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
-}
-.issue-btn--primary {
-  color: var(--brand);
-  border-color: var(--brand);
-}
-.issue-btn--primary:hover:not(:disabled) {
-  background: var(--bg-brand-soft);
-}
-.issue-btn--danger {
-  color: var(--danger-text);
-}
-.issue-btn--danger:hover:not(:disabled) {
-  color: var(--danger-text);
-  border-color: var(--danger-text);
-}
-.issue-list {
-  flex: 1 1 auto;
-  min-height: 0;
-  /* 问题条目列表独立滚动 */
-  overflow-y: auto;
-  padding: 8px 10px 10px;
-}
-.issue-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 8px;
-  border-radius: 8px;
-}
-.issue-item:hover {
-  background: var(--bg-hover);
-}
-.issue-item.active {
-  background: var(--bg-brand-soft);
-}
-/* 列表多选框：压缩默认高度避免撑高条目 */
-.issue-check {
-  flex: none;
-  height: auto;
-}
-.issue-check :deep(.el-checkbox__label) {
-  display: none;
-}
-.issue-title {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  text-align: left;
-  background: none;
-  border: 0;
-  padding: 0;
-  color: var(--text-primary, var(--text-title));
-  font: inherit;
-  font-size: 13px;
-  cursor: pointer;
-}
-.issue-title:hover {
-  color: var(--brand);
-}
-.issue-time {
-  flex: none;
-  font-size: 11px;
   color: var(--text-faint);
+  font-size: 9.5px;
 }
-/* 底部：全选 + 导出 */
-.issues-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 8px 10px;
-  border-top: 1px solid var(--border-soft);
-  flex: none;
-}
-.select-all {
-  height: auto;
-}
-.select-all :deep(.el-checkbox__label) {
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-.issue-export {
-  padding: 5px 12px;
-}
-/* 详情视图 */
-.issues-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 10px 0;
-  flex: none;
-}
-.issues-close {
-  display: inline-flex;
-  padding: 4px;
-  border: 0;
-  border-radius: 6px;
-  background: none;
-  color: var(--text-tertiary, var(--text-muted));
-  cursor: pointer;
-  flex: none;
-}
-.issues-close:hover {
-  color: var(--brand);
-  background: var(--bg-hover);
-}
-.issues-title {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 13px;
-  color: var(--text-primary, var(--text-title));
-}
-.issue-detail {
-  display: grid;
-  gap: 12px;
-  padding: 10px;
-  align-content: start;
-  /* 问题详情视图独立滚动：内容超出时滚动条在面板内 */
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-}
-.muted-line {
-  color: var(--text-faint);
-}
-.issue-flow {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-}
-.issue-status-select {
-  width: 132px;
-}
-.block-label {
-  font-size: 11px;
-  color: var(--text-muted);
-}
-.issue-solution {
-  display: grid;
-  gap: 4px;
-  padding: 8px 10px;
-  border-radius: 8px;
-  border: 1px solid var(--tone-green-bd);
-  background: var(--tone-green-bg);
-}
-.issue-solution p {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.7;
-  color: var(--tone-green-fg);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-.assets-head-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-.issue-link-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 0;
-  border: 0;
-  background: none;
-  font-size: 12px;
-  color: var(--brand);
-  cursor: pointer;
-}
-.issue-link-btn:hover {
-  text-decoration: underline;
-}
-.asset-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 8px;
-  border: 1px solid var(--border-soft);
-  border-radius: 6px;
-  background: var(--bg-subtle);
-}
-.asset-icon {
-  flex: none;
-  color: var(--text-faint);
-}
-.asset-icon--folder {
-  color: var(--tone-amber-fg, var(--brand));
-}
-.asset-name {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px;
-  color: var(--text-regular);
-}
-.issue-unlink {
-  flex: none;
-  padding: 0;
-  border: 0;
-  background: none;
-  font-size: 11px;
-  color: var(--text-muted);
-  cursor: pointer;
-}
-.issue-unlink:hover {
-  color: var(--danger-text);
-}
-.activity-row {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  padding: 4px 0;
-  border-bottom: 1px dashed var(--border-soft);
-}
-.activity-row:last-child {
-  border-bottom: 0;
-}
-.activity-icon {
-  flex: none;
-  align-self: center;
-  color: var(--text-faint);
-}
-.activity--comment {
-  color: var(--brand);
-}
-.activity--solution {
-  color: var(--tone-green-fg);
-}
-.activity--status_change {
+.section-note.is-warn {
   color: var(--tone-amber-fg);
 }
-.activity-text {
-  flex: 1 1 auto;
-  min-width: 0;
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--text-regular);
-  overflow-wrap: anywhere;
+.section-action {
+  margin-left: auto;
+  font-size: 10.5px;
 }
-.activity-time {
+.section-empty {
+  margin: 0;
+  color: var(--text-faint);
+  font-size: 10.8px;
+  line-height: 1.65;
+}
+.detail-section :deep(.inline-rich) {
+  border-radius: 8px;
+}
+.asset-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.asset-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  height: 26px;
+  padding: 0 3px 0 7px;
+  border: 1px solid var(--border-base);
+  border-radius: 6px;
+  background: var(--bg-subtle);
+  color: var(--text-regular);
+  font-size: 10.5px;
+}
+.asset-chip :deep(.el-icon) {
   flex: none;
-  font-size: 11px;
   color: var(--text-faint);
 }
-.issue-comment {
-  display: grid;
-  gap: 8px;
-  justify-items: end;
+.asset-name {
+  overflow: hidden;
+  max-width: 240px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-/* 关联弹窗：artifacts 目录树 */
+.asset-rel {
+  flex: none;
+  color: var(--text-faint);
+  font-size: 9.5px;
+}
+.chip-remove {
+  flex: none;
+  padding: 1px 4px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-faint);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.chip-remove:hover {
+  background: var(--tone-red-bg);
+  color: var(--tone-red-fg);
+}
+
+.save-bar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 8px 24px;
+  border-top: 1px solid var(--border-base);
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+  font-size: 10.5px;
+}
+.save-dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--tone-green-fg);
+}
+.save-bar.is-pending .save-dot {
+  background: var(--tone-amber-fg);
+}
+.save-bar.is-saving .save-dot {
+  background: var(--brand);
+  animation: save-pulse 1s ease-in-out infinite;
+}
+.save-bar.is-failed {
+  color: var(--danger-text);
+}
+.save-bar.is-failed .save-dot {
+  background: var(--danger-text);
+}
+.save-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.save-note {
+  flex: none;
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: 9.5px;
+}
+.retry-button {
+  flex: none;
+  padding: 2px 8px;
+  border: 1px solid var(--tone-red-bd);
+  border-radius: 5px;
+  background: var(--tone-red-bg);
+  color: var(--danger-text);
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.detail-skeleton {
+  display: grid;
+  flex: 1;
+  align-content: start;
+  gap: 14px;
+  padding: 24px;
+}
+.skeleton-line,
+.skeleton-block {
+  border-radius: 6px;
+  background: var(--bg-hover);
+  animation: skeleton-pulse 1.2s ease-in-out infinite;
+}
+.skeleton-line {
+  height: 12px;
+}
+.skeleton-block {
+  height: 190px;
+  border-radius: 8px;
+}
+.detail-state {
+  display: grid;
+  flex: 1;
+  place-content: center;
+  justify-items: center;
+  gap: 9px;
+  padding: 40px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  text-align: center;
+}
+.detail-state p {
+  max-width: 360px;
+  margin: 0;
+  line-height: 1.7;
+}
+.detail-state .el-icon {
+  color: var(--text-faint);
+}
+.state-mark {
+  color: var(--border-line);
+  font-size: 24px;
+  line-height: 1;
+}
+.detail-state--quiet {
+  color: var(--text-faint);
+}
+
+/* 空台账 */
+.issue-empty {
+  display: grid;
+  grid-template-columns: minmax(0, 1.08fr) minmax(0, 0.92fr);
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-base);
+  border-radius: 12px;
+  background: var(--bg-surface);
+}
+.empty-ledger {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 52px 48px;
+}
+.empty-kicker {
+  color: var(--brand);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+}
+.empty-ledger h2 {
+  margin: 13px 0 12px;
+  color: var(--text-heading);
+  font-size: 31px;
+  font-weight: 650;
+  line-height: 1.28;
+  letter-spacing: -0.7px;
+}
+.empty-ledger p {
+  max-width: 390px;
+  margin: 0 0 23px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.85;
+}
+.empty-ledger .issue-primary {
+  padding: 10px 15px;
+  font-size: 12px;
+}
+.empty-side {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 17px;
+  padding: 52px 42px;
+  border-left: 1px solid var(--border-soft);
+  background: var(--bg-subtle);
+}
+.empty-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.empty-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 7px;
+  border: 1px solid var(--tone-bd, var(--border-base));
+  border-radius: 5px;
+  background: var(--tone-bg, var(--bg-surface));
+  color: var(--tone-fg, var(--text-muted));
+  font-size: 10px;
+}
+.empty-chip b {
+  font-weight: 500;
+  opacity: 0.6;
+}
+.empty-rule {
+  height: 1px;
+  background: var(--border-base);
+}
+.empty-lines {
+  display: grid;
+  gap: 10px;
+}
+.empty-line {
+  height: 7px;
+  border-radius: 4px;
+  background: var(--border-soft);
+}
+.empty-caption {
+  color: var(--text-faint);
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+}
+
+/* 关联弹窗 */
 .link-dialog-body {
   display: grid;
-  gap: 2px;
-  max-height: 360px;
+  gap: 1px;
   min-height: 120px;
+  max-height: 360px;
   overflow: auto;
 }
 .tree-row {
@@ -1421,14 +2229,21 @@ function formatTime(iso: string): string {
 .tree-caret--leaf {
   visibility: hidden;
 }
+.tree-icon {
+  flex: none;
+  color: var(--text-faint);
+}
+.tree-icon--folder {
+  color: var(--tone-amber-fg);
+}
 .tree-name {
-  flex: 1 1 auto;
+  flex: 1;
   min-width: 0;
   overflow: hidden;
+  color: var(--text-regular);
+  font-size: 11.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
-  color: var(--text-regular);
 }
 .tree-check {
   flex: none;
@@ -1436,5 +2251,140 @@ function formatTime(iso: string): string {
 }
 .tree-check :deep(.el-checkbox__label) {
   display: none;
+}
+
+/* 新建弹窗 */
+.create-form {
+  display: grid;
+  gap: 14px;
+}
+.create-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.create-field {
+  display: grid;
+  gap: 6px;
+}
+.create-label {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.create-label i {
+  color: var(--danger-text);
+  font-style: normal;
+}
+
+@keyframes save-pulse {
+  50% {
+    opacity: 0.32;
+  }
+}
+@keyframes skeleton-pulse {
+  50% {
+    opacity: 0.55;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .save-bar.is-saving .save-dot,
+  .skeleton-row,
+  .skeleton-line,
+  .skeleton-block {
+    animation: none;
+  }
+  .tree-caret,
+  .rail-list {
+    transition: none;
+  }
+}
+
+@media (max-width: 1180px) {
+  .issue-app {
+    grid-template-columns: 300px minmax(0, 1fr);
+  }
+  .meta-times {
+    width: 100%;
+    justify-content: flex-start;
+    margin-left: 0;
+    padding-bottom: 0;
+  }
+}
+/* 单栏：列表与详情互斥，详情提供返回按钮 */
+@media (max-width: 980px) {
+  .issue-app {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .issue-rail {
+    border-right: 0;
+  }
+  .detail-pane {
+    display: none;
+  }
+  .issue-app.detail-open .issue-rail {
+    display: none;
+  }
+  .issue-app.detail-open .detail-pane {
+    display: flex;
+  }
+  .back-button {
+    display: inline-flex;
+  }
+  .rail-head {
+    padding: 14px 13px 10px;
+  }
+  .detail-head {
+    padding: 13px 15px 12px;
+  }
+  .detail-body {
+    padding: 16px 15px 20px;
+  }
+  .save-bar {
+    padding: 8px 15px;
+  }
+  .issue-empty {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .empty-side {
+    display: none;
+  }
+  .empty-ledger {
+    padding: 40px 28px;
+  }
+}
+@media (max-width: 640px) {
+  .title-input {
+    font-size: 19px;
+  }
+  .meta-field {
+    flex: 1 1 calc(50% - 7px);
+  }
+  .meta-field :deep(.el-select) {
+    width: 100%;
+  }
+  .meta-field--status {
+    flex-basis: 100%;
+  }
+  .section-note {
+    display: none;
+  }
+  .save-note {
+    display: none;
+  }
+  .empty-ledger {
+    padding: 32px 22px;
+  }
+  .empty-ledger h2 {
+    font-size: 26px;
+  }
+  .create-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+</style>
+<style>
+/* 深色模式下填充品牌色的按钮改用深色文字，保证对比度 */
+html.dark .issue-primary {
+  color: #0f131b;
 }
 </style>

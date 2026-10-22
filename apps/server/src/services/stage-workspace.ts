@@ -1,23 +1,22 @@
 import type Database from "better-sqlite3";
 import { stageWorkspaceSchema, type StageWorkspace } from "@superpm/shared";
-import {
-  mkdirSync,
-  realpathSync,
-  lstatSync,
-  writeFileSync,
-  readFileSync,
-  existsSync,
-} from "node:fs";
-import { join, relative, isAbsolute } from "node:path";
+import { existsSync, lstatSync, writeFileSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { DomainError, RequirementService } from "./requirements.js";
+import { RequirementDirectoryResolver } from "./requirement-directory.js";
 
 export class StageWorkspaceService {
+  private readonly directories: RequirementDirectoryResolver;
   constructor(
     private db: Database.Database,
     private root: string,
     private requirements: RequirementService,
-  ) {}
+    directories?: RequirementDirectoryResolver,
+  ) {
+    this.directories =
+      directories ?? new RequirementDirectoryResolver(db, root);
+  }
   get(id: number): StageWorkspace {
     this.requirements.get(id);
     const row = this.db
@@ -37,19 +36,8 @@ export class StageWorkspaceService {
         };
   }
   private directory(id: number, folder: string) {
-    const root = realpathSync(this.root);
-    let current = root;
-    for (const segment of ["requirements", String(id), folder]) {
-      current = join(current, segment);
-      if (!existsSync(current)) mkdirSync(current);
-      if (lstatSync(current).isSymbolicLink())
-        throw new DomainError("INVALID_PATH", "工作区目录不能是符号链接");
-      const resolved = realpathSync(current);
-      const distance = relative(root, resolved);
-      if (distance.startsWith("..") || isAbsolute(distance))
-        throw new DomainError("INVALID_PATH", "工作区路径无效");
-    }
-    return current;
+    // 需求根目录统一解析（可读目录名 + 越界/符号链接防护）
+    return this.directories.resolve(id, folder, true);
   }
   save(id: number, input: unknown) {
     const data = stageWorkspaceSchema.parse(input);

@@ -4,14 +4,18 @@
 - 审计方式：只读检查实际代码，未修改任何业务代码、数据库或用户文件
 - 对应开发文档：《superPM workbench 产出物与过程问题管理改造开发文档》V1.0
 
+> 本文是阶段 0 的历史快照，仅记录当时的代码状态，不代表当前实现。文中提到的
+> `RequirementAnalysisPanel.vue`、`MarkdownEditor.vue` 等组件已在后续迭代中删除，
+> 现行结构与能力请以根目录 `README.md` 和实际代码为准。
+
 ## 1. 技术栈与启动方式
 
-| 层 | 实现 | 说明 |
-|---|---|---|
-| 前端 | Vue 3 + TypeScript + Vite + Element Plus + Tiptap 3.x | `apps/web`，路由 vue-router，状态为组件内 ref（无 Pinia/Redux） |
-| 后端 | Fastify + better-sqlite3（同步 API） | `apps/server`，单进程本地服务，`createApp(options)` 可注入 db/workspace 路径 |
-| 共享 | zod schema + TS 类型 | `packages/shared`，前后端共用枚举与校验 |
-| 包管理 | npm workspaces | `apps/*` + `packages/*` |
+| 层     | 实现                                                  | 说明                                                                         |
+| ------ | ----------------------------------------------------- | ---------------------------------------------------------------------------- |
+| 前端   | Vue 3 + TypeScript + Vite + Element Plus + Tiptap 3.x | `apps/web`，路由 vue-router，状态为组件内 ref（无 Pinia/Redux）              |
+| 后端   | Fastify + better-sqlite3（同步 API）                  | `apps/server`，单进程本地服务，`createApp(options)` 可注入 db/workspace 路径 |
+| 共享   | zod schema + TS 类型                                  | `packages/shared`，前后端共用枚举与校验                                      |
+| 包管理 | npm workspaces                                        | `apps/*` + `packages/*`                                                      |
 
 启动：`npm run dev`（concurrently 同时起 server 3001 与 web 5173）；生产 `npm run build` + `npm run start`（server 静态托管 `apps/web/dist`，SPA fallback 已实现）。
 
@@ -28,14 +32,14 @@
 
 ## 3. 现有表结构（0001–0004 迁移结果）
 
-| 表 | 用途 | 主键 | 软删除 | 关键外键/索引 |
-|---|---|---|---|---|
-| `requirements` | 需求主表 | INTEGER AUTOINCREMENT | `deleted_at`（非空即删） | `parent_id` 自引用；`parent_idx` |
-| `requirement_history` | 阶段流转历史 | INTEGER | 无 | `requirement_id → requirements(id)` |
-| `requirement_audit` | 操作审计 | INTEGER | 无 | 同上 |
-| `requirement_workspaces` | 旧阶段工作台（JSON content + version 乐观锁） | requirement_id（1:1） | 无 | 同上 |
-| `requirement_files` | 产出物文件索引 | INTEGER | 无 | 同上；`scope_idx(requirement_id, phase, category)` |
-| `schema_migrations` | 迁移记录 | version | — | — |
+| 表                       | 用途                                          | 主键                  | 软删除                   | 关键外键/索引                                      |
+| ------------------------ | --------------------------------------------- | --------------------- | ------------------------ | -------------------------------------------------- |
+| `requirements`           | 需求主表                                      | INTEGER AUTOINCREMENT | `deleted_at`（非空即删） | `parent_id` 自引用；`parent_idx`                   |
+| `requirement_history`    | 阶段流转历史                                  | INTEGER               | 无                       | `requirement_id → requirements(id)`                |
+| `requirement_audit`      | 操作审计                                      | INTEGER               | 无                       | 同上                                               |
+| `requirement_workspaces` | 旧阶段工作台（JSON content + version 乐观锁） | requirement_id（1:1） | 无                       | 同上                                               |
+| `requirement_files`      | 产出物文件索引                                | INTEGER               | 无                       | 同上；`scope_idx(requirement_id, phase, category)` |
+| `schema_migrations`      | 迁移记录                                      | version               | —                        | —                                                  |
 
 约定（已全项目统一）：
 
@@ -63,10 +67,10 @@
 
 ## 6. 测试体系
 
-| 类型 | 框架 | 位置 | 命令 | 现状 |
-|---|---|---|---|---|
-| 单元/集成 | vitest | `apps/server/tests/` | `npm test` | 19 条（需求 CRUD、文件服务、图片、事务回滚等），真实 SQLite 临时库 |
-| E2E | Playwright | `tests/e2e/` | `npm run test:e2e`（先 build web） | 11 条（analysis-files.spec.ts），走 e2e-server + dist |
+| 类型      | 框架       | 位置                 | 命令                               | 现状                                                               |
+| --------- | ---------- | -------------------- | ---------------------------------- | ------------------------------------------------------------------ |
+| 单元/集成 | vitest     | `apps/server/tests/` | `npm test`                         | 19 条（需求 CRUD、文件服务、图片、事务回滚等），真实 SQLite 临时库 |
+| E2E       | Playwright | `tests/e2e/`         | `npm run test:e2e`（先 build web） | 11 条（analysis-files.spec.ts），走 e2e-server + dist              |
 
 类型检查：`npm run typecheck`（三 workspace 全跑）。
 
@@ -74,33 +78,33 @@
 
 ### 7.1 可复用（不改）
 
-| 模块 | 复用点 |
-|---|---|
-| 需求主表/服务 | Asset、Issue 均挂 `requirements.id`，编号唯一性已由 UNIQUE 约束保证 |
-| 迁移器 | `migrate.ts` 完全满足「可追踪、幂等、事务化」要求，无需新机制 |
-| 路径安全 | `directory()/path()` 的逐级 realpath 校验可直接抽出复用为 `resolveAssetPath` 基础 |
-| 校验/错误体系 | zod + `DomainError` + 统一 `{error:{code,message}}` 响应结构 |
-| 测试基建 | createApp 注入临时库/workspace 的测试模式可平移 |
+| 模块          | 复用点                                                                            |
+| ------------- | --------------------------------------------------------------------------------- |
+| 需求主表/服务 | Asset、Issue 均挂 `requirements.id`，编号唯一性已由 UNIQUE 约束保证               |
+| 迁移器        | `migrate.ts` 完全满足「可追踪、幂等、事务化」要求，无需新机制                     |
+| 路径安全      | `directory()/path()` 的逐级 realpath 校验可直接抽出复用为 `resolveAssetPath` 基础 |
+| 校验/错误体系 | zod + `DomainError` + 统一 `{error:{code,message}}` 响应结构                      |
+| 测试基建      | createApp 注入临时库/workspace 的测试模式可平移                                   |
 
 ### 7.2 可扩展（演进，不重建）
 
-| 现有 | 差距 | 建议方向 |
-|---|---|---|
+| 现有                | 差距                                                                                                                                                                              | 建议方向                                                                                                                                           |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `requirement_files` | 缺 `description`、`resource_type=text`、`storage_type`、`relative_path`（现路径推导不落库）、完整 `status`（现有 is_final 仅二值，方案要求 draft/final/archived/missing）、软删除 | 在阶段 1 决策：**扩展本表演进为 Asset**（符合「优先扩展」原则，且上批新增的 kind/link_url 已是 Asset 半成品）vs 新建 assets 表再迁移。倾向扩展本表 |
-| `is_final` | 与方案 `status` 冲突 | is_final 语义 ≈ status='final' 的布尔投影；扩展时可保留列（兼容现有 UI/e2e），由服务层双向同步，或迁移转换——阶段 1 定 |
-| 分类清单 | 方案默认分类（analysis_record/mind_map/flowchart/…）与现有 9 分类（record/designLink/uiAssets/uiIssues/devIssues/testIssues 等）不一致 | 阶段 1 合并映射：现有 key 已覆盖方案多数语义，缺失的 mind_map/flowchart/design_note 等按方案补入 `stageFileCategories` |
-| 步骤命名 | 方案用 `requirement_analysis/ui_design/...`，现有枚举为 `analysis/design/...` 且已入库 | **沿用现有枚举**，不引入第二套命名（文档允许按现状调整） |
+| `is_final`          | 与方案 `status` 冲突                                                                                                                                                              | is_final 语义 ≈ status='final' 的布尔投影；扩展时可保留列（兼容现有 UI/e2e），由服务层双向同步，或迁移转换——阶段 1 定                              |
+| 分类清单            | 方案默认分类（analysis_record/mind_map/flowchart/…）与现有 9 分类（record/designLink/uiAssets/uiIssues/devIssues/testIssues 等）不一致                                            | 阶段 1 合并映射：现有 key 已覆盖方案多数语义，缺失的 mind_map/flowchart/design_note 等按方案补入 `stageFileCategories`                             |
+| 步骤命名            | 方案用 `requirement_analysis/ui_design/...`，现有枚举为 `analysis/design/...` 且已入库                                                                                            | **沿用现有枚举**，不引入第二套命名（文档允许按现状调整）                                                                                           |
 
 ### 7.3 需新增
 
-| 项 | 说明 |
-|---|---|
-| `issues` 表 | 方案 4.3；`step_type` 限定 design/development/testing；状态机 open/in_progress/resolved/closed |
-| `issue_activities` 表 | 方案 4.4；追加式历史，事务内与 Issue 同写 |
-| `issue_assets` 关联表 | 方案 4.5；去重约束、不级联删除文件 |
-| Asset/Issue 业务服务层 | 现有逻辑混在 RequirementFileService；按方案 7.1/7.2 拆出独立服务方法集 |
-| `resolveAssetPath` 统一路径解析服务 | 从现有 directory()/path() 抽取 |
-| 文本资源能力 | resource_type=text + text_content（小型文本，替代「问题伪装成 md 文件」的旧路径） |
+| 项                                  | 说明                                                                                           |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `issues` 表                         | 方案 4.3；`step_type` 限定 design/development/testing；状态机 open/in_progress/resolved/closed |
+| `issue_activities` 表               | 方案 4.4；追加式历史，事务内与 Issue 同写                                                      |
+| `issue_assets` 关联表               | 方案 4.5；去重约束、不级联删除文件                                                             |
+| Asset/Issue 业务服务层              | 现有逻辑混在 RequirementFileService；按方案 7.1/7.2 拆出独立服务方法集                         |
+| `resolveAssetPath` 统一路径解析服务 | 从现有 directory()/path() 抽取                                                                 |
+| 文本资源能力                        | resource_type=text + text_content（小型文本，替代「问题伪装成 md 文件」的旧路径）              |
 
 ### 7.4 不应改动
 

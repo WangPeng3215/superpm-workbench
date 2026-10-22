@@ -5,15 +5,18 @@ import {
   artifactFolderCreateSchema,
   artifactLinkCreateSchema,
   artifactLinkUpdateSchema,
-  artifactMemoryName,
   artifactMoveSchema,
   artifactRefreshSchema,
   artifactRenameSchema,
+  artifactImageUploadSchema,
+  artifactMemoryName,
+  requirementImagesFolder,
   isSafeExternalUrl,
   isValidArtifactName,
   requirementMemoryTemplate,
   type ArtifactBreadcrumbItem,
   type ArtifactDirectory,
+  type ArtifactImageUploadResult,
   type ArtifactLink,
   type ArtifactNode,
   type ArtifactNodeDetails,
@@ -27,16 +30,16 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
-  realpathSync,
   renameSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
-import { extname, isAbsolute, join, relative } from "node:path";
+import { dirname, extname, join } from "node:path";
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { DomainError, RequirementService } from "./requirements.js";
+import { RequirementDirectoryResolver } from "./requirement-directory.js";
 import { allowSystemOpen } from "../config/index.js";
 import { MIME_BY_EXTENSION } from "./requirement-files.js";
 
@@ -102,6 +105,91 @@ function extensionOf(name: string): string | null {
   const extension = extname(name).toLowerCase();
   return /^\.[a-z0-9]{1,12}$/.test(extension) ? extension : null;
 }
+// 引用扫描只读文本类文件；未知二进制格式跳过，避免误判与无谓 IO
+const TEXT_EXTENSIONS = new Set([
+  ".md",
+  ".markdown",
+  ".txt",
+  ".html",
+  ".htm",
+  ".json",
+  ".csv",
+  ".xml",
+  ".svg",
+  ".yaml",
+  ".yml",
+]);
+function isTextReadable(extension: string | null): boolean {
+  return extension !== null && TEXT_EXTENSIONS.has(extension.toLowerCase());
+}
+// 图片类型按文件头识别（不信任前端声明的 MIME），与旧图片上传接口同一套校验
+function detectImageType(
+  buffer: Buffer,
+): { extension: string; mime: string } | null {
+  if (
+    buffer.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+  )
+    return { extension: "png", mime: "image/png" };
+  if (buffer[0] === 255 && buffer[1] === 216 && buffer[2] === 255)
+    return { extension: "jpg", mime: "image/jpeg" };
+  if (/^GIF8[79]a$/.test(buffer.subarray(0, 6).toString()))
+    return { extension: "gif", mime: "image/gif" };
+  if (
+    buffer.subarray(0, 4).toString() === "RIFF" &&
+    buffer.subarray(8, 12).toString() === "WEBP"
+  )
+    return { extension: "webp", mime: "image/webp" };
+  return null;
+}
+// 图片基名清洗：去掉扩展名与非法字符，保证落盘文件名安全可读
+function sanitizeImageStem(fileName: string): string {
+  const base = fileName.replace(/\.[^.]+$/, "");
+  const clean = base
+    .replace(/[\\/:*?"<>|\x00-\x1f]/g, "-")
+    .replace(/\s+/g, "-")
+    .replace(/^[.\s-]+|[.\s-]+$/g, "")
+    .slice(0, 60);
+  return clean || `image-${Date.now().toString(36)}`;
+}
+// 相对路径计算（正斜杠）：以 fromDir 为基准指向 toPath，如 fromDir="需求分析" → "../images/x.png"
+function relativePosix(fromDir: string, toPath: string): string {
+  const from = fromDir ? fromDir.split("/") : [];
+  const to = toPath.split("/");
+  let common = 0;
+  while (
+    common < from.length &&
+    common < to.length - 1 &&
+    from[common] === to[common]
+  )
+    common += 1;
+  const ups = from.length - common;
+  return [...Array<string>(ups).fill(".."), ...to.slice(common)].join("/");
+}
+// 反解：把相对文档目录的路径还原为需求内路径（拒绝越界），供图片读取使用
+function resolveDocRelative(baseDir: string, relativePath: string): string {
+  const segments = baseDir ? baseDir.split("/") : [];
+  for (const segment of relativePath.split("/")) {
+    if (!segment || segment === ".") continue;
+    if (segment === "..") {
+      if (!segments.length)
+        throw new DomainError("INVALID_PATH", "图片路径越界");
+      segments.pop();
+      continue;
+    }
+    segments.push(segment);
+  }
+  return segments.join("/");
+}
+// 相对引用判定：非协议、非根路径、非协议相对地址（Markdown 中的图片才需要改写）
+function isRelativeReference(src: string): boolean {
+  return Boolean(src) && !/^(?:[a-z][a-z0-9+.-]*:|\/\/|\/|#)/i.test(src);
+}
+// 取所在目录（正斜杠），根目录文件返回空串
+function dirOf(relativePath: string): string {
+  return relativePath.includes("/")
+    ? relativePath.slice(0, relativePath.lastIndexOf("/"))
+    : "";
+}
 
 /**
  * 需求知识库服务（开发文档第 5/6 章）：文件与目录索引 + 外部链接 + 需求记忆。
@@ -109,11 +197,17 @@ function extensionOf(name: string): string | null {
  * 索引与磁盘无法共用事务：磁盘先行，索引更新失败时可通过 refreshDirectory 重新扫描修复。
  */
 export class ArtifactService {
+  private readonly directories: RequirementDirectoryResolver;
   constructor(
     private db: Database.Database,
     private root: string,
     private requirements: RequirementService,
-  ) {}
+    // 需求目录映射解析器：与 issues / requirement-files / stage-workspace 共用同一份路径规则
+    directories?: RequirementDirectoryResolver,
+  ) {
+    this.directories =
+      directories ?? new RequirementDirectoryResolver(db, root);
+  }
 
   // ===== 查询 =====
 
@@ -192,9 +286,16 @@ export class ArtifactService {
     if (existsSync(target))
       throw new DomainError("CONFLICT", "磁盘上已存在同名文件或目录", 409);
     mkdirSync(target);
-    return this.insertNode(requirementId, data.parentId, "folder", name, relativePath, {
-      modifiedAt: statSync(target).mtime.toISOString(),
-    });
+    return this.insertNode(
+      requirementId,
+      data.parentId,
+      "folder",
+      name,
+      relativePath,
+      {
+        modifiedAt: statSync(target).mtime.toISOString(),
+      },
+    );
   }
 
   createFile(requirementId: number, input: unknown): ArtifactNode {
@@ -212,13 +313,22 @@ export class ArtifactService {
     writeFileSync(target, content, { flag: "wx", encoding: "utf8" });
     const stat = statSync(target);
     const extension = extensionOf(name);
-    return this.insertNode(requirementId, data.parentId, "file", name, relativePath, {
-      extension,
-      mimeType: extension ? (MIME_BY_EXTENSION[extension.slice(1)] ?? null) : null,
-      sizeBytes: stat.size,
-      modifiedAt: stat.mtime.toISOString(),
-      contentHash: this.hashOf(content),
-    });
+    return this.insertNode(
+      requirementId,
+      data.parentId,
+      "file",
+      name,
+      relativePath,
+      {
+        extension,
+        mimeType: extension
+          ? (MIME_BY_EXTENSION[extension.slice(1)] ?? null)
+          : null,
+        sizeBytes: stat.size,
+        modifiedAt: stat.mtime.toISOString(),
+        contentHash: this.hashOf(content),
+      },
+    );
   }
 
   // ===== 重命名 / 移动 / 删除 =====
@@ -233,7 +343,11 @@ export class ArtifactService {
     this.assertParentOnDisk(parent);
     this.assertNoSibling(node.requirementId, node.parentId, name, node.id);
     const nextPath = this.childPath(parent, name);
-    const currentAbs = this.resolvePath(node.requirementId, node.relativePath, false);
+    const currentAbs = this.resolvePath(
+      node.requirementId,
+      node.relativePath,
+      false,
+    );
     const nextAbs = this.resolvePath(node.requirementId, nextPath, false);
     if (!existsSync(currentAbs))
       throw new DomainError("NOT_FOUND", "磁盘上找不到原文件或目录", 404);
@@ -241,6 +355,20 @@ export class ArtifactService {
       throw new DomainError("CONFLICT", "磁盘上已存在同名文件或目录", 409);
     // 先磁盘后索引；磁盘失败时保留旧元数据并抛出明确错误
     renameSync(currentAbs, nextAbs);
+    // 文档位置变化后图片相对路径失效：能可靠识别引用时同步改写（文档 §12.4）
+    this.rebaseImageReferences(
+      node.id,
+      node.requirementId,
+      node.relativePath,
+      nextPath,
+    );
+    // 目录改名/移动会整体位移其后代文档，同样需要改写这些文档内的图片引用
+    if (node.nodeType === "folder")
+      this.rebaseDescendantImageReferences(
+        node.requirementId,
+        node.relativePath,
+        nextPath,
+      );
     return this.db.transaction(() => {
       const extension = node.nodeType === "file" ? extensionOf(name) : null;
       this.db
@@ -267,15 +395,42 @@ export class ArtifactService {
       if (this.ancestorIds(target).has(node.id))
         throw new DomainError("CONFLICT", "不能将目录移动到其子目录内", 409);
     }
-    this.assertNoSibling(node.requirementId, data.targetParentId, node.name, node.id);
+    this.assertNoSibling(
+      node.requirementId,
+      data.targetParentId,
+      node.name,
+      node.id,
+    );
     const nextPath = this.childPath(target, node.name);
-    const currentAbs = this.resolvePath(node.requirementId, node.relativePath, false);
+    const currentAbs = this.resolvePath(
+      node.requirementId,
+      node.relativePath,
+      false,
+    );
     const nextAbs = this.resolvePath(node.requirementId, nextPath, false);
     if (!existsSync(currentAbs))
       throw new DomainError("NOT_FOUND", "磁盘上找不到原文件或目录", 404);
     if (existsSync(nextAbs))
-      throw new DomainError("CONFLICT", "目标磁盘位置已存在同名文件或目录", 409);
+      throw new DomainError(
+        "CONFLICT",
+        "目标磁盘位置已存在同名文件或目录",
+        409,
+      );
     renameSync(currentAbs, nextAbs);
+    // 文档移动后图片相对路径失效：能可靠识别引用时同步改写（文档 §12.4）
+    this.rebaseImageReferences(
+      node.id,
+      node.requirementId,
+      node.relativePath,
+      nextPath,
+    );
+    // 目录移动会整体位移其后代文档，同样需要改写这些文档内的图片引用
+    if (node.nodeType === "folder")
+      this.rebaseDescendantImageReferences(
+        node.requirementId,
+        node.relativePath,
+        nextPath,
+      );
     return this.db.transaction(() => {
       this.db
         .prepare(
@@ -289,14 +444,18 @@ export class ArtifactService {
 
   deleteNode(nodeId: number, recursive: boolean): void {
     const node = toNode(this.nodeRow(nodeId));
-    // 需求记忆文件不可通过普通删除移除（文档 5）
+    // 需求记忆文件与 images 目录不可通过普通删除移除（文档 §12.3）
     this.assertMutable(node, "删除");
+    // 图片仍被系统管理的文档引用时阻止删除，避免 Markdown 出现失效图片
+    if (node.nodeType === "file") this.assertNotReferencedImage(node);
     const all = this.db
       .prepare("SELECT * FROM artifact_nodes WHERE requirement_id=?")
       .all(node.requirementId) as ArtifactNodeRow[];
     const descendants = this.filterDescendants(all, node.relativePath);
     if (node.nodeType === "folder" && !recursive) {
-      const directChildren = all.filter((item) => item.parent_id === node.id).length;
+      const directChildren = all.filter(
+        (item) => item.parent_id === node.id,
+      ).length;
       const links = (
         this.db
           .prepare(
@@ -313,7 +472,11 @@ export class ArtifactService {
         );
       }
     }
-    const target = this.resolvePath(node.requirementId, node.relativePath, false);
+    const target = this.resolvePath(
+      node.requirementId,
+      node.relativePath,
+      false,
+    );
     if (existsSync(target)) rmSync(target, { recursive: true });
     // 磁盘删除成功后清理索引：后代节点与被删目录内的链接记录
     this.db.transaction(() => {
@@ -357,7 +520,11 @@ export class ArtifactService {
       if (lstatSync(path).isSymbolicLink())
         throw new DomainError("INVALID_PATH", "文件不能是符号链接");
       const diskMtime = statSync(path).mtime.toISOString();
-      if (!data.force && node.modifiedAt !== null && diskMtime !== node.modifiedAt)
+      if (
+        !data.force &&
+        node.modifiedAt !== null &&
+        diskMtime !== node.modifiedAt
+      )
         throw new DomainError(
           "FILE_CONFLICT",
           "文件已被外部程序修改，保存将覆盖外部修改；请确认后重试",
@@ -389,6 +556,145 @@ export class ArtifactService {
         MIME_BY_EXTENSION[extension] ??
         "application/octet-stream",
       fileName: node.name,
+    };
+  }
+
+  /**
+   * 图片上传（文档 §12.4）：写入需求根目录的 images/，按文档所在目录计算相对路径。
+   * 同名图片不静默覆盖：重名时追加 -1、-2 等安全后缀。
+   */
+  uploadImage(
+    requirementId: number,
+    input: unknown,
+  ): ArtifactImageUploadResult {
+    const data = artifactImageUploadSchema.parse(input);
+    this.requirements.get(requirementId);
+    const buffer = Buffer.from(data.data, "base64");
+    if (!buffer.length || buffer.length > 5 * 1024 * 1024)
+      throw new DomainError("VALIDATION_ERROR", "图片大小应为 1 字节至 5 MB");
+    const detected = detectImageType(buffer);
+    if (!detected)
+      throw new DomainError(
+        "VALIDATION_ERROR",
+        "仅支持 PNG、JPEG、GIF 或 WebP 图片",
+      );
+    // 文档所在目录决定相对路径基准；未提供节点时按需求根目录计算
+    let baseDir = "";
+    if (data.nodeId !== null) {
+      const node = toNode(this.nodeRow(data.nodeId));
+      if (node.requirementId !== requirementId)
+        throw new DomainError("NOT_FOUND", "文档不存在", 404);
+      baseDir = node.relativePath.includes("/")
+        ? node.relativePath.slice(0, node.relativePath.lastIndexOf("/"))
+        : "";
+    }
+    const stem = data.fileName
+      ? sanitizeImageStem(data.fileName)
+      : `image-${Date.now().toString(36)}`;
+    const imagesAbs = this.resolvePath(
+      requirementId,
+      requirementImagesFolder,
+      true,
+    );
+    let fileName = `${stem}.${detected.extension}`;
+    for (let index = 1; existsSync(join(imagesAbs, fileName)); index += 1) {
+      if (index > 999)
+        throw new DomainError("CONFLICT", "同名图片过多，请更换图片名称", 409);
+      fileName = `${stem}-${index}.${detected.extension}`;
+    }
+    const targetAbs = join(imagesAbs, fileName);
+    writeFileSync(targetAbs, buffer, { flag: "wx" });
+    const stat = statSync(targetAbs);
+    const relativePath = `images/${fileName}`;
+    // 登记（或复用）images 目录节点与图片节点，保持索引与磁盘一致
+    const imagesNode = this.ensureImagesFolder(requirementId);
+    const existing = this.db
+      .prepare(
+        "SELECT * FROM artifact_nodes WHERE requirement_id=? AND relative_path=?",
+      )
+      .get(requirementId, relativePath) as ArtifactNodeRow | undefined;
+    const node = existing
+      ? this.syncMetadata(
+          toNode(existing),
+          stat.size,
+          stat.mtime.toISOString(),
+          this.hashOf(buffer),
+        )
+      : this.insertNode(
+          requirementId,
+          imagesNode.id,
+          "file",
+          fileName,
+          relativePath,
+          {
+            extension: detected.extension,
+            mimeType: detected.mime,
+            sizeBytes: stat.size,
+            modifiedAt: stat.mtime.toISOString(),
+            contentHash: this.hashOf(buffer),
+          },
+        );
+    const docRelative = baseDir
+      ? relativePosix(baseDir, relativePath)
+      : relativePath;
+    return {
+      node,
+      relativePath: docRelative,
+      markdown: `![${stem}](${docRelative})`,
+    };
+  }
+
+  // images 目录节点：系统级目录，缺索引时补建（不新建磁盘目录，调用方已确保存在）
+  private ensureImagesFolder(requirementId: number): ArtifactNode {
+    const row = this.db
+      .prepare(
+        "SELECT * FROM artifact_nodes WHERE requirement_id=? AND relative_path=?",
+      )
+      .get(requirementId, requirementImagesFolder) as
+      ArtifactNodeRow | undefined;
+    if (row) return toNode(row);
+    const abs = this.resolvePath(requirementId, requirementImagesFolder, false);
+    return this.insertNode(
+      requirementId,
+      null,
+      "folder",
+      requirementImagesFolder,
+      requirementImagesFolder,
+      {
+        modifiedAt: existsSync(abs) ? statSync(abs).mtime.toISOString() : null,
+      },
+    );
+  }
+
+  /**
+   * 按文档相对路径读取图片（文档 §12.4）：Markdown 里写的是相对文档所在目录的路径，
+   * 如 需求分析/xx.md 中的 ../images/a.png。这里以文档目录为基准解析并限制在需求根目录内。
+   */
+  imageByPath(
+    requirementId: number,
+    docNodeId: number | null,
+    relativePath: string,
+  ): { data: Buffer; mime: string } {
+    this.requirements.get(requirementId);
+    let baseDir = "";
+    if (docNodeId !== null) {
+      const node = toNode(this.nodeRow(docNodeId));
+      if (node.requirementId !== requirementId)
+        throw new DomainError("NOT_FOUND", "文档不存在", 404);
+      baseDir = node.relativePath.includes("/")
+        ? node.relativePath.slice(0, node.relativePath.lastIndexOf("/"))
+        : "";
+    }
+    const target = resolveDocRelative(baseDir, relativePath);
+    const abs = this.resolvePath(requirementId, target, false);
+    if (!existsSync(abs) || !statSync(abs).isFile())
+      throw new DomainError("NOT_FOUND", "图片不存在", 404);
+    if (lstatSync(abs).isSymbolicLink())
+      throw new DomainError("INVALID_PATH", "路径不能包含符号链接");
+    const extension = extname(abs).slice(1).toLowerCase();
+    return {
+      data: readFileSync(abs),
+      mime: MIME_BY_EXTENSION[extension] ?? "application/octet-stream",
     };
   }
 
@@ -427,9 +733,14 @@ export class ArtifactService {
     input: unknown = {},
   ): ArtifactRefreshResult {
     const data = artifactRefreshSchema.parse(input);
-    this.ensureMemory(requirementId);
+    // 普通刷新不得重建系统级资源（文档 §12.1/§12.3）：需求记忆缺失时按 missing 标记，
+    // 由状态查询提示并交给显式「修复默认结构」补建，避免覆盖用户的整理结果。
     const relativePath = (data.relativePath ?? "").replace(/^\/+|\/+$/g, "");
-    if (relativePath.split("/").some((segment) => segment === ".." || segment === "."))
+    if (
+      relativePath
+        .split("/")
+        .some((segment) => segment === ".." || segment === ".")
+    )
       throw new DomainError("INVALID_PATH", "路径包含非法段");
     const all = this.db
       .prepare("SELECT * FROM artifact_nodes WHERE requirement_id=?")
@@ -447,7 +758,9 @@ export class ArtifactService {
       for (const row of scoped) {
         if (row.status !== "missing") {
           this.db
-            .prepare("UPDATE artifact_nodes SET status='missing', updated_at=? WHERE id=?")
+            .prepare(
+              "UPDATE artifact_nodes SET status='missing', updated_at=? WHERE id=?",
+            )
             .run(now, row.id);
           missing += 1;
         }
@@ -480,7 +793,11 @@ export class ArtifactService {
     let updated = 0;
     let missing = 0;
     const seen = new Set<string>();
-    const walk = (dirAbs: string, relPrefix: string, parentId: number | null) => {
+    const walk = (
+      dirAbs: string,
+      relPrefix: string,
+      parentId: number | null,
+    ) => {
       for (const entry of readdirSync(dirAbs, { withFileTypes: true })) {
         // 不跟随、不登记符号链接
         if (entry.isSymbolicLink()) continue;
@@ -532,7 +849,8 @@ export class ArtifactService {
             added += 1;
           } else {
             const changed =
-              existing.size_bytes !== stat.size || existing.modified_at !== modifiedAt;
+              existing.size_bytes !== stat.size ||
+              existing.modified_at !== modifiedAt;
             if (changed || existing.status === "missing") {
               this.db
                 .prepare(
@@ -556,7 +874,9 @@ export class ArtifactService {
     for (const row of scoped) {
       if (!seen.has(row.relative_path) && row.status !== "missing") {
         this.db
-          .prepare("UPDATE artifact_nodes SET status='missing', updated_at=? WHERE id=?")
+          .prepare(
+            "UPDATE artifact_nodes SET status='missing', updated_at=? WHERE id=?",
+          )
           .run(now, row.id);
         missing += 1;
       }
@@ -597,18 +917,28 @@ export class ArtifactService {
   updateLink(linkId: number, input: unknown): ArtifactLink {
     const data = artifactLinkUpdateSchema.parse(input);
     const link = toLink(this.linkRow(linkId));
-    if (data.url !== undefined && (!isSafeExternalUrl(data.url) || /^ftp:/i.test(data.url)))
+    if (
+      data.url !== undefined &&
+      (!isSafeExternalUrl(data.url) || /^ftp:/i.test(data.url))
+    )
       throw new DomainError(
         "VALIDATION_ERROR",
         "链接仅支持 http:// 或 https:// 开头的地址",
       );
-    const name = data.name === undefined ? link.name : this.assertNodeName(data.name);
+    const name =
+      data.name === undefined ? link.name : this.assertNodeName(data.name);
     const folderNodeId =
       data.folderNodeId === undefined ? link.folderNodeId : data.folderNodeId;
     if (folderNodeId !== link.folderNodeId)
       this.requireParent(link.requirementId, folderNodeId);
     if (name !== link.name || folderNodeId !== link.folderNodeId)
-      this.assertNoSibling(link.requirementId, folderNodeId, name, undefined, link.id);
+      this.assertNoSibling(
+        link.requirementId,
+        folderNodeId,
+        name,
+        undefined,
+        link.id,
+      );
     this.db
       .prepare(
         "UPDATE artifact_links SET folder_node_id=?, name=?, url=?, description=?, updated_at=? WHERE id=?",
@@ -632,7 +962,11 @@ export class ArtifactService {
 
   // ===== 需求记忆（文档 4.3）=====
 
-  /** 读取需求记忆节点；文件或索引缺失时按模板补建（存量需求懒初始化，新建需求即时初始化） */
+  /**
+   * 读取需求记忆节点（文档 §12.1/§12.3）。
+   * 需求尚未初始化时懒初始化整套目录结构；已初始化但文件在磁盘上缺失（外部删除）时，
+   * 不静默重建，而是标记索引缺失并提示走显式「修复默认结构」。
+   */
   ensureMemory(requirementId: number): ArtifactNode {
     const requirement = this.requirements.get(requirementId);
     const existing = this.db
@@ -640,11 +974,37 @@ export class ArtifactService {
         "SELECT * FROM artifact_nodes WHERE requirement_id=? AND relative_path=?",
       )
       .get(requirementId, artifactMemoryName) as ArtifactNodeRow | undefined;
-    const rootAbs = this.resolvePath(requirementId, "", true);
+    const initialized = this.directories.row(requirementId);
+    if (!initialized) {
+      // 存量需求首次访问：按统一流程初始化（含目录映射、默认目录与需求记忆）
+      this.directories.initialize(requirementId);
+      const row = this.db
+        .prepare(
+          "SELECT * FROM artifact_nodes WHERE requirement_id=? AND relative_path=?",
+        )
+        .get(requirementId, artifactMemoryName) as ArtifactNodeRow | undefined;
+      if (row) return toNode(row);
+    }
+    const rootAbs = this.resolvePath(requirementId, "", false);
     const fileAbs = join(rootAbs, artifactMemoryName);
     const template = requirementMemoryTemplate(requirement.name);
     if (!existsSync(fileAbs)) {
+      // 已初始化却缺失：系统级资源被外部删除，交由显式修复流程处理
+      if (initialized) {
+        if (existing && existing.status !== "missing")
+          this.db
+            .prepare(
+              "UPDATE artifact_nodes SET status='missing', updated_at=? WHERE id=?",
+            )
+            .run(new Date().toISOString(), existing.id);
+        throw new DomainError(
+          "NOT_FOUND",
+          "需求记忆文件已在磁盘上缺失，请在文档管理中执行「修复默认结构」",
+          404,
+        );
+      }
       // 磁盘缺失（含首建）：写模板文件；索引缺失时一并补建，索引存在时恢复元数据
+      mkdirSync(dirname(fileAbs), { recursive: true });
       writeFileSync(fileAbs, template, "utf8");
       const stat = statSync(fileAbs);
       if (existing) {
@@ -691,11 +1051,10 @@ export class ArtifactService {
     return toNode(existing);
   }
 
-  /** 刷新需求记忆：外部修改后重新登记大小与修改时间（文件缺失时补建） */
+  /** 刷新需求记忆：外部修改后重新登记大小与修改时间（文件缺失时明确报错，不静默重建） */
   refreshMemory(requirementId: number): ArtifactNode {
     const node = this.ensureMemory(requirementId);
     const fileAbs = this.resolvePath(requirementId, artifactMemoryName, false);
-    if (!existsSync(fileAbs)) return this.ensureMemory(requirementId);
     const stat = statSync(fileAbs);
     return this.syncMetadata(
       node,
@@ -707,45 +1066,21 @@ export class ArtifactService {
 
   // ===== 内部工具：路径安全与索引维护 =====
 
-  // 逐级解析需求内相对路径：拒绝越界、非法段与符号链接（与旧文件服务同一套防护）。
+  // 逐级解析需求内相对路径：委托给目录解析器，保证与其它服务同一套防护。
   // create=false 时不落盘建目录（用于"目标必须不存在"或只读解析），存在性由调用方判定
   private resolvePath(
     requirementId: number,
     relativePath: string,
     create: boolean,
   ): string {
-    this.requirements.get(requirementId);
-    const root = realpathSync(this.root);
-    const segments = ["requirements", String(requirementId)];
-    if (relativePath) {
-      for (const segment of relativePath.split("/")) {
-        if (!segment || segment === "." || segment === "..")
-          throw new DomainError("INVALID_PATH", "路径包含非法段");
-        segments.push(segment);
-      }
-    }
-    let current = root;
-    for (const segment of segments) {
-      current = join(current, segment);
-      if (!existsSync(current)) {
-        if (!create) continue;
-        mkdirSync(current);
-      }
-      if (lstatSync(current).isSymbolicLink())
-        throw new DomainError("INVALID_PATH", "路径不能包含符号链接");
-      const resolved = realpathSync(current);
-      const distance = relative(root, resolved);
-      if (distance.startsWith("..") || isAbsolute(distance))
-        throw new DomainError("INVALID_PATH", "路径越界");
-    }
-    return current;
+    return this.directories.resolve(requirementId, relativePath, create);
   }
 
   private assertNodeName(name: string): string {
     if (!isValidArtifactName(name))
       throw new DomainError(
         "VALIDATION_ERROR",
-        "名称不能为空，不能包含 \\ / : * ? \" < > | 等字符，不能含连续点，且不能以点或空格结尾",
+        '名称不能为空，不能包含 \\ / : * ? " < > | 等字符，不能含连续点，且不能以点或空格结尾',
       );
     return name.trim();
   }
@@ -772,7 +1107,11 @@ export class ArtifactService {
   // 父目录在磁盘缺失（外部删除后）时不允许在其下新建或移入，避免"凭空恢复"
   private assertParentOnDisk(parent: ArtifactNode | null) {
     if (!parent) return;
-    const parentAbs = this.resolvePath(parent.requirementId, parent.relativePath, false);
+    const parentAbs = this.resolvePath(
+      parent.requirementId,
+      parent.relativePath,
+      false,
+    );
     if (!existsSync(parentAbs) || lstatSync(parentAbs).isSymbolicLink())
       throw new DomainError(
         "CONFLICT",
@@ -804,10 +1143,187 @@ export class ArtifactService {
     if (link) throw new DomainError("CONFLICT", "同级已存在同名链接", 409);
   }
 
-  // 需求记忆文件位置与名称固定：不可删、不可改名、不可移动（根目录保护的落点）
+  /**
+   * 图片引用检查（文档 §12.4）：images/ 下的图片仍被系统管理的文档引用时阻止删除，
+   * 并提示引用来源；引用形式按相对路径或文件名匹配（Markdown 与 HTML 两种写法都覆盖）。
+   */
+  private assertNotReferencedImage(node: ArtifactNode) {
+    if (!node.relativePath.startsWith(`${requirementImagesFolder}/`)) return;
+    const referrers = this.findImageReferences(node.requirementId, node.name);
+    if (!referrers.length) return;
+    throw new DomainError(
+      "CONFLICT",
+      `图片仍被 ${referrers.length} 个文档引用（${referrers.slice(0, 3).join("、")}${referrers.length > 3 ? " 等" : ""}），请先解除引用再删除`,
+      409,
+    );
+  }
+
+  /**
+   * 文档移动/重命名后修正图片相对路径（文档 §12.4）。
+   * 只处理能以「原文档目录」为基准安全还原到需求内 images/ 的相对路径；
+   * 还原不可靠（绝对地址、外部地址、越界）时原样保留，避免静默破坏内容。
+   */
+  private rebaseImageReferences(
+    nodeId: number,
+    requirementId: number,
+    oldDocPath: string,
+    newDocPath: string,
+  ) {
+    if (!isTextReadable(extensionOf(newDocPath))) return;
+    const oldDir = dirOf(oldDocPath);
+    const newDir = dirOf(newDocPath);
+    if (oldDir === newDir) return;
+    this.rewriteImageReferences(
+      nodeId,
+      requirementId,
+      newDocPath,
+      oldDir,
+      newDir,
+    );
+  }
+
+  /**
+   * 目录改名/移动后修正其后代文档的图片相对路径（文档 §12.4）。
+   * 后代文档的所在目录整体位移，逐个按新旧目录基准改写；不可靠的引用保持原样。
+   */
+  private rebaseDescendantImageReferences(
+    requirementId: number,
+    oldPrefix: string,
+    newPrefix: string,
+  ) {
+    const rows = this.db
+      .prepare(
+        "SELECT * FROM artifact_nodes WHERE requirement_id=? AND node_type='file'",
+      )
+      .all(requirementId) as ArtifactNodeRow[];
+    for (const row of this.filterDescendants(rows, oldPrefix)) {
+      if (!isTextReadable(row.extension)) continue;
+      const newPath = `${newPrefix}/${row.relative_path.slice(oldPrefix.length + 1)}`;
+      const oldDir = dirOf(row.relative_path);
+      const newDir = dirOf(newPath);
+      if (oldDir === newDir) continue;
+      this.rewriteImageReferences(
+        row.id,
+        requirementId,
+        newPath,
+        oldDir,
+        newDir,
+      );
+    }
+  }
+
+  /** 把 docPath 文档内指向 images/ 的相对引用从 oldDir 基准改写到 newDir 基准 */
+  private rewriteImageReferences(
+    nodeId: number,
+    requirementId: number,
+    docPath: string,
+    oldDir: string,
+    newDir: string,
+  ) {
+    const abs = this.resolvePath(requirementId, docPath, false);
+    if (!existsSync(abs) || lstatSync(abs).isSymbolicLink()) return;
+    let content: string;
+    try {
+      content = readFileSync(abs, "utf8");
+    } catch {
+      return;
+    }
+    let changed = false;
+    const next = content.replace(
+      /(!\[[^\]]*\]\()([^)\s]+)(\))/g,
+      (match, head: string, src: string, tail: string) => {
+        if (!isRelativeReference(src)) return match;
+        let target: string;
+        try {
+          target = resolveDocRelative(oldDir, src);
+        } catch {
+          return match;
+        }
+        // 仅改写确实指向本需求 images/ 的引用，其它相对链接保持不变
+        if (!target.startsWith(`${requirementImagesFolder}/`)) return match;
+        changed = true;
+        return `${head}${relativePosix(newDir, target)}${tail}`;
+      },
+    );
+    if (!changed) return;
+    writeFileSync(abs, next, "utf8");
+    const stat = statSync(abs);
+    this.syncMetadata(
+      toNode(this.nodeRow(nodeId)),
+      stat.size,
+      stat.mtime.toISOString(),
+      this.hashOf(next),
+    );
+  }
+
+  /**
+   * 扫描需求内文本文件与问题记录，找出引用了指定图片文件名的位置。
+   * 问题描述存于 issues/{id}.md、解决方案存于 issues.solution，二者都不在
+   * artifact_nodes 索引中，需要单独扫描，否则删除被问题引用的图片不会被拦截。
+   */
+  private findImageReferences(
+    requirementId: number,
+    fileName: string,
+  ): string[] {
+    const rows = this.db
+      .prepare(
+        "SELECT * FROM artifact_nodes WHERE requirement_id=? AND node_type='file'",
+      )
+      .all(requirementId) as ArtifactNodeRow[];
+    const pattern = new RegExp(
+      `${fileName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=["')\\s]|$)`,
+      "i",
+    );
+    const hits: string[] = [];
+    for (const row of rows) {
+      if (row.relative_path.startsWith(`${requirementImagesFolder}/`)) continue;
+      if (!isTextReadable(row.extension)) continue;
+      const abs = this.resolvePath(requirementId, row.relative_path, false);
+      if (!existsSync(abs) || lstatSync(abs).isSymbolicLink()) continue;
+      try {
+        if (pattern.test(readFileSync(abs, "utf8")))
+          hits.push(row.relative_path);
+      } catch {
+        // 读取失败（编码/权限）不作为引用判定依据，跳过
+      }
+    }
+    const issues = this.db
+      .prepare(
+        "SELECT id, solution FROM issues WHERE requirement_id=? AND is_deleted=0",
+      )
+      .all(requirementId) as { id: number; solution: string | null }[];
+    for (const issue of issues) {
+      let referenced = Boolean(issue.solution && pattern.test(issue.solution));
+      if (!referenced) {
+        try {
+          const file = join(
+            this.directories.resolve(requirementId, "issues", false),
+            `${issue.id}.md`,
+          );
+          referenced =
+            existsSync(file) &&
+            !lstatSync(file).isSymbolicLink() &&
+            pattern.test(readFileSync(file, "utf8"));
+        } catch {
+          referenced = false;
+        }
+      }
+      if (referenced) hits.push(`问题 #${issue.id}`);
+    }
+    return hits;
+  }
+
+  // 系统级资源保护（文档 §12.3）：需求记忆文件与 images 目录不可删、不可改名、不可移动。
+  // 保护在后端服务内统一实现，前端与未来 MCP 调用同一入口，无法绕过。
   private assertMutable(node: ArtifactNode, action: string) {
     if (node.relativePath === artifactMemoryName)
       throw new DomainError("CONFLICT", `需求记忆文件不可${action}`, 409);
+    if (node.relativePath === requirementImagesFolder)
+      throw new DomainError(
+        "CONFLICT",
+        `images 目录是系统级资源，不可${action}`,
+        409,
+      );
   }
 
   private insertNode(
@@ -917,10 +1433,16 @@ export class ArtifactService {
       chain.unshift({ id: row.id, name: row.name });
       cursor = row.parent_id;
     }
-    return [{ id: null, name: this.requirements.get(requirementId).name }, ...chain];
+    return [
+      { id: null, name: this.requirements.get(requirementId).name },
+      ...chain,
+    ];
   }
 
-  private searchNodes(requirementId: number, keyword: string): ArtifactDirectory {
+  private searchNodes(
+    requirementId: number,
+    keyword: string,
+  ): ArtifactDirectory {
     this.requirements.get(requirementId);
     // LIKE 通配符转义：按名称做全需求范围搜索（文档 2.5 第一版仅承诺名称搜索）
     const escaped = keyword.replace(/[\\%_]/g, (char) => `\\${char}`);
@@ -959,10 +1481,20 @@ export class ArtifactService {
     parent: ArtifactNode | null,
     parentPath: string,
   ) {
-    const dirAbs = this.resolvePath(requirementId, parentPath, true);
-    if (!existsSync(dirAbs)) return;
+    // 浏览目录不得隐式建目录（文档 §12.1）：目录缺失时只把索引标记为缺失
+    const dirAbs = this.resolvePath(requirementId, parentPath, false);
     const now = new Date().toISOString();
     const rows = this.rowsOf(requirementId, parent?.id ?? null);
+    if (!existsSync(dirAbs)) {
+      for (const row of rows)
+        if (row.status !== "missing")
+          this.db
+            .prepare(
+              "UPDATE artifact_nodes SET status='missing', updated_at=? WHERE id=?",
+            )
+            .run(now, row.id);
+      return;
+    }
     for (const row of rows) {
       const abs = join(dirAbs, row.name);
       if (!existsSync(abs) || lstatSync(abs).isSymbolicLink()) {
@@ -984,7 +1516,9 @@ export class ArtifactService {
           )
           .run(
             row.node_type === "file" ? stat.size : row.size_bytes,
-            row.node_type === "file" ? stat.mtime.toISOString() : row.modified_at,
+            row.node_type === "file"
+              ? stat.mtime.toISOString()
+              : row.modified_at,
             now,
             row.id,
           );
@@ -1022,12 +1556,22 @@ export class ArtifactService {
         );
       } else if (entry.isFile()) {
         const extension = extensionOf(entry.name);
-        this.insertNodeRow(requirementId, parentId, "file", entry.name, rel, stat.mtime.toISOString(), {
-          extension,
-          mimeType: extension ? (MIME_BY_EXTENSION[extension.slice(1)] ?? null) : null,
-          sizeBytes: stat.size,
-          contentHash: this.hashOf(readFileSync(abs)),
-        });
+        this.insertNodeRow(
+          requirementId,
+          parentId,
+          "file",
+          entry.name,
+          rel,
+          stat.mtime.toISOString(),
+          {
+            extension,
+            mimeType: extension
+              ? (MIME_BY_EXTENSION[extension.slice(1)] ?? null)
+              : null,
+            sizeBytes: stat.size,
+            contentHash: this.hashOf(readFileSync(abs)),
+          },
+        );
       }
     }
   }
@@ -1037,7 +1581,9 @@ export class ArtifactService {
     if (!existsSync(path) || lstatSync(path).isSymbolicLink()) {
       if (node.status !== "missing") {
         this.db
-          .prepare("UPDATE artifact_nodes SET status='missing', updated_at=? WHERE id=?")
+          .prepare(
+            "UPDATE artifact_nodes SET status='missing', updated_at=? WHERE id=?",
+          )
           .run(new Date().toISOString(), node.id);
       }
       throw new DomainError("NOT_FOUND", "文件不存在或已被移动", 404);
@@ -1055,7 +1601,13 @@ export class ArtifactService {
       .prepare(
         "UPDATE artifact_nodes SET size_bytes=?, modified_at=?, content_hash=COALESCE(?, content_hash), status='normal', updated_at=? WHERE id=?",
       )
-      .run(sizeBytes, modifiedAt, contentHash, new Date().toISOString(), node.id);
+      .run(
+        sizeBytes,
+        modifiedAt,
+        contentHash,
+        new Date().toISOString(),
+        node.id,
+      );
     return toNode(this.nodeRow(node.id));
   }
 
@@ -1072,7 +1624,9 @@ export class ArtifactService {
       // 前缀改写：后代路径 = 新前缀 + "/" + 旧前缀之后的剩余段
       const nextPath = `${newPrefix}/${row.relative_path.slice(oldPrefix.length + 1)}`;
       this.db
-        .prepare("UPDATE artifact_nodes SET relative_path=?, updated_at=? WHERE id=?")
+        .prepare(
+          "UPDATE artifact_nodes SET relative_path=?, updated_at=? WHERE id=?",
+        )
         .run(nextPath, now, row.id);
     }
   }

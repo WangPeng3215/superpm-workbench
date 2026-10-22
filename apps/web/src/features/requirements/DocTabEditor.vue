@@ -1,13 +1,16 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { marked } from "marked";
 import type { ArtifactNode } from "@superpm/shared";
 import { artifactApi } from "../../api/artifacts";
 import { ApiError, errorMessage } from "../../api/client";
 import InlineRichTextEditor from "./InlineRichTextEditor.vue";
+import { toDisplayHtml, toStoredHtml } from "./doc-images";
+import { documentToEditorHtml, htmlToMarkdown } from "./doc-markdown";
 
 // 文档动态页签的编辑器：一个页签对应一个文件（含需求记忆），按 nodeId 读写知识库并自动保存
+// 存储约定（V1.1 §12）：磁盘上保存原生 Markdown，编辑器内保持所见即所得，
+// 读取时 Markdown → HTML，保存时 HTML → Markdown，图片始终写相对文档目录的路径。
 const props = defineProps<{ requirementId: number; node: ArtifactNode }>();
 const opening = ref(true);
 const ready = ref(false);
@@ -28,14 +31,6 @@ const autoLabel = computed(() => {
   if (autoState.value === "failed") return "保存失败，请重试";
   return "已自动保存到本地文件";
 });
-const htmlSourcePattern =
-  /^\s*<(?:!doctype|h[1-6]|p|ul|ol|li|div|table|pre|blockquote|img)\b/i;
-function toEditorHtml(content: string) {
-  const trimmed = content.trim();
-  if (!trimmed) return "";
-  if (htmlSourcePattern.test(trimmed)) return trimmed;
-  return String(marked.parse(content, { async: false }));
-}
 function clearSaveTimer() {
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = undefined;
@@ -48,7 +43,12 @@ async function load() {
   try {
     const result = await artifactApi.content(nodeId);
     if (disposed || nodeId !== props.node.id) return;
-    const next = toEditorHtml(result.content);
+    // 磁盘中是相对文档目录的图片路径，编辑器内换成可访问地址预览
+    const next = toDisplayHtml(
+      documentToEditorHtml(result.content),
+      props.requirementId,
+      nodeId,
+    );
     html.value = next;
     savedHtml.value = next;
     text.value =
@@ -79,9 +79,11 @@ async function persist() {
   while (current.value && html.value !== savedHtml.value) {
     const node = current.value;
     const payload = html.value;
+    // 保存前把预览地址还原为相对文档目录的路径，再序列化为 Markdown（文档 §12.4）
+    const stored = htmlToMarkdown(toStoredHtml(payload, props.requirementId));
     autoState.value = "saving";
     try {
-      const updated = await artifactApi.saveContent(node.id, payload);
+      const updated = await artifactApi.saveContent(node.id, stored);
       savedHtml.value = payload;
       current.value = { ...node, updatedAt: updated.updatedAt };
       autoState.value = payload === html.value ? "saved" : "pending";
@@ -103,7 +105,7 @@ async function persist() {
           return false;
         }
         try {
-          const updated = await artifactApi.saveContent(node.id, payload, true);
+          const updated = await artifactApi.saveContent(node.id, stored, true);
           savedHtml.value = payload;
           current.value = { ...node, updatedAt: updated.updatedAt };
           autoState.value = payload === html.value ? "saved" : "pending";
@@ -162,6 +164,7 @@ onBeforeUnmount(() => {
         :key="current.id"
         :html="html"
         :requirement-id="requirementId"
+        :node-id="current.id"
         label="文档内容"
         fill-height
         @update:html="onHtml"

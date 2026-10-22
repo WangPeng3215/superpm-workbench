@@ -17,9 +17,13 @@ import {
 import {
   artifactMemoryName,
   artifactStatusLabels,
+  requirementImagesFolder,
+  requirementWorkspaceStageLabels,
   type ArtifactDirectory,
   type ArtifactLink,
   type ArtifactNode,
+  type RequirementWorkspaceStage,
+  type RequirementWorkspaceState,
 } from "@superpm/shared";
 import { artifactApi } from "../../api/artifacts";
 import { ApiError, errorMessage, request } from "../../api/client";
@@ -71,6 +75,11 @@ const iconMap: Record<string, typeof Document> = {
 };
 const isMemory = (node: ArtifactNode) =>
   node.nodeType === "file" && node.relativePath === artifactMemoryName;
+// 系统级资源（文档 §12.3）：需求记忆文件与根目录 images/ 不可改名、移动、删除。
+// 前端仅隐藏入口，最终约束在服务层强制执行（MCP 等其它调用方同样受约束）。
+const isProtected = (node: ArtifactNode) =>
+  node.relativePath === artifactMemoryName ||
+  node.relativePath === requirementImagesFolder;
 function extensionOf(node: ArtifactNode) {
   return node.extension ?? "";
 }
@@ -138,11 +147,72 @@ function sortNodes(list: ArtifactNode[]) {
 }
 function sortLinks(list: ArtifactLink[]) {
   const direction = sortOrder.value === "asc" ? 1 : -1;
-  return [...list].sort((a, b) => direction * a.name.localeCompare(b.name, "zh-Hans-CN"));
+  return [...list].sort(
+    (a, b) => direction * a.name.localeCompare(b.name, "zh-Hans-CN"),
+  );
 }
 const foldersView = computed(() => sortNodes(directory.value?.folders ?? []));
 const filesView = computed(() => sortNodes(directory.value?.files ?? []));
 const linksView = computed(() => sortLinks(directory.value?.links ?? []));
+// ===== 需求目录初始化状态（文档 §12.5）=====
+const workspace = ref<RequirementWorkspaceState>();
+const workspaceBusy = ref(false);
+// 仅在有异常时提示：初始化失败、目录缺失、系统级资源被外部删除
+const workspaceAlert = computed(() => {
+  const state = workspace.value;
+  if (!state) return null;
+  if (state.status === "failed")
+    return {
+      type: "error" as const,
+      title: "需求目录初始化失败",
+      description: `${state.failureReason ?? "未知原因"}（阶段：${workspaceStageLabel(state.failureStage)}）`,
+      action: "重试初始化",
+    };
+  if (!state.directoryExists)
+    return {
+      type: "warning" as const,
+      title: "需求目录缺失",
+      description: `磁盘上未找到 ${state.relativePath}，初始化后会自动重建默认结构。`,
+      action: "立即初始化",
+    };
+  if (state.missingResources.length)
+    return {
+      type: "warning" as const,
+      title: "系统级资源缺失",
+      description: `缺少 ${state.missingResources.join("、")}，可能已被外部删除。`,
+      action: "修复默认结构",
+    };
+  return null;
+});
+function workspaceStageLabel(stage: RequirementWorkspaceStage | null) {
+  if (!stage) return "未知";
+  return requirementWorkspaceStageLabels[stage];
+}
+async function loadWorkspace() {
+  try {
+    workspace.value = await artifactApi.directory(props.requirementId);
+  } catch {
+    // 状态查询失败不干扰文档浏览：错误已在主列表流程中呈现
+    workspace.value = undefined;
+  }
+}
+async function fixWorkspace() {
+  const state = workspace.value;
+  if (!state) return;
+  workspaceBusy.value = true;
+  try {
+    workspace.value =
+      state.status === "failed" || !state.directoryExists
+        ? await artifactApi.initializeDirectory(props.requirementId)
+        : await artifactApi.repairDirectory(props.requirementId);
+    ElMessage.success("需求目录已就绪");
+    await load();
+  } catch (e) {
+    ElMessage.error(errorMessage(e));
+  } finally {
+    workspaceBusy.value = false;
+  }
+}
 // ===== 数据加载 =====
 async function load() {
   const requirementId = props.requirementId;
@@ -168,6 +238,7 @@ watch(
     parentId.value = null;
     keyword.value = "";
     void load();
+    void loadWorkspace();
   },
   { immediate: true },
 );
@@ -204,6 +275,8 @@ async function refresh() {
     ElMessage.error(errorMessage(e));
   }
   await load();
+  // 刷新后重新比对磁盘：外部删除的系统级资源要立刻在提示条里可见（文档 §12.3）
+  await loadWorkspace();
 }
 // ===== 打开策略 =====
 async function openFile(node: ArtifactNode) {
@@ -285,12 +358,24 @@ async function submitCreate() {
         description: createForm.value.description.trim() || undefined,
       });
     } else if (!createForm.value.name.trim()) {
-      ElMessage.warning(createKind.value === "folder" ? "请输入文件夹名称" : "请输入文件名称（可含扩展名，如 方案.md）");
+      ElMessage.warning(
+        createKind.value === "folder"
+          ? "请输入文件夹名称"
+          : "请输入文件名称（可含扩展名，如 方案.md）",
+      );
       return;
     } else if (createKind.value === "folder") {
-      await artifactApi.createFolder(requirementId, parentIdValue, createForm.value.name);
+      await artifactApi.createFolder(
+        requirementId,
+        parentIdValue,
+        createForm.value.name,
+      );
     } else {
-      await artifactApi.createFile(requirementId, parentIdValue, createForm.value.name);
+      await artifactApi.createFile(
+        requirementId,
+        parentIdValue,
+        createForm.value.name,
+      );
     }
     createDialogVisible.value = false;
     ElMessage.success("创建成功");
@@ -356,12 +441,15 @@ async function submitLinkEdit() {
 function startMove(target: ArtifactNode | ArtifactLink) {
   if ("nodeType" in target) moveTargetNode.value = target;
   else moveTargetLink.value = target;
-  moveTarget.value = ("nodeType" in target ? target.parentId : target.folderNodeId) ?? 0;
+  moveTarget.value =
+    ("nodeType" in target ? target.parentId : target.folderNodeId) ?? 0;
   moveVisible.value = true;
 }
 async function loadMoveTree(
   node: { data?: { id?: number } | null; level: number },
-  resolve: (children: { id: number; name: string; disabled?: boolean }[]) => void,
+  resolve: (
+    children: { id: number; name: string; disabled?: boolean }[],
+  ) => void,
 ) {
   // 第 0 层提供"需求根目录"虚拟节点（id=0，提交时映射为 null），其子级为根目录下的文件夹
   if (node.level === 0) {
@@ -415,7 +503,11 @@ async function removeNode(node: ArtifactNode) {
         ? `确定删除文件夹「${node.name}」吗？`
         : `确定删除文件「${node.name}」吗？删除后不可恢复。`,
       "删除确认",
-      { confirmButtonText: "确认删除", cancelButtonText: "取消", type: "warning" },
+      {
+        confirmButtonText: "确认删除",
+        cancelButtonText: "取消",
+        type: "warning",
+      },
     );
   } catch {
     return;
@@ -429,11 +521,15 @@ async function removeNode(node: ArtifactNode) {
       return;
     }
     try {
-      await ElMessageBox.confirm(`${e.message}。是否继续删除？`, "删除非空目录", {
-        confirmButtonText: "确认删除",
-        cancelButtonText: "取消",
-        type: "warning",
-      });
+      await ElMessageBox.confirm(
+        `${e.message}。是否继续删除？`,
+        "删除非空目录",
+        {
+          confirmButtonText: "确认删除",
+          cancelButtonText: "取消",
+          type: "warning",
+        },
+      );
     } catch {
       return;
     }
@@ -453,7 +549,11 @@ async function removeLink(link: ArtifactLink) {
     await ElMessageBox.confirm(
       `确定删除链接「${link.name}」吗？仅移除记录，不影响外部页面。`,
       "删除链接",
-      { confirmButtonText: "确认删除", cancelButtonText: "取消", type: "warning" },
+      {
+        confirmButtonText: "确认删除",
+        cancelButtonText: "取消",
+        type: "warning",
+      },
     );
   } catch {
     return;
@@ -476,10 +576,7 @@ async function openLocally(node: ArtifactNode) {
     ElMessage.error(errorMessage(e));
   }
 }
-function onFileCommand(
-  command: string | number | object,
-  node: ArtifactNode,
-) {
+function onFileCommand(command: string | number | object, node: ArtifactNode) {
   const action = String(command);
   if (action === "open") void openFile(node);
   else if (action === "download") void downloadFile(node);
@@ -498,10 +595,7 @@ function onFolderCommand(
   else if (action === "move") startMove(node);
   else if (action === "delete") void removeNode(node);
 }
-function onLinkCommand(
-  command: string | number | object,
-  link: ArtifactLink,
-) {
+function onLinkCommand(command: string | number | object, link: ArtifactLink) {
   const action = String(command);
   if (action === "open") openLink(link);
   else if (action === "edit") startLinkEdit(link);
@@ -575,6 +669,26 @@ function onLinkCommand(
         </el-tooltip>
       </div>
     </header>
+    <el-alert
+      v-if="workspaceAlert"
+      class="workspace-alert"
+      :type="workspaceAlert.type"
+      :title="workspaceAlert.title"
+      :closable="false"
+      show-icon
+    >
+      <div class="workspace-alert-body">
+        <span>{{ workspaceAlert.description }}</span>
+        <el-button
+          class="workspace-fix-btn"
+          size="small"
+          :loading="workspaceBusy"
+          @click="fixWorkspace"
+        >
+          {{ workspaceAlert.action }}
+        </el-button>
+      </div>
+    </el-alert>
     <div v-loading="loading" class="doc-body">
       <el-alert
         v-if="error"
@@ -596,13 +710,27 @@ function onLinkCommand(
           @click="enter(folder)"
           @keydown.enter="enter(folder)"
         >
-          <div class="doc-card-icon folder"><el-icon><Folder /></el-icon></div>
-          <h3 class="doc-card-name" :title="folder.name">{{ folder.name }}</h3>
+          <div class="doc-card-icon folder">
+            <el-icon><Folder /></el-icon>
+          </div>
+          <h3 class="doc-card-name" :title="folder.name">
+            <span class="name-text">{{ folder.name }}</span>
+            <el-tag
+              v-if="isProtected(folder)"
+              class="memory-tag"
+              size="small"
+              effect="plain"
+              >系统目录</el-tag
+            >
+          </h3>
           <p class="doc-card-meta">{{ metaOf(folder) }}</p>
           <el-dropdown
             class="doc-card-more"
             trigger="click"
-            @command="(command: string | number | object) => onFolderCommand(command, folder)"
+            @command="
+              (command: string | number | object) =>
+                onFolderCommand(command, folder)
+            "
           >
             <button
               type="button"
@@ -615,9 +743,18 @@ function onLinkCommand(
             <template #dropdown>
               <el-dropdown-menu>
                 <el-dropdown-item command="enter">进入</el-dropdown-item>
-                <el-dropdown-item command="rename">重命名</el-dropdown-item>
-                <el-dropdown-item command="move">移动到…</el-dropdown-item>
-                <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
+                <el-dropdown-item v-if="!isProtected(folder)" command="rename"
+                  >重命名</el-dropdown-item
+                >
+                <el-dropdown-item v-if="!isProtected(folder)" command="move"
+                  >移动到…</el-dropdown-item
+                >
+                <el-dropdown-item
+                  v-if="!isProtected(folder)"
+                  command="delete"
+                  divided
+                  >删除</el-dropdown-item
+                >
               </el-dropdown-menu>
             </template>
           </el-dropdown>
@@ -632,10 +769,16 @@ function onLinkCommand(
           @click="openFile(file)"
           @keydown.enter="openFile(file)"
         >
-          <div class="doc-card-icon file"><el-icon><component :is="fileIcon(file)" /></el-icon></div>
+          <div class="doc-card-icon file">
+            <el-icon><component :is="fileIcon(file)" /></el-icon>
+          </div>
           <h3 class="doc-card-name" :title="file.name">
             <span class="name-text">{{ file.name }}</span>
-            <el-tag v-if="isMemory(file)" class="memory-tag" size="small" effect="plain"
+            <el-tag
+              v-if="isMemory(file)"
+              class="memory-tag"
+              size="small"
+              effect="plain"
               >需求记忆</el-tag
             >
           </h3>
@@ -650,7 +793,10 @@ function onLinkCommand(
           <el-dropdown
             class="doc-card-more"
             trigger="click"
-            @command="(command: string | number | object) => onFileCommand(command, file)"
+            @command="
+              (command: string | number | object) =>
+                onFileCommand(command, file)
+            "
           >
             <button
               type="button"
@@ -667,14 +813,17 @@ function onLinkCommand(
                 <el-dropdown-item v-if="systemOpen" command="open-locally"
                   >本地程序打开</el-dropdown-item
                 >
-                <el-dropdown-item v-if="!isMemory(file)" command="rename" divided
+                <el-dropdown-item
+                  v-if="!isProtected(file)"
+                  command="rename"
+                  divided
                   >重命名</el-dropdown-item
                 >
-                <el-dropdown-item v-if="!isMemory(file)" command="move"
+                <el-dropdown-item v-if="!isProtected(file)" command="move"
                   >移动到…</el-dropdown-item
                 >
                 <el-dropdown-item
-                  v-if="!isMemory(file)"
+                  v-if="!isProtected(file)"
                   command="delete"
                   divided
                   >删除</el-dropdown-item
@@ -692,16 +841,23 @@ function onLinkCommand(
           @click="openLink(link)"
           @keydown.enter="openLink(link)"
         >
-          <div class="doc-card-icon link"><el-icon><LinkIcon /></el-icon></div>
+          <div class="doc-card-icon link">
+            <el-icon><LinkIcon /></el-icon>
+          </div>
           <h3 class="doc-card-name" :title="link.name">{{ link.name }}</h3>
           <p class="doc-card-meta">
             {{ hostOf(link.url) }}
-            <span v-if="link.description" class="link-desc">· {{ link.description }}</span>
+            <span v-if="link.description" class="link-desc"
+              >· {{ link.description }}</span
+            >
           </p>
           <el-dropdown
             class="doc-card-more"
             trigger="click"
-            @command="(command: string | number | object) => onLinkCommand(command, link)"
+            @command="
+              (command: string | number | object) =>
+                onLinkCommand(command, link)
+            "
           >
             <button
               type="button"
@@ -716,7 +872,9 @@ function onLinkCommand(
                 <el-dropdown-item command="open">打开链接</el-dropdown-item>
                 <el-dropdown-item command="edit">编辑</el-dropdown-item>
                 <el-dropdown-item command="move">移动到…</el-dropdown-item>
-                <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
+                <el-dropdown-item command="delete" divided
+                  >删除</el-dropdown-item
+                >
               </el-dropdown-menu>
             </template>
           </el-dropdown>
@@ -752,7 +910,11 @@ function onLinkCommand(
         </label>
         <label v-if="createKind === 'link'" class="dialog-field">
           <span>链接地址</span>
-          <el-input v-model="createForm.url" placeholder="https://…" maxlength="2000" />
+          <el-input
+            v-model="createForm.url"
+            placeholder="https://…"
+            maxlength="2000"
+          />
         </label>
         <label v-if="createKind === 'link'" class="dialog-field">
           <span>备注（可选）</span>
@@ -776,7 +938,11 @@ function onLinkCommand(
       <form class="dialog-form" @submit.prevent="submitRename">
         <label class="dialog-field">
           <span>名称</span>
-          <el-input v-model="renameForm.name" maxlength="200" @keyup.enter="submitRename" />
+          <el-input
+            v-model="renameForm.name"
+            maxlength="200"
+            @keyup.enter="submitRename"
+          />
         </label>
       </form>
       <template #footer>
@@ -858,6 +1024,22 @@ function onLinkCommand(
   padding: 10px 14px;
   border-bottom: 1px solid var(--border-soft);
   background: var(--bg-subtle);
+}
+/* 需求目录初始化异常提示：占用一行，右侧给出修复入口（文档 §12.5） */
+.workspace-alert {
+  margin: 0;
+  border-radius: 0;
+}
+.workspace-alert-body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+.workspace-fix-btn {
+  flex: none;
 }
 .doc-breadcrumb {
   display: flex;

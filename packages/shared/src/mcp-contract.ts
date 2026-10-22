@@ -29,9 +29,12 @@ export const mcpReadonlyToolNames = [
   "issue.get",
   "issue.activities",
 ] as const;
-/** 写工具名（7 个）：改变业务状态，必须携带幂等键 */
+/**
+ * 写工具名（6 个）：改变业务状态，必须携带幂等键。
+ * 不提供 issue.create：AI 不得未经用户明确授权写入正式问题记录（V1.0 文档 §4.2），
+ * 正式创建只能由用户在界面完成；AI 可在对话中生成草稿供用户确认后再手动创建。
+ */
 export const mcpMutatingToolNames = [
-  "issue.create",
   "issue.update",
   "issue.comment",
   "issue.linkAsset",
@@ -149,12 +152,18 @@ export const mcpAssetGetInput = z
   .strict();
 export type McpAssetGetInput = z.output<typeof mcpAssetGetInput>;
 
-/** 镜像 IssueService.list(requirementId, phase?, status?) */
+/** 镜像 IssueService.list(requirementId, query) */
 export const mcpIssueListInput = z
   .object({
     requirementId: id,
-    phase: z.enum(["design", "development", "testing"]).optional(),
-    status: z.enum(["pending", "processing", "testing", "resolved"]).optional(),
+    stage: z.enum(["analysis", "design", "development", "testing"]).optional(),
+    status: z
+      .enum(["pending", "to_confirm", "processing", "resolved", "wont_fix"])
+      .optional(),
+    type: z
+      .enum(["analysis", "ui", "development", "testing", "other"])
+      .optional(),
+    q: z.string().trim().max(200).optional(),
   })
   .strict();
 export type McpIssueListInput = z.output<typeof mcpIssueListInput>;
@@ -169,21 +178,10 @@ export type McpIssueGetInput = z.output<typeof mcpIssueGetInput>;
 export const mcpIssueActivitiesInput = mcpIssueGetInput;
 export type McpIssueActivitiesInput = z.output<typeof mcpIssueActivitiesInput>;
 
-/** 镜像 IssueService.create / issueCreateSchema（初始状态固定 pending） */
-export const mcpIssueCreateInput = z
-  .object({
-    requirementId: id,
-    phase: z.enum(["design", "development", "testing"]),
-    title: z.string().trim().min(1, "请输入问题标题").max(200),
-    description: z.string().max(200000).default(""),
-    issueType: z.enum(["ui", "development", "defect", "change", "question"]).optional(),
-  })
-  .strict();
-export type McpIssueCreateInput = z.output<typeof mcpIssueCreateInput>;
-
 /**
  * 镜像 IssueService.update / issueUpdateSchema。
- * 网关守卫：不允许一次调用同时提交 solution 并把 status 置为 resolved。
+ * 网关守卫：不允许一次调用同时提交 solution 并把 status 置为 resolved；
+ * 服务层仍强制「已解决」时解决方案非空。
  */
 export const mcpIssueUpdateInput = z
   .object({
@@ -191,16 +189,23 @@ export const mcpIssueUpdateInput = z
     issueId: id,
     title: z.string().trim().min(1, "请输入问题标题").max(200).optional(),
     description: z.string().max(200000).optional(),
-    issueType: z.enum(["ui", "development", "defect", "change", "question"]).nullable().optional(),
-    status: z.enum(["pending", "processing", "testing", "resolved"]).optional(),
-    solution: z.string().max(10000).optional(),
+    stage: z.enum(["analysis", "design", "development", "testing"]).optional(),
+    type: z
+      .enum(["analysis", "ui", "development", "testing", "other"])
+      .nullable()
+      .optional(),
+    status: z
+      .enum(["pending", "to_confirm", "processing", "resolved", "wont_fix"])
+      .optional(),
+    solution: z.string().max(200000).optional(),
   })
   .strict()
   .refine(
     (value) =>
       value.title !== undefined ||
       value.description !== undefined ||
-      value.issueType !== undefined ||
+      value.stage !== undefined ||
+      value.type !== undefined ||
       value.status !== undefined ||
       value.solution !== undefined,
     "请提交需要更新的字段",
@@ -300,7 +305,7 @@ export type McpAssetUpdateStatusInput = z.output<typeof mcpAssetUpdateStatusInpu
 // 契约清单
 // ---------------------------------------------------------------------------
 
-/** 14 个 MCP 工具的完整契约（只读 7 + 写 7），网关按此一一建立执行器 */
+/** 13 个 MCP 工具的完整契约（只读 7 + 写 6），网关按此一一建立执行器 */
 export const mcpToolContracts: McpToolContract[] = [
   {
     name: "requirement.list",
@@ -338,7 +343,8 @@ export const mcpToolContracts: McpToolContract[] = [
   },
   {
     name: "issue.list",
-    description: "查询某需求下的问题列表，可按阶段（design/development/testing）与状态过滤。",
+    description:
+      "查询某需求下的问题记录，可按产生阶段、状态、类型与关键词（标题/描述）过滤，返回各状态计数。",
     kind: "readonly",
     input: mcpIssueListInput,
     allowedErrors: ["NOT_FOUND", "VALIDATION_ERROR"],
@@ -361,18 +367,9 @@ export const mcpToolContracts: McpToolContract[] = [
     idempotency: "none",
   },
   {
-    name: "issue.create",
-    description:
-      "在需求的指定阶段创建问题；初始状态固定为 pending，并自动写入一条系统活动记录。",
-    kind: "mutating",
-    input: mcpIssueCreateInput,
-    allowedErrors: ["NOT_FOUND", "VALIDATION_ERROR"],
-    idempotency: "key-required",
-  },
-  {
     name: "issue.update",
     description:
-      "更新问题的标题/描述/类型/状态/解决说明。注意：不允许一次调用同时提交 solution 并把状态置为 resolved——必须先单独保存 solution，再显式发起一次状态变更（AI 生成解决方案不会自动把问题置为已解决）。",
+      "更新问题记录的标题/描述/阶段/类型/状态/解决方案。注意：没有 issue.create 工具，正式问题只能由用户创建；不允许一次调用同时提交 solution 并把状态置为 resolved，必须先单独保存 solution，再显式发起一次状态变更。",
     kind: "mutating",
     input: mcpIssueUpdateInput,
     allowedErrors: ["NOT_FOUND", "VALIDATION_ERROR"],

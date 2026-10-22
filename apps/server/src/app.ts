@@ -6,9 +6,15 @@ import { StageWorkspaceService } from "./services/stage-workspace.js";
 import { RequirementFileService } from "./services/requirement-files.js";
 import { IssueService } from "./services/issues.js";
 import { ArtifactService } from "./services/artifacts.js";
+import { RequirementDirectoryResolver } from "./services/requirement-directory.js";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { defaultPaths, ensurePaths, projectRoot, allowSystemOpen } from "./config/index.js";
+import {
+  defaultPaths,
+  ensurePaths,
+  projectRoot,
+  allowSystemOpen,
+} from "./config/index.js";
 import { migrate, SCHEMA_VERSION } from "./db/migrate.js";
 import { RequirementService, DomainError } from "./services/requirements.js";
 import {
@@ -80,18 +86,32 @@ export async function createApp(
   const service = new RequirementService(db);
   const authService = new AuthService(db);
   authService.ensureSeed();
+  // 需求物理目录解析器：所有涉及需求目录的服务共用，保证命名与路径安全只有一份实现
+  const directories = new RequirementDirectoryResolver(db, paths.workspacePath);
   const workspaceService = new StageWorkspaceService(
     db,
     paths.workspacePath,
     service,
+    directories,
   );
   const fileService = new RequirementFileService(
     db,
     paths.workspacePath,
     service,
+    directories,
   );
-  const issueService = new IssueService(db, service, paths.workspacePath);
-  const artifactService = new ArtifactService(db, paths.workspacePath, service);
+  const issueService = new IssueService(
+    db,
+    service,
+    paths.workspacePath,
+    directories,
+  );
+  const artifactService = new ArtifactService(
+    db,
+    paths.workspacePath,
+    service,
+    directories,
+  );
   const app = Fastify({
     logger: options.logger ?? true,
     bodyLimit: 8 * 1024 * 1024,
@@ -129,18 +149,26 @@ export async function createApp(
   });
   app.get("/api/health", async () => ({ status: "ok", version }));
   // 认证中间件：除公开端点外，全部 /api/* 均需有效会话 Cookie
-  const publicApiPaths = new Set(["/api/health", "/api/system", "/api/auth/login"]);
+  const publicApiPaths = new Set([
+    "/api/health",
+    "/api/system",
+    "/api/auth/login",
+  ]);
   // 编辑器内容以 <img src="/api/..."> 引用阶段工作区图片，图片 raw 读取保持公开
   const publicImagePattern = /^\/api\/requirements\/\d+\/images\/[^/]+$/;
   app.addHook("onRequest", async (request, reply) => {
     const pathname = request.url.split("?")[0];
     if (!pathname.startsWith("/api/")) return;
-    if (publicApiPaths.has(pathname) || publicImagePattern.test(pathname)) return;
+    if (publicApiPaths.has(pathname) || publicImagePattern.test(pathname))
+      return;
     const token = parseAuthCookie(request.headers.cookie);
     const userId = token ? authService.verifyToken(token) : null;
     if (!userId)
       return reply.status(401).send({
-        error: { code: "UNAUTHORIZED", message: "未登录或登录已过期，请重新登录" },
+        error: {
+          code: "UNAUTHORIZED",
+          message: "未登录或登录已过期，请重新登录",
+        },
       });
     request.authUserId = userId;
   });
@@ -195,11 +223,12 @@ export async function createApp(
   );
   app.post("/api/requirements", async (request, reply) => {
     const created = service.create(request.body);
-    // 新建需求立即初始化需求记忆模板（文档 4.3）；磁盘异常不阻断建需，仅记录日志
+    // 新建需求立即初始化物理目录与默认资源（文档 §12.1/§12.5）。
+    // 初始化失败不阻断建需：状态落库为 failed 并记录阶段，前端可见并可重试。
     try {
-      artifactService.ensureMemory(created.id);
+      directories.initialize(created.id);
     } catch (error) {
-      app.log.error(error, "初始化需求记忆失败");
+      app.log.error(error, "初始化需求目录失败");
     }
     return reply.status(201).send(created);
   });
@@ -227,9 +256,7 @@ export async function createApp(
     async (request) => service.relations(parseId(request.params.id)),
   );
   const fileListQuery = z.object({
-    phase: z
-      .union([z.enum(stages), z.literal("all")])
-      .default("analysis"),
+    phase: z.union([z.enum(stages), z.literal("all")]).default("analysis"),
     all: z
       .enum(["true", "false"])
       .default("false")
@@ -291,7 +318,8 @@ export async function createApp(
         return reply.status(403).send({
           error: {
             code: "FORBIDDEN",
-            message: "本地程序打开功能未启用（需设置 SUPERPM_ALLOW_SYSTEM_OPEN=1）",
+            message:
+              "本地程序打开功能未启用（需设置 SUPERPM_ALLOW_SYSTEM_OPEN=1）",
           },
         });
       fileService.openAsset(
@@ -321,21 +349,22 @@ export async function createApp(
     },
   );
   const issueListQuery = z.object({
-    phase: z.enum(["design", "development", "testing"]).optional(),
+    stage: z.enum(["analysis", "design", "development", "testing"]).optional(),
     status: z
-      .enum(["pending", "processing", "testing", "resolved"])
+      .enum(["pending", "to_confirm", "processing", "resolved", "wont_fix"])
       .optional(),
+    type: z
+      .enum(["analysis", "ui", "development", "testing", "other"])
+      .optional(),
+    q: z.string().trim().max(200).optional(),
   });
   app.get<{ Params: { id: string } }>(
     "/api/requirements/:id/issues",
-    async (request) => {
-      const query = issueListQuery.parse(request.query ?? {});
-      return issueService.list(
+    async (request) =>
+      issueService.list(
         parseId(request.params.id),
-        query.phase,
-        query.status,
-      );
-    },
+        issueListQuery.parse(request.query ?? {}),
+      ),
   );
   app.post<{ Params: { id: string } }>(
     "/api/requirements/:id/issues",
@@ -470,10 +499,17 @@ export async function createApp(
     "/api/requirements/:id/artifacts",
     async (request) => {
       const query = (request.query ?? {}) as Record<string, unknown>;
-      const parentIdRaw = typeof query.parentId === "string" ? query.parentId : "";
-      const parentId = /^[1-9]\d*$/.test(parentIdRaw) ? Number(parentIdRaw) : null;
+      const parentIdRaw =
+        typeof query.parentId === "string" ? query.parentId : "";
+      const parentId = /^[1-9]\d*$/.test(parentIdRaw)
+        ? Number(parentIdRaw)
+        : null;
       const keyword = typeof query.q === "string" ? query.q.slice(0, 200) : "";
-      return artifactService.listNodes(parseId(request.params.id), parentId, keyword);
+      return artifactService.listNodes(
+        parseId(request.params.id),
+        parentId,
+        keyword,
+      );
     },
   );
   app.post<{ Params: { id: string } }>(
@@ -481,26 +517,38 @@ export async function createApp(
     async (request, reply) =>
       reply
         .status(201)
-        .send(artifactService.createFolder(parseId(request.params.id), request.body)),
+        .send(
+          artifactService.createFolder(
+            parseId(request.params.id),
+            request.body,
+          ),
+        ),
   );
   app.post<{ Params: { id: string } }>(
     "/api/requirements/:id/artifacts/files",
     async (request, reply) =>
       reply
         .status(201)
-        .send(artifactService.createFile(parseId(request.params.id), request.body)),
+        .send(
+          artifactService.createFile(parseId(request.params.id), request.body),
+        ),
   );
   app.post<{ Params: { id: string } }>(
     "/api/requirements/:id/artifacts/refresh",
     async (request) =>
-      artifactService.refreshDirectory(parseId(request.params.id), request.body ?? {}),
+      artifactService.refreshDirectory(
+        parseId(request.params.id),
+        request.body ?? {},
+      ),
   );
   app.post<{ Params: { id: string } }>(
     "/api/requirements/:id/artifacts/links",
     async (request, reply) =>
       reply
         .status(201)
-        .send(artifactService.createLink(parseId(request.params.id), request.body)),
+        .send(
+          artifactService.createLink(parseId(request.params.id), request.body),
+        ),
   );
   app.patch<{ Params: { linkId: string } }>(
     "/api/artifacts/links/:linkId",
@@ -516,7 +564,8 @@ export async function createApp(
   );
   app.get<{ Params: { nodeId: string } }>(
     "/api/artifacts/nodes/:nodeId",
-    async (request) => artifactService.getNodeDetails(parseId(request.params.nodeId)),
+    async (request) =>
+      artifactService.getNodeDetails(parseId(request.params.nodeId)),
   );
   app.patch<{ Params: { nodeId: string } }>(
     "/api/artifacts/nodes/:nodeId",
@@ -572,7 +621,8 @@ export async function createApp(
         return reply.status(403).send({
           error: {
             code: "FORBIDDEN",
-            message: "本地程序打开功能未启用（需设置 SUPERPM_ALLOW_SYSTEM_OPEN=1）",
+            message:
+              "本地程序打开功能未启用（需设置 SUPERPM_ALLOW_SYSTEM_OPEN=1）",
           },
         });
       artifactService.openSystem(parseId(request.params.nodeId));
@@ -586,8 +636,61 @@ export async function createApp(
   );
   app.post<{ Params: { id: string } }>(
     "/api/requirements/:id/memory/refresh",
-    async (request) => artifactService.refreshMemory(parseId(request.params.id)),
+    async (request) =>
+      artifactService.refreshMemory(parseId(request.params.id)),
   );
+  // ===== 需求物理目录初始化与系统级资源（文档 §12）=====
+  // 初始化状态：目录名、初始化结果、失败阶段与磁盘缺失资源（供前端提示与重试入口）
+  app.get<{ Params: { id: string } }>(
+    "/api/requirements/:id/directory",
+    async (request) => directories.state(parseId(request.params.id)),
+  );
+  // 重新初始化：幂等，已存在的文件与目录不覆盖
+  app.post<{ Params: { id: string } }>(
+    "/api/requirements/:id/directory/initialize",
+    async (request) => directories.initialize(parseId(request.params.id)),
+  );
+  // 修复默认结构：显式补建缺失的系统级资源与默认目录（普通刷新不会重建）
+  app.post<{ Params: { id: string } }>(
+    "/api/requirements/:id/directory/repair",
+    async (request) => directories.repair(parseId(request.params.id)),
+  );
+  // 图片上传：落盘到需求根目录 images/，返回按文档目录计算的相对路径（文档 §12.4）
+  app.post<{ Params: { id: string } }>(
+    "/api/requirements/:id/artifacts/images",
+    async (request, reply) =>
+      reply
+        .status(201)
+        .send(
+          artifactService.uploadImage(parseId(request.params.id), request.body),
+        ),
+  );
+  // 图片读取：按文档相对路径解析（../images/a.png），供 Markdown 图片预览
+  app.get<{
+    Params: { id: string };
+    Querystring: { path?: string; nodeId?: string };
+  }>("/api/requirements/:id/artifacts/image", async (request, reply) => {
+    const query = (request.query ?? {}) as Record<string, unknown>;
+    const relativePath = typeof query.path === "string" ? query.path : "";
+    if (!relativePath)
+      return reply.status(400).send({
+        error: { code: "VALIDATION_ERROR", message: "缺少图片路径" },
+      });
+    const nodeId =
+      typeof query.nodeId === "string" && query.nodeId
+        ? parseId(query.nodeId)
+        : null;
+    const image = artifactService.imageByPath(
+      parseId(request.params.id),
+      nodeId,
+      relativePath,
+    );
+    return reply
+      .header("X-Content-Type-Options", "nosniff")
+      .header("Cache-Control", "private, max-age=300")
+      .type(image.mime)
+      .send(image.data);
+  });
   const webAvailable =
     options.serveWeb && existsSync(join(webRoot, "index.html"));
   try {

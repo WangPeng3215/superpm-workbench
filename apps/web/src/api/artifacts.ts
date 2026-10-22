@@ -1,9 +1,11 @@
 import type {
   ArtifactDirectory,
+  ArtifactImageUploadResult,
   ArtifactLink,
   ArtifactNode,
   ArtifactNodeDetails,
   ArtifactRefreshResult,
+  RequirementWorkspaceState,
 } from "@superpm/shared";
 import { request } from "./client";
 
@@ -18,7 +20,11 @@ export const artifactApi = {
       `/requirements/${requirementId}/artifacts${query ? `?${query}` : ""}`,
     );
   },
-  createFolder: (requirementId: number, parentId: number | null, name: string) =>
+  createFolder: (
+    requirementId: number,
+    parentId: number | null,
+    name: string,
+  ) =>
     request<ArtifactNode>(`/requirements/${requirementId}/artifacts/folders`, {
       method: "POST",
       body: JSON.stringify({ parentId, name }),
@@ -32,7 +38,9 @@ export const artifactApi = {
     request<ArtifactNode>(`/requirements/${requirementId}/artifacts/files`, {
       method: "POST",
       body: JSON.stringify(
-        initialContent === undefined ? { parentId, name } : { parentId, name, initialContent },
+        initialContent === undefined
+          ? { parentId, name }
+          : { parentId, name, initialContent },
       ),
     }),
   refresh: (requirementId: number, relativePath?: string) =>
@@ -103,4 +111,33 @@ export const artifactApi = {
     request<void>(`/artifacts/links/${linkId}`, { method: "DELETE" }),
   memory: (requirementId: number) =>
     request<ArtifactNode>(`/requirements/${requirementId}/memory`),
+  // ===== 需求物理目录与图片上传（文档 §12）=====
+  directory: (requirementId: number) =>
+    request<RequirementWorkspaceState>(
+      `/requirements/${requirementId}/directory`,
+    ),
+  initializeDirectory: (requirementId: number) =>
+    request<RequirementWorkspaceState>(
+      `/requirements/${requirementId}/directory/initialize`,
+      { method: "POST", body: JSON.stringify({}) },
+    ),
+  repairDirectory: (requirementId: number) =>
+    request<RequirementWorkspaceState>(
+      `/requirements/${requirementId}/directory/repair`,
+      { method: "POST", body: JSON.stringify({}) },
+    ),
+  // 图片上传：后端落盘到 images/ 并返回相对文档目录的 Markdown 路径
+  uploadImage: (
+    requirementId: number,
+    payload: {
+      nodeId: number | null;
+      mime: string;
+      data: string;
+      fileName?: string;
+    },
+  ) =>
+    request<ArtifactImageUploadResult>(
+      `/requirements/${requirementId}/artifacts/images`,
+      { method: "POST", body: JSON.stringify(payload) },
+    ),
 };

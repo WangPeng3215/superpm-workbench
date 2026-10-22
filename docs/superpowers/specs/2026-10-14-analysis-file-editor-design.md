@@ -9,7 +9,7 @@
 - `requirement_files` 表只保存文件 ID、所属需求、阶段、分类、显示名称、实际文件名、确认状态和时间。
 - 正文通过 `RequirementFileService.content` 从工作区文件读取，通过 `saveContent` 写回文件。
 - 默认分析记录位于 `workspace/requirements/<需求 ID>/analysis/分析记录/analysis-record.md`，工作区根目录可以通过环境变量配置。
-- 现有编辑器是富文本编辑器：读取 Markdown 时转成 HTML，编辑后沿用现有 HTML 保存格式；本次不更换编辑器、不迁移正文格式。
+- 现有编辑器是富文本编辑器：读取 Markdown 时转成 HTML，编辑后写回 Markdown（后续迭代已切换为 Markdown 直存，见 `2026-10-14-native-markdown-editor-design.md`）；本次不更换编辑器。
 
 ## 方案
 

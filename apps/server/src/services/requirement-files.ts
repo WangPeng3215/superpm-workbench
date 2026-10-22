@@ -19,18 +19,12 @@ import {
   type RequirementFileList,
   type Stage,
 } from "@superpm/shared";
-import {
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readFileSync,
-  realpathSync,
-  writeFileSync,
-} from "node:fs";
-import { extname, isAbsolute, join, relative, sep } from "node:path";
+import { existsSync, lstatSync, readFileSync, writeFileSync } from "node:fs";
+import { extname, join, relative, sep } from "node:path";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { DomainError, RequirementService } from "./requirements.js";
+import { RequirementDirectoryResolver } from "./requirement-directory.js";
 import { allowSystemOpen } from "../config/index.js";
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
@@ -49,8 +43,7 @@ export const MIME_BY_EXTENSION: Record<string, string> = {
   html: "text/html; charset=utf-8",
   zip: "application/zip",
   doc: "application/msword",
-  docx:
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   xls: "application/vnd.ms-excel",
   xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 };
@@ -82,7 +75,8 @@ export function toFile(row: FileRow): RequirementFile {
   // resource_type/status 为权威字段；kind/is_final 为兼容投影（过渡期）
   const resourceType: AssetResourceType =
     row.resource_type ?? (row.kind === "link" ? "link" : "file");
-  const status: AssetStatus = row.status ?? (row.is_final === 1 ? "final" : "draft");
+  const status: AssetStatus =
+    row.status ?? (row.is_final === 1 ? "final" : "draft");
   return {
     id: row.id,
     requirementId: row.requirement_id,
@@ -114,11 +108,16 @@ function extensionFor(name: string, mime: string) {
   return byMime ? `.${byMime[0]}` : ".bin";
 }
 export class RequirementFileService {
+  private readonly directories: RequirementDirectoryResolver;
   constructor(
     private db: Database.Database,
     private root: string,
     private requirements: RequirementService,
-  ) {}
+    directories?: RequirementDirectoryResolver,
+  ) {
+    this.directories =
+      directories ?? new RequirementDirectoryResolver(db, root);
+  }
   list(id: number, phase: Stage | "all", all: boolean): RequirementFileList {
     this.requirements.get(id);
     if (phase !== "all") this.ensureScope(id, phase);
@@ -172,7 +171,11 @@ export class RequirementFileService {
     const data = requirementFileCreateSchema.parse(input);
     // 分类形态校验：链接语义按分类约束；text 作为轻量文档形态可在文件类分类下创建
     const allowed = fileCategoryKinds[data.category];
-    if (data.resourceType === "link" && allowed !== "link" && allowed !== "both")
+    if (
+      data.resourceType === "link" &&
+      allowed !== "link" &&
+      allowed !== "both"
+    )
       throw new DomainError("VALIDATION_ERROR", "该分类不支持链接条目");
     if (data.resourceType === "file" && allowed === "link")
       throw new DomainError("VALIDATION_ERROR", "该分类仅支持链接条目");
@@ -233,7 +236,8 @@ export class RequirementFileService {
       const directory = this.directory(id, ["files"]);
       const path = join(directory, fileName);
       writeFileSync(path, buffer, { flag: "wx" });
-      const relativePath = `requirements/${id}/files/${fileName}`;
+      // 相对路径由目录映射推导，保证与实际落盘的物理目录名一致
+      const relativePath = `${this.directories.relativeRoot(id)}/files/${fileName}`;
       const result = this.db
         .prepare(
           "INSERT INTO requirement_files(requirement_id, phase, category, name, file_name, kind, link_url, is_final, resource_type, storage_type, relative_path, mime_type, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'file', NULL, ?, 'file', 'local', ?, ?, ?, ?, ?)",
@@ -261,7 +265,10 @@ export class RequirementFileService {
       const row = this.rawRow(file.id);
       if (row.text_content === null)
         throw new DomainError("NOT_FOUND", "文本内容不存在", 404);
-      return { file: { ...file, textContent: row.text_content }, content: row.text_content };
+      return {
+        file: { ...file, textContent: row.text_content },
+        content: row.text_content,
+      };
     }
     const path = this.resolveLocalPath(file);
     this.assertLocalFile(file, path);
@@ -312,7 +319,9 @@ export class RequirementFileService {
         )
         .run(
           patch.name ?? file.name,
-          patch.description === undefined ? file.description : patch.description,
+          patch.description === undefined
+            ? file.description
+            : patch.description,
           nextStatus ?? file.status,
           // is_final 过渡列与 status 同步双写，兼容现有消费方
           (nextStatus ?? file.status) === "final" ? 1 : 0,
@@ -414,7 +423,12 @@ export class RequirementFileService {
   }
   // 旧版推导规则：requirements/{id}/{phase}/{分类目录}/{file_name}
   private legacyPath(file: RequirementFile) {
-    return this.path(file.requirementId, file.phase, file.category, file.fileName);
+    return this.path(
+      file.requirementId,
+      file.phase,
+      file.category,
+      file.fileName,
+    );
   }
   private row(requirementId: number, fileId: number) {
     this.requirements.get(requirementId);
@@ -476,18 +490,7 @@ export class RequirementFileService {
     );
   }
   private directory(id: number, segments: string[]) {
-    const root = realpathSync(this.root);
-    let current = root;
-    for (const segment of ["requirements", String(id), ...segments]) {
-      current = join(current, segment);
-      if (!existsSync(current)) mkdirSync(current);
-      if (lstatSync(current).isSymbolicLink())
-        throw new DomainError("INVALID_PATH", "工作区目录不能是符号链接");
-      const resolved = realpathSync(current);
-      const distance = relative(root, resolved);
-      if (distance.startsWith("..") || isAbsolute(distance))
-        throw new DomainError("INVALID_PATH", "工作区路径无效");
-    }
-    return current;
+    // 需求根目录由统一解析器给出（可读目录名），段内路径仍逐级校验符号链接与越界
+    return this.directories.resolve(id, segments.join("/"), true);
   }
 }

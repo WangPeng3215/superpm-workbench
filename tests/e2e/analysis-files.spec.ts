@@ -82,7 +82,8 @@ async function createDocFixture(page: Page, request: APIRequestContext) {
       data: {
         parentId: null,
         name: "补充方案.MD",
-        initialContent: "# 文件内的分析方案\n\n这是 **补充内容**。\n\n- 第一项\n",
+        initialContent:
+          "# 文件内的分析方案\n\n这是 **补充内容**。\n\n- 第一项\n",
       },
     })
   ).json()) as ArtifactNode;
@@ -324,25 +325,28 @@ test("keeps doc tabs open with their drafts when switching stages", async ({
   const started = createGate();
   const responseGate = createGate();
   let firstSave = true;
-  await page.route(`**/api/artifacts/nodes/${memory.id}/content`, async (route) => {
-    if (route.request().method() === "PUT" && firstSave) {
-      firstSave = false;
-      const response = await route.fetch();
-      started.release();
-      await responseGate.promise;
-      await route.fulfill({ response });
-    } else {
-      await route.continue();
-    }
-  });
+  await page.route(
+    `**/api/artifacts/nodes/${memory.id}/content`,
+    async (route) => {
+      if (route.request().method() === "PUT" && firstSave) {
+        firstSave = false;
+        const response = await route.fetch();
+        started.release();
+        await responseGate.promise;
+        await route.fulfill({ response });
+      } else {
+        await route.continue();
+      }
+    },
+  );
   try {
     await editor.fill("已落盘但响应尚未返回");
     await started.promise;
     await editor.fill("离开前的最后一版草稿");
-    // 切到 UI 设计阶段（详情表单保存当前阶段）：文档页签保持打开，问题页签展示该阶段面板
+    // 切到 UI 设计阶段（详情表单保存当前阶段）：文档页签保持打开，问题页签展示问题台账
     await switchStage(page, "UI 设计");
-    await docTab(page, "需求问题").click();
-    await expect(page.locator(".issues-panel")).toBeVisible();
+    await docTab(page, "问题记录").click();
+    await expect(page.locator(".issue-app, .issue-empty")).toBeVisible();
     await expect(docTab(page, "需求记忆.md")).toBeVisible();
     responseGate.release();
     // 切回记忆页签：草稿不丢且最终修改已随自动保存落盘
@@ -395,7 +399,7 @@ test("preserves an image upload that completes while opening another file", asyn
   const imageGate = createGate();
   const readGate = createGate();
   await page.route(
-    `**/api/requirements/${requirement.id}/images`,
+    `**/api/requirements/${requirement.id}/artifacts/images`,
     async (route) => {
       const response = await route.fetch();
       imageStarted.release();
@@ -403,10 +407,13 @@ test("preserves an image upload that completes while opening another file", asyn
       await route.fulfill({ response });
     },
   );
-  await page.route(`**/api/artifacts/nodes/${markdownFile.id}/content`, async (route) => {
-    await readGate.promise;
-    await route.continue();
-  });
+  await page.route(
+    `**/api/artifacts/nodes/${markdownFile.id}/content`,
+    async (route) => {
+      await readGate.promise;
+      await route.continue();
+    },
+  );
   try {
     // 记忆页签编辑器工具栏的隐藏图片上传入口仍在 .md-panel 内
     await page.locator(".md-panel input[type=file]").setInputFiles({
@@ -429,8 +436,9 @@ test("preserves an image upload that completes while opening another file", asyn
     const saved = await (
       await request.get(`/api/artifacts/nodes/${memory.id}/content`)
     ).json();
-    expect(saved.content).toContain("<img");
-    expect(saved.content).toContain('alt="pixel.png"');
+    // 正文以 Markdown 落盘：图片为 ![alt](相对路径) 形式
+    expect(saved.content).toContain("![pixel.png](");
+    expect(saved.content).toContain("images/pixel");
     // 补充方案页签正常加载
     await gotoDocManager(page);
     await docCard(page, markdownFile.name).click();
@@ -439,6 +447,51 @@ test("preserves an image upload that completes while opening another file", asyn
     imageGate.release();
     readGate.release();
   }
+});
+
+test("round-trips a markdown table through the rich editor", async ({
+  page,
+  request,
+}) => {
+  const created = await request.post("/api/requirements", {
+    data: { name: `表格回显-${Date.now()}`, proposedAt: "2026-10-14" },
+  });
+  expect(created.ok()).toBeTruthy();
+  const requirement = (await created.json()) as Requirement;
+  const tableMarkdown =
+    "# 字段说明\n\n| 字段 | 类型 |\n| --- | --- |\n| id | number |\n";
+  const file = (await (
+    await request.post(`/api/requirements/${requirement.id}/artifacts/files`, {
+      data: {
+        parentId: null,
+        name: "字段表.md",
+        initialContent: tableMarkdown,
+      },
+    })
+  ).json()) as ArtifactNode;
+  await page.goto(`/requirements/${requirement.id}`);
+  await docTab(page, "文档管理").click();
+  await docCard(page, "字段表.md").click();
+  const editor = activeEditor(page);
+  // Markdown 表格读入后成为可编辑表格，表头与单元格内容都在编辑器内
+  await expect(editor.locator("table")).toHaveCount(1);
+  await expect(editor.locator("th").first()).toHaveText("字段");
+  await expect(editor.locator("td").first()).toHaveText("id");
+  // 编辑正文触发保存：表格仍以 Markdown 表格语法写回，不被降级为 HTML
+  await editor.locator("h1").click();
+  await page.keyboard.press("End");
+  await page.keyboard.type("补充");
+  await expect(activeFooter(page)).toContainText("已自动保存", {
+    timeout: 15000,
+  });
+  const saved = await (
+    await request.get(`/api/artifacts/nodes/${file.id}/content`)
+  ).json();
+  expect(saved.content).toContain("| 字段 | 类型 |");
+  expect(saved.content).toContain("| --- | --- |");
+  expect(saved.content).toContain("| id | number |");
+  expect(saved.content).not.toContain("<table");
+  expect(saved.content).not.toContain("<colgroup");
 });
 
 test("keeps renamed Markdown selectable and closes its tab after deletion", async ({

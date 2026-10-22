@@ -1,4 +1,9 @@
-import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
+import {
+  test,
+  expect,
+  type APIRequestContext,
+  type Page,
+} from "@playwright/test";
 import { existsSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ArtifactNode, Requirement } from "@superpm/shared";
@@ -40,9 +45,10 @@ async function createViaDialog(
     .getByText(`新建${kind}`, { exact: true })
     .click();
   const dialog = page.getByRole("dialog");
-  await dialog.getByPlaceholder(/名称|文件夹名称|文件名称|链接名称/).fill(fields.name);
-  if (fields.url)
-    await dialog.getByPlaceholder("https://…").fill(fields.url);
+  await dialog
+    .getByPlaceholder(/名称|文件夹名称|文件名称|链接名称/)
+    .fill(fields.name);
+  if (fields.url) await dialog.getByPlaceholder("https://…").fill(fields.url);
   if (fields.description)
     await dialog.locator("textarea").fill(fields.description);
   await dialog.getByRole("button", { name: "创建", exact: true }).click();
@@ -62,19 +68,29 @@ async function openDocManager(page: Page, request: APIRequestContext) {
   await page.getByRole("tab", { name: "文档管理", exact: true }).click();
   // 文件面板直接铺满页签，md 文件不再默认打开编辑器
   await expect(page.locator(".doc-manager")).toBeVisible();
+  // 物理目录名是「需求编号 + 需求名称」（§12），按目录映射取真实路径
+  const state = (await (
+    await request.get(`/api/requirements/${requirement.id}/directory`)
+  ).json()) as { relativePath: string };
   const system = (await (await request.get("/api/system")).json()) as {
     workspacePath: string;
   };
   return {
     requirement,
     memory,
-    requirementRoot: join(system.workspacePath, "requirements", String(requirement.id)),
+    requirementRoot: join(
+      system.workspacePath,
+      ...state.relativePath.split("/"),
+    ),
   };
 }
 
 test.describe("需求知识库（文档管理）", () => {
   test("创建多级文件夹与文件并支持面包屑往返", async ({ page, request }) => {
-    const { requirement, requirementRoot } = await openDocManager(page, request);
+    const { requirement, requirementRoot } = await openDocManager(
+      page,
+      request,
+    );
     await createViaDialog(page, "文件夹", { name: "研究资料" });
     await expect(docCard(page, "研究资料")).toBeVisible();
     expect(existsSync(join(requirementRoot, "研究资料"))).toBe(true);
@@ -83,7 +99,9 @@ test.describe("需求知识库（文档管理）", () => {
     await expect(crumb(page, "研究资料")).toBeVisible();
     await createViaDialog(page, "文件", { name: "调研笔记.md" });
     await expect(docCard(page, "调研笔记.md")).toBeVisible();
-    expect(existsSync(join(requirementRoot, "研究资料", "调研笔记.md"))).toBe(true);
+    expect(existsSync(join(requirementRoot, "研究资料", "调研笔记.md"))).toBe(
+      true,
+    );
     // 面包屑回到根目录，子目录卡片可见；再进入确认文件在子目录中
     await crumb(page, /知识库-/).click();
     await expect(docCard(page, "研究资料")).toBeVisible();
@@ -93,9 +111,9 @@ test.describe("需求知识库（文档管理）", () => {
     const root = await (
       await request.get(`/api/requirements/${requirement.id}/artifacts`)
     ).json();
-    expect(root.folders.map((folder: { name: string }) => folder.name)).toContain(
-      "研究资料",
-    );
+    expect(
+      root.folders.map((folder: { name: string }) => folder.name),
+    ).toContain("研究资料");
   });
 
   test("新建 Markdown 文件后以新页签打开编辑器并自动保存", async ({
@@ -167,7 +185,9 @@ test.describe("需求知识库（文档管理）", () => {
     await runCardCommand(page, "草稿.md", "重命名");
     const renameDialog = page.getByRole("dialog");
     await renameDialog.getByRole("textbox").fill("定稿草案.md");
-    await renameDialog.getByRole("button", { name: "保存", exact: true }).click();
+    await renameDialog
+      .getByRole("button", { name: "保存", exact: true })
+      .click();
     await expect(docCard(page, "草稿.md")).toHaveCount(0);
     await expect(docCard(page, "定稿草案.md")).toBeVisible();
     // 移动到「归档」：先打开目录树下拉，点展开箭头加载子级，再选中目标文件夹
@@ -183,9 +203,7 @@ test.describe("需求知识库（文档管理）", () => {
       .filter({ hasText: "归档" });
     await expect(targetNode).toBeVisible();
     await targetNode.click();
-    await moveDialog
-      .getByRole("button", { name: "移动", exact: true })
-      .click();
+    await moveDialog.getByRole("button", { name: "移动", exact: true }).click();
     await expect(docCard(page, "定稿草案.md")).toHaveCount(0);
     // 进入「归档」确认文件已在其中
     await docCard(page, "归档").click();
@@ -196,17 +214,21 @@ test.describe("需求知识库（文档管理）", () => {
     await openDocManager(page, request);
     await createViaDialog(page, "文件", { name: "../escape" });
     await expect(
-      page
-        .locator(".el-message__content")
-        .filter({ hasText: "名称不能为空" }),
+      page.locator(".el-message__content").filter({ hasText: "名称不能为空" }),
     ).toBeVisible();
     // 未创建任何卡片
     await expect(page.locator(".doc-card.is-file")).toHaveCount(1); // 仅有需求记忆
-    await page.getByRole("dialog").getByRole("button", { name: "取消", exact: true }).click();
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: "取消", exact: true })
+      .click();
     await expect(page.locator(".doc-card.is-file")).toHaveCount(1);
   });
 
-  test("需求记忆文件受保护：无删除入口且 API 拒绝删除", async ({ page, request }) => {
+  test("需求记忆文件受保护：无删除入口且 API 拒绝删除", async ({
+    page,
+    request,
+  }) => {
     const { memory } = await openDocManager(page, request);
     const memoryCard = docCard(page, "需求记忆.md");
     await expect(memoryCard).toContainText("需求记忆");
@@ -268,9 +290,13 @@ test.describe("需求知识库（文档管理）", () => {
       .locator(".el-message-box")
       .getByRole("button", { name: "确认删除", exact: true })
       .click();
-    const secondBox = page.locator(".el-message-box").filter({ hasText: "1 个子项" });
+    const secondBox = page
+      .locator(".el-message-box")
+      .filter({ hasText: "1 个子项" });
     await expect(secondBox).toBeVisible();
-    await secondBox.getByRole("button", { name: "确认删除", exact: true }).click();
+    await secondBox
+      .getByRole("button", { name: "确认删除", exact: true })
+      .click();
     await expect(docCard(page, "项目材料")).toHaveCount(0);
     expect(existsSync(join(requirementRoot, "项目材料"))).toBe(false);
   });
@@ -287,7 +313,9 @@ test.describe("需求知识库（文档管理）", () => {
     await expect(docCard(page, "调研笔记.md")).toBeVisible();
     await expect(docCard(page, "会议记录.md")).toHaveCount(0);
     // 搜索结果展示跨目录的相对路径
-    await expect(docCard(page, "调研笔记.md")).toContainText("资料库/调研笔记.md");
+    await expect(docCard(page, "调研笔记.md")).toContainText(
+      "资料库/调研笔记.md",
+    );
     // 清空搜索回到目录视图
     await search.fill("");
     await expect(docCard(page, "会议记录.md")).toBeVisible();

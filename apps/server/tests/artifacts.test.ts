@@ -12,6 +12,7 @@ import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { createApp } from "../src/app";
 import { authedInject } from "./auth-helper";
+import { requirementRootPath } from "./workspace-helper";
 
 // 需求知识库（迁移 0007）：索引/磁盘一致性、路径安全、记忆保护、外部修改检测
 describe("artifact service", () => {
@@ -19,6 +20,7 @@ describe("artifact service", () => {
   let directory: string;
   let requirementId: number;
   let workspacePath: string;
+  let rootPath: string;
 
   beforeEach(async () => {
     directory = mkdtempSync(join(tmpdir(), "superpm-artifacts-"));
@@ -34,15 +36,19 @@ describe("artifact service", () => {
       payload: { name: "知识库需求", proposedAt: "2026-10-15" },
     });
     requirementId = created.json().id;
-    workspacePath = (await app.inject({ method: "GET", url: "/api/system" })).json()
-      .workspacePath as string;
+    workspacePath = (
+      await app.inject({ method: "GET", url: "/api/system" })
+    ).json().workspacePath as string;
+    // 需求物理目录按「需求编号 + 名称」命名，通过目录映射接口取真实路径
+    rootPath = await requirementRootPath(app, workspacePath, requirementId);
   });
   afterEach(async () => {
     await app.close();
     rmSync(directory, { recursive: true, force: true });
   });
+  // 物理目录名是「需求编号 + 需求名称」，经目录映射接口解析（迁移 0010）
   function requirementRoot() {
-    return join(workspacePath, "requirements", String(requirementId));
+    return rootPath;
   }
   async function createFolder(name: string, parentId: number | null = null) {
     return app.inject({
@@ -59,7 +65,11 @@ describe("artifact service", () => {
     return app.inject({
       method: "POST",
       url: `/api/requirements/${requirementId}/artifacts/files`,
-      payload: { parentId, name, ...(initialContent ? { initialContent } : {}) },
+      payload: {
+        parentId,
+        name,
+        ...(initialContent ? { initialContent } : {}),
+      },
     });
   }
   async function list(parentId: number | null = null) {
@@ -94,9 +104,9 @@ describe("artifact service", () => {
     }
     // 首目录列表也应包含记忆文件
     const root = await list();
-    expect(root.files.some((file: { name: string }) => file.name === "需求记忆.md")).toBe(
-      true,
-    );
+    expect(
+      root.files.some((file: { name: string }) => file.name === "需求记忆.md"),
+    ).toBe(true);
   });
 
   it("创建文件夹与文件真实落盘并进入索引", async () => {
@@ -105,7 +115,9 @@ describe("artifact service", () => {
     const file = await createFile("调研笔记.md", folder.json().id, "# 调研\n");
     expect(file.statusCode).toBe(201);
     expect(existsSync(join(requirementRoot(), "研究资料"))).toBe(true);
-    expect(existsSync(join(requirementRoot(), "研究资料", "调研笔记.md"))).toBe(true);
+    expect(existsSync(join(requirementRoot(), "研究资料", "调研笔记.md"))).toBe(
+      true,
+    );
     const dir = await list(folder.json().id);
     expect(dir.folders).toHaveLength(0);
     expect(dir.files).toHaveLength(1);
@@ -131,7 +143,14 @@ describe("artifact service", () => {
   });
 
   it("越界与非法名称被拒绝（含路径分隔符与父目录引用）", async () => {
-    for (const name of ["../escape", "a/b", ".", "..", "名称<span>", "trailing."]) {
+    for (const name of [
+      "../escape",
+      "a/b",
+      ".",
+      "..",
+      "名称<span>",
+      "trailing.",
+    ]) {
       const response = await createFolder(name);
       expect(response.statusCode).toBe(400);
     }
@@ -159,13 +178,18 @@ describe("artifact service", () => {
       payload: { targetParentId: null },
     });
     expect(moved.statusCode).toBe(200);
-    expect(moved.json()).toMatchObject({ parentId: null, relativePath: "子目录" });
+    expect(moved.json()).toMatchObject({
+      parentId: null,
+      relativePath: "子目录",
+    });
     const details = await app.inject({
       method: "GET",
       url: `/api/artifacts/nodes/${grandChild.id}`,
     });
     expect(details.json().node.relativePath).toBe("子目录/孙文件.md");
-    expect(existsSync(join(requirementRoot(), "子目录", "孙文件.md"))).toBe(true);
+    expect(existsSync(join(requirementRoot(), "子目录", "孙文件.md"))).toBe(
+      true,
+    );
   });
 
   it("需求记忆受保护：不可删除、不可重命名；普通文件删除后落盘消失", async () => {
@@ -204,7 +228,8 @@ describe("artifact service", () => {
     });
     const afterDelete = await list();
     expect(
-      afterDelete.files.find((node: { id: number }) => node.id === file.id).status,
+      afterDelete.files.find((node: { id: number }) => node.id === file.id)
+        .status,
     ).toBe("missing");
     // 磁盘恢复且内容变化：刷新后元数据更新并标记 external_changed
     const restoredPath = join(requirementRoot(), "外部.md");
@@ -263,7 +288,11 @@ describe("artifact service", () => {
     const link = await app.inject({
       method: "POST",
       url: `/api/requirements/${requirementId}/artifacts/links`,
-      payload: { folderNodeId: folder.id, name: "内部链接", url: "https://example.com/a" },
+      payload: {
+        folderNodeId: folder.id,
+        name: "内部链接",
+        url: "https://example.com/a",
+      },
     });
     expect(link.statusCode).toBe(201);
     const shallow = await app.inject({
@@ -314,7 +343,10 @@ describe("artifact service", () => {
       payload: { name: "产品文档 v2", description: null },
     });
     expect(updated.statusCode).toBe(200);
-    expect(updated.json()).toMatchObject({ name: "产品文档 v2", description: null });
+    expect(updated.json()).toMatchObject({
+      name: "产品文档 v2",
+      description: null,
+    });
     const removed = await app.inject({
       method: "DELETE",
       url: `/api/artifacts/links/${created.json().id}`,

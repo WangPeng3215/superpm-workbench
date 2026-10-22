@@ -11,7 +11,7 @@ import {
 import { isAbsolute, join, relative } from "node:path";
 import { projectRoot } from "../config/index.js";
 
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 11;
 const defaultMigrationsDir = join(projectRoot, "apps/server/drizzle");
 
 export function migrate(
@@ -53,16 +53,29 @@ export function migrate(
 }
 
 // 迁移 0009 配套引导：把存量问题正文写入工作区 md 文件（description_html 优先，缺失回退纯文本）。
-// 逐级解析路径并拒绝符号链接与越界（与 artifacts 服务同一套防护）；单行失败跳过，不阻断迁移。
+// 需求根目录优先按 requirement_directories 映射（迁移 0010 的可读目录名）定位；
+// 尚无映射时退回存量数字目录，之后被目录解析器收养改名时文件随目录一起迁移。
+// 逐级解析路径并拒绝符号链接与越界；单行失败跳过，不阻断迁移。
 function bootstrapIssueMarkdown(db: Database.Database, workspacePath: string) {
   const hasIssuesTable = db
-    .prepare(
-      "SELECT 1 FROM sqlite_master WHERE type='table' AND name='issues'",
-    )
+    .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='issues'")
     .get();
   if (!hasIssuesTable) return;
   if (!existsSync(workspacePath)) mkdirSync(workspacePath, { recursive: true });
   const root = realpathSync(workspacePath);
+  const hasDirectories = db
+    .prepare(
+      "SELECT 1 FROM sqlite_master WHERE type='table' AND name='requirement_directories'",
+    )
+    .get();
+  const mapped = new Map<number, string>();
+  if (hasDirectories)
+    for (const row of db
+      .prepare(
+        "SELECT requirement_id, relative_path FROM requirement_directories",
+      )
+      .all() as { requirement_id: number; relative_path: string }[])
+      mapped.set(row.requirement_id, row.relative_path);
   const rows = db
     .prepare(
       "SELECT id, requirement_id, description, description_html FROM issues WHERE is_deleted=0",
@@ -76,7 +89,10 @@ function bootstrapIssueMarkdown(db: Database.Database, workspacePath: string) {
   for (const row of rows) {
     let current = root;
     let invalid = false;
-    for (const segment of ["requirements", String(row.requirement_id), "issues"]) {
+    const base = (
+      mapped.get(row.requirement_id) ?? `requirements/${row.requirement_id}`
+    ).split("/");
+    for (const segment of [...base, "issues"]) {
       current = join(current, segment);
       try {
         if (!existsSync(current)) mkdirSync(current);

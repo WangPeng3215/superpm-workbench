@@ -37,11 +37,14 @@ npm start
 - 详情抽屉与四阶段工作区骨架。浏览阶段不修改业务数据，“设为当前阶段”才保存并记录历史。
 - 状态与阶段独立；关键变更和阶段历史通过数据库事务保存。
 - 未保存关闭和页面离开保护，API 失败提示，真实存储路径查看。
+- 需求文档知识库：多层级文件夹、Markdown 文件、外部链接，磁盘为唯一事实来源，支持外部修改刷新。
+- 需求问题跟踪：问题、活动记录与文件关联。
+- 需求物理目录自动初始化：可读目录名（`REQ-xxxx 名称`）、默认目录与系统级资源、失败可重试。
 - 前后端共享契约、真实 SQLite 集成测试、浏览器验收和 CI 配置模板。
 
-未实现：问题/决策/跟进、文件与版本、测试闭环、任务历史、通知、自定义字段、表格视图持久化、FTS5、备份恢复、MCP。页面中的工作区与模块状态会明确标识建设范围。软删除数据目前保留在数据库中，回收站界面随后建设。
+未实现：测试闭环、任务历史、通知、自定义字段、表格视图持久化、FTS5、备份恢复、MCP。软删除数据目前保留在数据库中，回收站界面随后建设。
 
-描述暂用纯文本编辑，数据库保存 Tiptap 兼容 JSON；完整富文本、图片和 Markdown 导入导出在下一步接入。
+描述字段使用 Tiptap 兼容 JSON；需求文档以 Markdown 落盘，图片写入需求根目录 `images/` 并以相对路径引用。
 
 ## 工程结构
 
@@ -80,9 +83,15 @@ SUPERPM_WORKSPACE_DIR=./workspace
 
 路径相对于项目根目录；变更后重启服务。开发端口代理固定为 3001，若修改 API 端口需同步 `apps/web/vite.config.ts`。
 
-需求分析正文来自工作区文件，不是数据库正文记录。`requirement_files` 表只保存所属需求、分类、文件名、确认状态等元数据；默认分析记录位于 `workspace/requirements/<需求 ID>/analysis/分析记录/analysis-record.md`，上传文件按分类保存并使用独立的实际文件名。
+需求分析正文来自工作区文件，不是数据库正文记录。`requirement_files` 表只保存所属需求、分类、文件名、确认状态等元数据；默认分析记录位于需求根目录的 `analysis/分析记录/analysis-record.md`，上传文件按分类保存并使用独立的实际文件名。
 
-在「需求进展 → 需求分析」右侧点击 Markdown 文件名，即可在左侧回显并编辑该文件。修改自动保存回当前文件；切换前等待保存完成，保存失败保留草稿并支持重试。图片、PDF 等文件仍使用「预览」。现有编辑器为富文本编辑器：Markdown 在读取时转为 HTML，编辑后的正文沿用现有 HTML 保存格式；仅打开文件不会改写原文。
+需求根目录使用「需求编号 + 空格 + 需求名称」的可读命名（如 `workspace/requirements/REQ-0001 名称/`），映射关系保存在 `requirement_directories` 表，关联依据始终是需求 ID。根目录下自动初始化 `需求记忆.md`、`images/`、`需求分析/`、`PRD/`、`原型图/`、`资料/`。存量数字目录（`requirements/<需求 ID>/`）在首次解析时被整体收养改名，`requirement_files` 中的相对路径随之改写。
+
+`需求记忆.md` 与 `images/` 是系统级资源：后端统一校验，任何入口都不能删除、重命名或移动；被文档引用的图片同样阻止删除。普通默认目录可自由改名、移动、删除。普通刷新不会重建用户主动删除的目录，只有显式「修复默认结构」才补建。
+
+在「需求进展 → 需求分析」右侧点击 Markdown 文件名，即可在左侧回显并编辑该文件。修改自动保存回当前文件；切换前等待保存完成，保存失败保留草稿并支持重试。图片、PDF 等文件仍使用「预览」。编辑器保持所见即所得：磁盘上保存的是原生 Markdown，读取时转成编辑器 HTML，保存时再序列化回 Markdown；标题、列表、任务列表、表格、代码块、引用、删除线与图片相对路径都能原样还原，仅打开文件不会改写原文。早期以 HTML 保存的正文在首次编辑后即改写为 Markdown。
+
+Markdown 中插入的图片真实写入当前需求根目录的 `images/`，正文保存相对当前文档所在目录的路径（根目录文档为 `images/x.png`，子目录文档为 `../images/x.png`）。同名图片自动追加安全后缀，不会覆盖已有图片。
 
 数据库启用外键、WAL，启动自动执行 `apps/server/drizzle/*.sql` 中未应用迁移。也可运行 `npm run db:migrate`。新迁移应新增版本文件，避免修改已经应用的迁移。
 
@@ -102,16 +111,28 @@ CI 模板保存在 `docs/ci/ci.yml`，包含安装、类型检查、测试、构
 
 ## API
 
-| 接口 | 用途 |
-| --- | --- |
-| GET `/api/health` | 服务状态 |
-| GET `/api/system` | 运行路径与模块状态 |
-| GET `/api/requirements` | 搜索/筛选/排序/分页，返回主需求及子需求 |
-| POST `/api/requirements` | 创建需求 |
-| GET `/api/requirements/:id` | 查看需求 |
-| PATCH `/api/requirements/:id` | 部分更新需求，允许跳过/退回阶段 |
-| DELETE `/api/requirements/:id` | 软删除需求 |
-| GET `/api/requirements/:id/history` | 阶段变更历史 |
+| 接口                                              | 用途                                     |
+| ------------------------------------------------- | ---------------------------------------- |
+| GET `/api/health`                                 | 服务状态                                 |
+| GET `/api/system`                                 | 运行路径与模块状态                       |
+| GET `/api/requirements`                           | 搜索/筛选/排序/分页，返回主需求及子需求  |
+| POST `/api/requirements`                          | 创建需求                                 |
+| GET `/api/requirements/:id`                       | 查看需求                                 |
+| PATCH `/api/requirements/:id`                     | 部分更新需求，允许跳过/退回阶段          |
+| DELETE `/api/requirements/:id`                    | 软删除需求                               |
+| GET `/api/requirements/:id/history`               | 阶段变更历史                             |
+| GET `/api/requirements/:id/artifacts`             | 需求文档目录列表（按父目录或全需求搜索） |
+| POST `/api/requirements/:id/artifacts/folders`    | 新建文件夹                               |
+| POST `/api/requirements/:id/artifacts/files`      | 新建文件                                 |
+| POST `/api/requirements/:id/artifacts/links`      | 新建外部链接                             |
+| POST `/api/requirements/:id/artifacts/refresh`    | 扫描磁盘并同步索引                       |
+| PUT `/api/artifacts/nodes/:nodeId/content`        | 保存文档内容                             |
+| POST `/api/requirements/:id/artifacts/images`     | 上传图片到需求 `images/`，返回相对路径   |
+| GET `/api/requirements/:id/artifacts/image`       | 按文档相对路径读取图片                   |
+| GET `/api/requirements/:id/memory`                | 读取需求记忆（懒初始化）                 |
+| GET `/api/requirements/:id/directory`             | 需求物理目录与初始化状态                 |
+| POST `/api/requirements/:id/directory/initialize` | 幂等初始化默认目录与系统级资源           |
+| POST `/api/requirements/:id/directory/repair`     | 显式补建缺失的默认结构                   |
 
 输入字段与枚举见 `packages/shared/src/index.ts`。分页总数按主需求计算；子需求匹配筛选时携带父需求作为上下文。统一错误响应 `{ error: { code, message, details? } }`。
 

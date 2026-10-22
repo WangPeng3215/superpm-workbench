@@ -11,7 +11,6 @@ import type { TabPaneName } from "element-plus";
 import {
   dateFields,
   dateLabels,
-  issuePhases,
   priorities,
   requirementStatuses,
   requirementTypes,
@@ -20,11 +19,9 @@ import {
   statusLabels,
   typeLabels,
   type ArtifactNode,
-  type IssuePhase,
   type Requirement,
   type RequirementRelations,
   type RequirementUpdate,
-  type Stage,
 } from "@superpm/shared";
 import { requirementApi } from "../api/requirements";
 import { errorMessage } from "../api/client";
@@ -60,25 +57,13 @@ const initial = ref("");
 const loading = ref(false),
   saving = ref(false),
   error = ref("");
-// 顶层页签：固定「需求详情」「文档管理」「需求问题」+ 动态文档页签（doc-<nodeId>）
+// 顶层页签：固定「需求详情」「文档管理」「问题记录」+ 动态文档页签（doc-<nodeId>）
 const activeTab = ref("detail");
 // 动态文档页签：点击「文档管理」中的 md 文件（含需求记忆）时打开，可关闭
 const docTabs = ref<{ node: ArtifactNode }[]>([]);
 const docEditors = new Map<number, InstanceType<typeof DocTabEditor>>();
-// 当前阶段是否为问题阶段（UI 设计/开发跟进/需求测试）
-const activeIssuePhase = computed<IssuePhase | null>(() => {
-  const stage = item.value?.currentStage;
-  return stage && (issuePhases as readonly string[]).includes(stage)
-    ? (stage as IssuePhase)
-    : null;
-});
-// 非问题阶段的「需求问题」页签提示
-const issueHint = computed(
-  () =>
-    `当前阶段为「${stageLabels[item.value?.currentStage ?? "analysis"]}」。切换到 ${(issuePhases as readonly string[])
-      .map((phase) => stageLabels[phase as Stage])
-      .join("、")} 阶段后可管理对应阶段的问题。`,
-);
+// 问题记录面板：保存流程在切换问题/页签时统一冲刷
+const issuesPanel = ref<InstanceType<typeof RequirementIssuesPanel>>();
 function setDocEditor(nodeId: number, el: unknown) {
   const comp = el as InstanceType<typeof DocTabEditor> | null;
   if (comp) docEditors.set(nodeId, comp);
@@ -134,6 +119,7 @@ function onDocDeleted(nodeId: number) {
     void closeDocTab(nodeId);
 }
 async function flushAnalysis() {
+  if (issuesPanel.value && !(await issuesPanel.value.flush())) return false;
   return flushDocs();
 }
 onBeforeRouteLeave(flushAnalysis);
@@ -505,16 +491,14 @@ function go(target: Requirement) {
               @doc-deleted="onDocDeleted"
             />
           </el-tab-pane>
-          <el-tab-pane label="需求问题" name="issues">
-            <!-- 问题阶段展示该阶段问题面板；其余阶段提示先切换阶段 -->
+          <el-tab-pane label="问题记录" name="issues">
+            <!-- 四个需求阶段都可记录问题；产生阶段作为独立字段 -->
             <RequirementIssuesPanel
-              v-if="activeIssuePhase"
+              ref="issuesPanel"
               :key="item.id"
               :requirement-id="item.id"
-              :phase="activeIssuePhase"
-              :requirement-name="item.name"
+              :current-stage="item.currentStage"
             />
-            <el-empty v-else class="issues-empty" :description="issueHint" />
           </el-tab-pane>
           <el-tab-pane
             v-for="tab in docTabs"
@@ -539,12 +523,6 @@ function go(target: Requirement) {
   min-width: 0;
   min-height: 0;
   height: 100%;
-}
-.issues-empty {
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
 }
 .detail-page {
   /* 视口限高：顶栏与页头卡片固定不滚动，内容区（页签）自行消化溢出。
