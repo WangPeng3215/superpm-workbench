@@ -18,18 +18,25 @@ import {
   type ArtifactDirectory,
   type ArtifactImageUploadResult,
   type ArtifactLink,
+  type ArtifactMemoryReadResult,
+  type ArtifactMemoryStatus,
   type ArtifactNode,
   type ArtifactNodeDetails,
   type ArtifactNodeType,
+  type ArtifactReadResult,
   type ArtifactRefreshResult,
+  type ArtifactStats,
   type ArtifactStatus,
 } from "@superpm/shared";
 import {
+  closeSync,
   existsSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readdirSync,
   readFileSync,
+  readSync,
   renameSync,
   rmSync,
   statSync,
@@ -211,18 +218,24 @@ export class ArtifactService {
 
   // ===== 查询 =====
 
-  /** 列出目录内容（含进入目录时的轻量磁盘检查）；q 非空时按名称做全需求范围搜索 */
+  /**
+   * 列出目录内容（含进入目录时的轻量磁盘检查）；q 非空时按名称做全需求范围搜索。
+   * sync=false 时完全跳过磁盘检查与索引写入（MCP 只读工具使用）；
+   * limit 为每类（目录/文件/链接）上限，返回 total 与 truncated 供调用方判断。
+   */
   listNodes(
     requirementId: number,
     parentId: number | null,
     q = "",
+    options: { sync?: boolean; limit?: number } = {},
   ): ArtifactDirectory {
     const keyword = q.trim();
-    if (keyword) return this.searchNodes(requirementId, keyword);
+    if (keyword) return this.searchNodes(requirementId, keyword, options.limit);
     const parent = this.requireParent(requirementId, parentId);
     const parentPath = parent ? parent.relativePath : "";
     // 轻量检查：对比当前目录的磁盘与索引（缺失标记、外部修改提示、新条目拾取）
-    this.lightCheck(requirementId, parent, parentPath);
+    if (options.sync !== false)
+      this.lightCheck(requirementId, parent, parentPath);
     const rows = this.rowsOf(requirementId, parentId);
     const childCounts = new Map<number, number>();
     for (const row of this.db
@@ -245,30 +258,149 @@ export class ArtifactService {
     const links = this.linksOf(requirementId, parentId)
       .sort((a, b) => a.name.localeCompare(b.name, "zh-Hans-CN"))
       .map(toLink);
-    return {
-      requirementId,
-      parentId,
-      parentPath,
-      breadcrumb: this.breadcrumbFrom(requirementId, parentId),
-      folders,
-      files,
-      links,
-      search: "",
-    };
+    return this.finalizeDirectory(
+      {
+        requirementId,
+        parentId,
+        parentPath,
+        breadcrumb: this.breadcrumbFrom(requirementId, parentId),
+        folders,
+        files,
+        links,
+        search: "",
+      },
+      options.limit,
+    );
   }
 
   /** 节点详情：路径链 + 子树规模（供删除影响范围提示与详情展示） */
   getNodeDetails(nodeId: number): ArtifactNodeDetails {
+    return this.detailsOf(this.nodeRow(nodeId));
+  }
+
+  /** 需求作用域的节点详情：跨需求节点一律按不存在处理（MCP 使用） */
+  getNodeDetailsForRequirement(
+    requirementId: number,
+    nodeId: number,
+  ): ArtifactNodeDetails {
+    this.requirements.get(requirementId);
     const row = this.nodeRow(nodeId);
-    const node = toNode(row);
-    const descendantCount =
-      node.nodeType === "folder"
-        ? this.descendantsOf(node.requirementId, node.relativePath).length
-        : 0;
+    if (row.requirement_id !== requirementId)
+      throw new DomainError("NOT_FOUND", "文件或目录不存在", 404);
+    return this.detailsOf(row);
+  }
+
+  /**
+   * 只读节点读取（MCP 使用）：
+   * - 文件夹：返回面包屑与后代数量，content=null；
+   * - 文本文件：返回截断后的正文，不写回索引元数据；
+   * - 二进制文件：只返回元数据，content=null（不返回 base64）。
+   */
+  readArtifact(
+    requirementId: number,
+    nodeId: number,
+    maxChars = 50000,
+  ): ArtifactReadResult {
+    const details = this.getNodeDetailsForRequirement(requirementId, nodeId);
+    const node = details.node;
+    const cap = Math.max(1, Math.min(Math.trunc(maxChars), 100000));
+    if (node.nodeType === "folder")
+      return {
+        ...details,
+        kind: "folder",
+        content: null,
+        truncated: false,
+        maxChars: cap,
+      };
+    if (!isTextReadable(node.extension))
+      return {
+        ...details,
+        kind: "binary",
+        content: null,
+        truncated: false,
+        maxChars: cap,
+      };
+    const path = this.resolvePathReadOnly(requirementId, node.relativePath);
+    // 只读读取不标记 missing：文件缺失时明确报错，由用户刷新目录处理
+    if (!existsSync(path) || lstatSync(path).isSymbolicLink())
+      throw new DomainError("NOT_FOUND", "文件不存在或已被移动", 404);
+    const text = this.readTextLimited(path, cap);
     return {
+      ...details,
+      kind: "text",
+      content: text.content,
+      truncated: text.truncated,
+      maxChars: cap,
+    };
+  }
+
+  /** 只读需求记忆：不初始化工作区、不创建目录/模板、不刷新索引 */
+  readMemory(
+    requirementId: number,
+    maxChars = 50000,
+  ): ArtifactMemoryReadResult {
+    const requirement = this.requirements.get(requirementId);
+    const cap = Math.max(1, Math.min(Math.trunc(maxChars), 100000));
+    const empty = (
+      status: ArtifactMemoryStatus,
+      node: ArtifactNode | null,
+    ): ArtifactMemoryReadResult => ({
+      requirementId,
+      exists: false,
+      status,
       node,
-      breadcrumb: this.breadcrumbFrom(node.requirementId, node.parentId),
-      descendantCount,
+      content: "",
+      truncated: false,
+      maxChars: cap,
+    });
+    const rootAbs = this.directories.tryResolveReadOnly(requirementId, "");
+    if (!rootAbs) return empty("not_initialized", null);
+    const fileAbs = join(rootAbs, artifactMemoryName);
+    const node = this.memoryNode(requirementId);
+    if (!existsSync(fileAbs)) return empty("missing", node);
+    if (lstatSync(fileAbs).isSymbolicLink())
+      throw new DomainError("INVALID_PATH", "需求记忆文件不能是符号链接");
+    const text = this.readTextLimited(fileAbs, cap);
+    return {
+      requirementId: requirement.id,
+      exists: true,
+      status: "available",
+      node,
+      content: text.content,
+      truncated: text.truncated,
+      maxChars: cap,
+    };
+  }
+
+  /** 产出物统计（只读 SQL + 磁盘存在性；不读取正文） */
+  stats(requirementId: number): ArtifactStats {
+    this.requirements.get(requirementId);
+    const typeRows = this.db
+      .prepare(
+        "SELECT node_type, COUNT(*) AS total FROM artifact_nodes WHERE requirement_id=? GROUP BY node_type",
+      )
+      .all(requirementId) as { node_type: ArtifactNodeType; total: number }[];
+    const statusRows = this.db
+      .prepare(
+        "SELECT status, COUNT(*) AS total FROM artifact_nodes WHERE requirement_id=? AND status != 'normal' GROUP BY status",
+      )
+      .all(requirementId) as { status: ArtifactStatus; total: number }[];
+    const links = this.db
+      .prepare(
+        "SELECT COUNT(*) AS total FROM artifact_links WHERE requirement_id=?",
+      )
+      .get(requirementId) as { total: number };
+    const countOf = (type: ArtifactNodeType) =>
+      typeRows.find((row) => row.node_type === type)?.total ?? 0;
+    const statusOf = (status: ArtifactStatus) =>
+      statusRows.find((row) => row.status === status)?.total ?? 0;
+    return {
+      folders: countOf("folder"),
+      files: countOf("file"),
+      links: links.total,
+      missing: statusOf("missing"),
+      externalChanged: statusOf("external_changed"),
+      memoryStatus: this.memoryStatus(requirementId),
     };
   }
 
@@ -1442,6 +1574,7 @@ export class ArtifactService {
   private searchNodes(
     requirementId: number,
     keyword: string,
+    limit?: number,
   ): ArtifactDirectory {
     this.requirements.get(requirementId);
     // LIKE 通配符转义：按名称做全需求范围搜索（文档 2.5 第一版仅承诺名称搜索）
@@ -1461,18 +1594,120 @@ export class ArtifactService {
         )
         .all(requirementId, pattern) as ArtifactLinkRow[]
     ).map(toLink);
-    return {
-      requirementId,
-      parentId: null,
-      parentPath: "",
-      breadcrumb: [
-        { id: null, name: this.requirements.get(requirementId).name },
-      ],
-      folders: rows.filter((node) => node.nodeType === "folder"),
-      files: rows.filter((node) => node.nodeType === "file"),
-      links,
-      search: keyword,
+    return this.finalizeDirectory(
+      {
+        requirementId,
+        parentId: null,
+        parentPath: "",
+        breadcrumb: [
+          { id: null, name: this.requirements.get(requirementId).name },
+        ],
+        folders: rows.filter((node) => node.nodeType === "folder"),
+        files: rows.filter((node) => node.nodeType === "file"),
+        links,
+        search: keyword,
+      },
+      limit,
+    );
+  }
+
+  // 目录结果收尾：limit 作用于每一类，total 保留截断前数量
+  private finalizeDirectory(
+    base: ArtifactDirectory,
+    limit?: number,
+  ): ArtifactDirectory {
+    const total = {
+      folders: base.folders.length,
+      files: base.files.length,
+      links: base.links.length,
     };
+    if (limit === undefined) return base;
+    const cap = Math.max(0, Math.trunc(limit));
+    return {
+      ...base,
+      folders: base.folders.slice(0, cap),
+      files: base.files.slice(0, cap),
+      links: base.links.slice(0, cap),
+      total,
+      truncated: total.folders > cap || total.files > cap || total.links > cap,
+    };
+  }
+
+  private detailsOf(row: ArtifactNodeRow): ArtifactNodeDetails {
+    const node = toNode(row);
+    const descendantCount =
+      node.nodeType === "folder"
+        ? this.descendantsOf(node.requirementId, node.relativePath).length
+        : 0;
+    return {
+      node,
+      breadcrumb: this.breadcrumbFrom(node.requirementId, node.parentId),
+      descendantCount,
+    };
+  }
+
+  private memoryNode(requirementId: number): ArtifactNode | null {
+    const row = this.db
+      .prepare(
+        "SELECT * FROM artifact_nodes WHERE requirement_id=? AND relative_path=?",
+      )
+      .get(requirementId, artifactMemoryName) as ArtifactNodeRow | undefined;
+    return row ? toNode(row) : null;
+  }
+
+  // 需求记忆磁盘状态：只做存在性判断，不创建、不读取正文
+  private memoryStatus(requirementId: number): ArtifactMemoryStatus {
+    const rootAbs = this.directories.tryResolveReadOnly(requirementId, "");
+    if (!rootAbs) return "not_initialized";
+    const fileAbs = join(rootAbs, artifactMemoryName);
+    if (!existsSync(fileAbs)) return "missing";
+    if (lstatSync(fileAbs).isSymbolicLink())
+      throw new DomainError("INVALID_PATH", "需求记忆文件不能是符号链接");
+    return "available";
+  }
+
+  // 只读路径解析：不补目录映射；目录未初始化时由调用方按缺失处理
+  private resolvePathReadOnly(
+    requirementId: number,
+    relativePath: string,
+  ): string {
+    return this.directories.resolveReadOnly(requirementId, relativePath);
+  }
+
+  /**
+   * 限长读取 UTF-8 文本：最多读取 maxChars 个字符所需的字节数，避免把超大文件
+   * 整体载入内存。truncated 表示文件还有未返回的内容。
+   */
+  private readTextLimited(
+    path: string,
+    maxChars: number,
+  ): { content: string; truncated: boolean } {
+    const stat = statSync(path);
+    // 目录、设备等特殊文件不能按文本读取，统一按不存在处理，避免平台差异
+    if (!stat.isFile())
+      throw new DomainError("NOT_FOUND", "文件不存在或不可读取", 404);
+    // UTF-8 单字符最多 4 字节；多读 4 字节用于判断是否仍有剩余内容
+    const maxBytes = maxChars * 4 + 4;
+    const length = Math.min(stat.size, maxBytes);
+    const buffer = Buffer.alloc(length);
+    const fd = openSync(path, "r");
+    try {
+      let offset = 0;
+      while (offset < length) {
+        const read = readSync(fd, buffer, offset, length - offset, offset);
+        if (read === 0) break;
+        offset += read;
+      }
+      const decoded = buffer.subarray(0, offset).toString("utf8");
+      if (stat.size > offset) {
+        return { content: decoded.slice(0, maxChars), truncated: true };
+      }
+      if (decoded.length > maxChars)
+        return { content: decoded.slice(0, maxChars), truncated: true };
+      return { content: decoded, truncated: false };
+    } finally {
+      closeSync(fd);
+    }
   }
 
   // 进入目录时的轻量检查（单层，不递归）：缺失标记、外部修改提示、磁盘新条目拾取

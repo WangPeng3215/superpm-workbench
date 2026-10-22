@@ -84,6 +84,9 @@ describe("issues API with real SQLite", () => {
         resolved: 0,
         wont_fix: 0,
       },
+      limit: null,
+      offset: 0,
+      hasMore: false,
     });
     // 四阶段、状态与类型过滤同样为空数组
     for (const stage of ["analysis", "design", "development", "testing"]) {
@@ -232,22 +235,22 @@ describe("issues API with real SQLite", () => {
     const statusChanges = detail.activities.filter(
       (item) => item.activityType === "status_change",
     );
-    expect(statusChanges.map((item) => [item.oldStatus, item.newStatus])).toEqual(
-      [
-        ["pending", "resolved"],
-        ["resolved", "wont_fix"],
-        ["wont_fix", "processing"],
-      ],
-    );
+    expect(
+      statusChanges.map((item) => [item.oldStatus, item.newStatus]),
+    ).toEqual([
+      ["pending", "resolved"],
+      ["resolved", "wont_fix"],
+      ["wont_fix", "processing"],
+    ]);
     // 旧枚举与任意值都被拒绝
     for (const status of ["open", "closed", "testing", "in_progress"]) {
       const legacy = await patchIssue(requirement.id, issue.id, { status });
       expect(legacy.statusCode).toBe(400);
     }
     // 空更新被拒绝
-    expect(
-      (await patchIssue(requirement.id, issue.id, {})).statusCode,
-    ).toBe(400);
+    expect((await patchIssue(requirement.id, issue.id, {})).statusCode).toBe(
+      400,
+    );
   });
   it("persists description to a md file and supports direct content endpoints", async () => {
     const requirement = await create();
@@ -375,9 +378,8 @@ describe("issues API with real SQLite", () => {
       ).statusCode,
     ).toBe(200);
     expect(
-      (
-        await patchIssue(requirement.id, testing.id, { status: "to_confirm" })
-      ).statusCode,
+      (await patchIssue(requirement.id, testing.id, { status: "to_confirm" }))
+        .statusCode,
     ).toBe(200);
     const all = (
       await app.inject(`/api/requirements/${requirement.id}/issues`)
@@ -406,9 +408,7 @@ describe("issues API with real SQLite", () => {
     ).json<IssueListResult>();
     expect(byStage.items.map((item) => item.id)).toEqual([development.id]);
     const byType = (
-      await app.inject(
-        `/api/requirements/${requirement.id}/issues?type=ui`,
-      )
+      await app.inject(`/api/requirements/${requirement.id}/issues?type=ui`)
     ).json<IssueListResult>();
     expect(byType.items.map((item) => item.id)).toEqual([ui.id]);
     const byDescription = (
@@ -449,11 +449,8 @@ describe("issues API with real SQLite", () => {
     ).json<IssueListResult>();
     expect(remaining.total).toBe(2);
     expect(
-      (
-        await app.inject(
-          `/api/requirements/${requirement.id}/issues/${ui.id}`,
-        )
-      ).statusCode,
+      (await app.inject(`/api/requirements/${requirement.id}/issues/${ui.id}`))
+        .statusCode,
     ).toBe(404);
     // 二次删除：软删行不可见，返回 404
     expect(

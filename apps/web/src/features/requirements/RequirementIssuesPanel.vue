@@ -123,12 +123,23 @@ const linkSaving = ref(false);
 const artifactTree = ref<ArtifactTreeItem[]>([]);
 const checkedIds = ref<number[]>([]);
 const expandedIds = ref<Set<number>>(new Set());
-const linkedIds = computed(() => new Set(assets.value.map((item) => item.assetId)));
+const linkedIds = computed(
+  () => new Set(assets.value.map((item) => item.assetId)),
+);
 const sortedAssets = computed(() =>
   [...assets.value].sort((a, b) =>
     a.asset.relativePath.localeCompare(b.asset.relativePath, "zh-Hans-CN"),
   ),
 );
+// 只展示最近一次 AI 写入来源；完整处理记录已按需求移除
+const latestAiActivity = computed(() => {
+  const activities = detail.value?.activities;
+  if (!activities) return null;
+  for (let index = activities.length - 1; index >= 0; index -= 1) {
+    if (activities[index].actorType === "ai") return activities[index];
+  }
+  return null;
+});
 
 // ===== 新建 =====
 const createOpen = ref(false);
@@ -143,8 +154,8 @@ const createTitleInput = ref<{ focus: () => void }>();
 const totalCount = computed(() =>
   issueStatuses.reduce((sum, status) => sum + statusCounts.value[status], 0),
 );
-const hasFilters = computed(
-  () => Boolean(statusFilter.value || typeFilter.value || keyword.value.trim()),
+const hasFilters = computed(() =>
+  Boolean(statusFilter.value || typeFilter.value || keyword.value.trim()),
 );
 const showFullEmpty = computed(
   () =>
@@ -270,7 +281,10 @@ function htmlHasContent(html: string) {
   if (!html.trim()) return false;
   const container = document.createElement("div");
   container.innerHTML = html;
-  return Boolean(container.textContent?.trim()) || Boolean(container.querySelector("img"));
+  return (
+    Boolean(container.textContent?.trim()) ||
+    Boolean(container.querySelector("img"))
+  );
 }
 
 // ===== 列表加载 =====
@@ -345,10 +359,7 @@ function clearFilters() {
 }
 
 // ===== 详情加载 =====
-async function openIssue(
-  id: number,
-  options: { force?: boolean } = {},
-) {
+async function openIssue(id: number, options: { force?: boolean } = {}) {
   if (!options.force && selectedId.value === id && detail.value) {
     mobileDetailOpen.value = true;
     return;
@@ -469,7 +480,10 @@ async function persist(): Promise<boolean> {
         saveError.value = "问题标题不能为空";
         return false;
       }
-      if (statusDraft.value === "resolved" && !currentSolutionMarkdown().trim()) {
+      if (
+        statusDraft.value === "resolved" &&
+        !currentSolutionMarkdown().trim()
+      ) {
         saveFailed.value = true;
         saveError.value = "请先填写解决方案 / 最终结论，再标记为已解决";
         return false;
@@ -551,10 +565,7 @@ function patchListRow(updated: Issue) {
   const previousStatus = issues.value[index].status;
   const next = [...issues.value];
   next[index] = { ...next[index], ...updated };
-  next.sort(
-    (a, b) =>
-      b.updatedAt.localeCompare(a.updatedAt) || b.id - a.id,
-  );
+  next.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.id - a.id);
   issues.value = next;
   if (previousStatus !== updated.status) {
     const counts = { ...statusCounts.value };
@@ -621,7 +632,10 @@ function onTypeChange(value: unknown) {
   void saveNow();
 }
 function onStageChange(value: unknown) {
-  if (typeof value !== "string" || !(stages as readonly string[]).includes(value))
+  if (
+    typeof value !== "string" ||
+    !(stages as readonly string[]).includes(value)
+  )
     return;
   stageDraft.value = value as IssueStage;
   void saveNow();
@@ -752,17 +766,15 @@ async function unlink(link: IssueAssetLink) {
   const current = detail.value;
   if (!current) return;
   try {
-    await issueApi.unlinkAsset(
-      props.requirementId,
-      current.id,
-      link.assetId,
-    );
+    await issueApi.unlinkAsset(props.requirementId, current.id, link.assetId);
     await loadAssets();
   } catch (error) {
     ElMessage.error(errorMessage(error));
   }
 }
-async function loadTreeLevel(parentId: number | null): Promise<ArtifactTreeItem[]> {
+async function loadTreeLevel(
+  parentId: number | null,
+): Promise<ArtifactTreeItem[]> {
   const directory = await artifactApi.list(props.requirementId, parentId);
   const folders = await Promise.all(
     directory.folders.map(async (folder) => ({
@@ -815,7 +827,10 @@ function toggleExpanded(item: ArtifactTreeItem) {
   else next.add(item.id);
   expandedIds.value = next;
 }
-function onTreeCheck(item: ArtifactTreeItem, checked: boolean | string | number) {
+function onTreeCheck(
+  item: ArtifactTreeItem,
+  checked: boolean | string | number,
+) {
   if (checked === true) {
     if (!checkedIds.value.includes(item.id))
       checkedIds.value = [...checkedIds.value, item.id];
@@ -962,7 +977,10 @@ onBeforeUnmount(() => {
               class="search-clear"
               type="button"
               aria-label="清空搜索"
-              @click="keyword = ''; runSearchNow()"
+              @click="
+                keyword = '';
+                runSearchNow();
+              "
             >
               ×
             </button>
@@ -970,14 +988,21 @@ onBeforeUnmount(() => {
           <button class="search-button" type="button" @click="runSearchNow()">
             搜索
           </button>
-          <button class="issue-primary issue-primary--small" type="button" @click="openCreate()">
+          <button
+            class="issue-primary issue-primary--small"
+            type="button"
+            @click="openCreate()"
+          >
             <el-icon :size="12"><Plus /></el-icon>
             新增
           </button>
         </div>
       </header>
 
-      <div class="rail-list" :class="{ 'is-refreshing': listLoading && issues.length }">
+      <div
+        class="rail-list"
+        :class="{ 'is-refreshing': listLoading && issues.length }"
+      >
         <div v-if="listError" class="rail-error">
           <el-icon :size="15"><WarningFilled /></el-icon>
           <p>{{ listError }}</p>
@@ -998,7 +1023,9 @@ onBeforeUnmount(() => {
             @click="openIssue(issue.id)"
           >
             <span class="type-tile" :class="typeTone(issue.type)">
-              <el-icon :size="14"><component :is="typeIcon(issue.type)" /></el-icon>
+              <el-icon :size="14"
+                ><component :is="typeIcon(issue.type)"
+              /></el-icon>
             </span>
             <span class="row-main">
               <span class="row-top">
@@ -1008,7 +1035,9 @@ onBeforeUnmount(() => {
                 }}</span>
               </span>
               <span class="row-meta">
-                <span>{{ issue.type ? issueTypeLabels[issue.type] : "未分类" }}</span>
+                <span>{{
+                  issue.type ? issueTypeLabels[issue.type] : "未分类"
+                }}</span>
                 <span class="meta-sep">·</span>
                 <span>{{ stageLabels[issue.stage] }}</span>
                 <span class="row-time">{{ formatShort(issue.updatedAt) }}</span>
@@ -1038,7 +1067,11 @@ onBeforeUnmount(() => {
     <section class="detail-pane">
       <template v-if="detail">
         <header class="detail-head">
-          <button class="back-button" type="button" @click="mobileDetailOpen = false">
+          <button
+            class="back-button"
+            type="button"
+            @click="mobileDetailOpen = false"
+          >
             <el-icon :size="13"><ArrowLeft /></el-icon>
             列表
           </button>
@@ -1111,12 +1144,26 @@ onBeforeUnmount(() => {
               </div>
             </div>
             <div class="meta-times">
+              <span
+                v-if="latestAiActivity"
+                class="ai-badge"
+                :title="`最近 AI 写入：${latestAiActivity.actorName ?? 'AI'} · ${formatFull(latestAiActivity.createdAt)}`"
+              >
+                <el-icon :size="9"><Cpu /></el-icon>
+                <span class="ai-badge-name">{{
+                  latestAiActivity.actorName ?? "AI"
+                }}</span>
+              </span>
               <span>创建 {{ formatFull(detail.createdAt) }}</span>
               <span>更新 {{ formatFull(detail.updatedAt) }}</span>
               <span v-if="detail.resolvedAt" class="resolved-time"
                 >解决 {{ formatFull(detail.resolvedAt) }}</span
               >
-              <button class="ghost-danger meta-delete" type="button" @click="removeIssue()">
+              <button
+                class="ghost-danger meta-delete"
+                type="button"
+                @click="removeIssue()"
+              >
                 <el-icon :size="11"><Delete /></el-icon>
                 删除
               </button>
@@ -1146,7 +1193,9 @@ onBeforeUnmount(() => {
             <div class="section-head">
               <h3 class="section-title">解决方案 / 最终结论</h3>
               <span class="section-note" :class="{ 'is-warn': needsSolution }">
-                <el-icon v-if="needsSolution" :size="11"><WarningFilled /></el-icon>
+                <el-icon v-if="needsSolution" :size="11"
+                  ><WarningFilled
+                /></el-icon>
                 {{
                   needsSolution
                     ? "标记为已解决前必须填写"
@@ -1170,9 +1219,15 @@ onBeforeUnmount(() => {
             <div class="section-head">
               <h3 class="section-title">
                 关联产出物
-                <span v-if="assets.length" class="section-count">{{ assets.length }}</span>
+                <span v-if="assets.length" class="section-count">{{
+                  assets.length
+                }}</span>
               </h3>
-              <button class="text-button section-action" type="button" @click="openLinkDialog()">
+              <button
+                class="text-button section-action"
+                type="button"
+                @click="openLinkDialog()"
+              >
                 <el-icon :size="12"><Link /></el-icon>
                 关联
               </button>
@@ -1210,7 +1265,12 @@ onBeforeUnmount(() => {
           </section>
         </div>
 
-        <footer class="save-bar" :class="`is-${saveUi}`" role="status" aria-live="polite">
+        <footer
+          class="save-bar"
+          :class="`is-${saveUi}`"
+          role="status"
+          aria-live="polite"
+        >
           <span class="save-dot" aria-hidden="true"></span>
           <span class="save-text">{{ saveLabel }}</span>
           <button
@@ -1225,7 +1285,11 @@ onBeforeUnmount(() => {
         </footer>
       </template>
 
-      <div v-else-if="detailLoading" class="detail-skeleton" aria-label="正在加载问题详情">
+      <div
+        v-else-if="detailLoading"
+        class="detail-skeleton"
+        aria-label="正在加载问题详情"
+      >
         <span class="skeleton-line" style="width: 52%; height: 24px"></span>
         <span class="skeleton-line" style="width: 38%; height: 12px"></span>
         <span class="skeleton-block"></span>
@@ -1253,125 +1317,125 @@ onBeforeUnmount(() => {
   </div>
 
   <!-- 弹窗挂在根级：空台账时双栏未渲染，弹窗仍需可用 -->
-    <!-- ===== 关联产出物弹窗 ===== -->
-    <el-dialog
-      v-model="linkDialogVisible"
-      title="关联产出物"
-      width="min(460px, 92vw)"
-      append-to-body
-    >
-      <div class="link-dialog-body" v-loading="treeLoading">
-        <div
-          v-for="row in treeRows"
-          :key="row.item.id"
-          class="tree-row"
-          :style="{ paddingLeft: `${6 + row.depth * 16}px` }"
-          @click="row.item.nodeType === 'folder' && toggleExpanded(row.item)"
+  <!-- ===== 关联产出物弹窗 ===== -->
+  <el-dialog
+    v-model="linkDialogVisible"
+    title="关联产出物"
+    width="min(460px, 92vw)"
+    append-to-body
+  >
+    <div class="link-dialog-body" v-loading="treeLoading">
+      <div
+        v-for="row in treeRows"
+        :key="row.item.id"
+        class="tree-row"
+        :style="{ paddingLeft: `${6 + row.depth * 16}px` }"
+        @click="row.item.nodeType === 'folder' && toggleExpanded(row.item)"
+      >
+        <span
+          v-if="row.item.nodeType === 'folder'"
+          class="tree-caret"
+          :class="{ expanded: expandedIds.has(row.item.id) }"
         >
-          <span
-            v-if="row.item.nodeType === 'folder'"
-            class="tree-caret"
-            :class="{ expanded: expandedIds.has(row.item.id) }"
-          >
-            <el-icon :size="11"><ArrowRight /></el-icon>
-          </span>
-          <span v-else class="tree-caret tree-caret--leaf"></span>
-          <el-icon
-            class="tree-icon"
-            :class="{ 'tree-icon--folder': row.item.nodeType === 'folder' }"
-            :size="13"
-          >
-            <Folder v-if="row.item.nodeType === 'folder'" />
-            <Document v-else />
-          </el-icon>
-          <span class="tree-name">{{ row.item.name }}</span>
-          <el-checkbox
-            class="tree-check"
-            :model-value="checkedIds.includes(row.item.id)"
-            :disabled="row.item.disabled"
-            @click.stop
-            @change="onTreeCheck(row.item, $event)"
-          />
-        </div>
-        <p v-if="!artifactTree.length && !treeLoading" class="section-empty">
-          暂无可关联的产出物。
-        </p>
+          <el-icon :size="11"><ArrowRight /></el-icon>
+        </span>
+        <span v-else class="tree-caret tree-caret--leaf"></span>
+        <el-icon
+          class="tree-icon"
+          :class="{ 'tree-icon--folder': row.item.nodeType === 'folder' }"
+          :size="13"
+        >
+          <Folder v-if="row.item.nodeType === 'folder'" />
+          <Document v-else />
+        </el-icon>
+        <span class="tree-name">{{ row.item.name }}</span>
+        <el-checkbox
+          class="tree-check"
+          :model-value="checkedIds.includes(row.item.id)"
+          :disabled="row.item.disabled"
+          @click.stop
+          @change="onTreeCheck(row.item, $event)"
+        />
       </div>
-      <template #footer>
-        <el-button @click="linkDialogVisible = false">取消</el-button>
-        <el-button
-          type="primary"
-          :loading="linkSaving"
-          :disabled="!checkedIds.length"
-          @click="confirmLink()"
-        >
-          确定关联
-        </el-button>
-      </template>
-    </el-dialog>
+      <p v-if="!artifactTree.length && !treeLoading" class="section-empty">
+        暂无可关联的产出物。
+      </p>
+    </div>
+    <template #footer>
+      <el-button @click="linkDialogVisible = false">取消</el-button>
+      <el-button
+        type="primary"
+        :loading="linkSaving"
+        :disabled="!checkedIds.length"
+        @click="confirmLink()"
+      >
+        确定关联
+      </el-button>
+    </template>
+  </el-dialog>
 
-    <!-- ===== 新建问题弹窗 ===== -->
-    <el-dialog
-      v-model="createOpen"
-      title="新增问题"
-      width="min(520px, 92vw)"
-      :close-on-click-modal="false"
-      append-to-body
-    >
-      <div class="create-form">
+  <!-- ===== 新建问题弹窗 ===== -->
+  <el-dialog
+    v-model="createOpen"
+    title="新增问题"
+    width="min(520px, 92vw)"
+    :close-on-click-modal="false"
+    append-to-body
+  >
+    <div class="create-form">
+      <label class="create-field">
+        <span class="create-label">问题标题 <i>*</i></span>
+        <el-input
+          ref="createTitleInput"
+          v-model="createTitle"
+          maxlength="200"
+          placeholder="一句话说清问题"
+          @keydown.enter.prevent="submitCreate()"
+        />
+      </label>
+      <div class="create-row">
         <label class="create-field">
-          <span class="create-label">问题标题 <i>*</i></span>
-          <el-input
-            ref="createTitleInput"
-            v-model="createTitle"
-            maxlength="200"
-            placeholder="一句话说清问题"
-            @keydown.enter.prevent="submitCreate()"
-          />
+          <span class="create-label">问题类型</span>
+          <el-select v-model="createType" placeholder="未分类" clearable>
+            <el-option
+              v-for="option in typeOptions"
+              :key="option.value"
+              :label="option.label"
+              :value="option.value"
+            />
+          </el-select>
         </label>
-        <div class="create-row">
-          <label class="create-field">
-            <span class="create-label">问题类型</span>
-            <el-select v-model="createType" placeholder="未分类" clearable>
-              <el-option
-                v-for="option in typeOptions"
-                :key="option.value"
-                :label="option.label"
-                :value="option.value"
-              />
-            </el-select>
-          </label>
-          <label class="create-field">
-            <span class="create-label">产生阶段</span>
-            <el-select v-model="createStage">
-              <el-option
-                v-for="option in stageOptions"
-                :key="option.value"
-                :label="option.label"
-                :value="option.value"
-              />
-            </el-select>
-          </label>
-        </div>
         <label class="create-field">
-          <span class="create-label">问题描述</span>
-          <el-input
-            v-model="createDesc"
-            type="textarea"
-            :rows="4"
-            maxlength="5000"
-            resize="none"
-            placeholder="可选。创建后可在详情中补充图片与 Markdown。"
-          />
+          <span class="create-label">产生阶段</span>
+          <el-select v-model="createStage">
+            <el-option
+              v-for="option in stageOptions"
+              :key="option.value"
+              :label="option.label"
+              :value="option.value"
+            />
+          </el-select>
         </label>
       </div>
-      <template #footer>
-        <el-button @click="createOpen = false">取消</el-button>
-        <el-button type="primary" :loading="creating" @click="submitCreate()">
-          创建问题
-        </el-button>
-      </template>
-    </el-dialog>
+      <label class="create-field">
+        <span class="create-label">问题描述</span>
+        <el-input
+          v-model="createDesc"
+          type="textarea"
+          :rows="4"
+          maxlength="5000"
+          resize="none"
+          placeholder="可选。创建后可在详情中补充图片与 Markdown。"
+        />
+      </label>
+    </div>
+    <template #footer>
+      <el-button @click="createOpen = false">取消</el-button>
+      <el-button type="primary" :loading="creating" @click="submitCreate()">
+        创建问题
+      </el-button>
+    </template>
+  </el-dialog>
 </template>
 <style scoped>
 /* 状态/类型语义色：仅用于数据本身（点、标签、计数） */
@@ -1876,6 +1940,25 @@ onBeforeUnmount(() => {
 }
 .resolved-time {
   color: var(--tone-green-fg);
+}
+.ai-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  max-width: 150px;
+  padding: 0 5px;
+  border-radius: 4px;
+  color: var(--tone-blue-fg);
+  background: var(--tone-blue-bg);
+  box-shadow: 0 0 0 1px var(--tone-blue-bd) inset;
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1.6;
+}
+.ai-badge-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .meta-delete {
   margin-left: 2px;

@@ -11,3 +11,4 @@ workspace/
 .DS_Store
 test-results/
 playwright-report/
+.m5-harness/

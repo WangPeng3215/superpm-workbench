@@ -71,8 +71,13 @@ export const requirementFiles = sqliteTable("requirement_files", {
   // 数据库列名为 description；JS 标识符加前缀避免与需求表同名概念混淆
   assetDescription: text("description"),
   // 数据库列名为 status（与 requirements.status 无冲突，分属不同表）
-  assetStatus: text("status").$type<"draft" | "final" | "archived" | "missing">().notNull().default("draft"),
-  isDeleted: integer("is_deleted", { mode: "boolean" }).notNull().default(false),
+  assetStatus: text("status")
+    .$type<"draft" | "final" | "archived" | "missing">()
+    .notNull()
+    .default("draft"),
+  isDeleted: integer("is_deleted", { mode: "boolean" })
+    .notNull()
+    .default(false),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });
@@ -100,7 +105,9 @@ export const issues = sqliteTable("issues", {
   resolvedAt: text("resolved_at"),
   // closed 状态已退役；closed_at 列仅为存量兼容保留，不再写入
   closedAt: text("closed_at"),
-  isDeleted: integer("is_deleted", { mode: "boolean" }).notNull().default(false),
+  isDeleted: integer("is_deleted", { mode: "boolean" })
+    .notNull()
+    .default(false),
 });
 // 问题处理记录：追加式历史，禁止更新/删除
 export const issueActivities = sqliteTable("issue_activities", {
@@ -169,7 +176,9 @@ export const artifactNodes = sqliteTable("artifact_nodes", {
     .notNull()
     .references(() => requirements.id),
   // 空 = 挂在需求根目录
-  parentId: integer("parent_id").references((): AnySQLiteColumn => artifactNodes.id),
+  parentId: integer("parent_id").references(
+    (): AnySQLiteColumn => artifactNodes.id,
+  ),
   nodeType: text("node_type").$type<"folder" | "file">().notNull(),
   name: text("name").notNull(),
   // 相对需求根目录、正斜杠分隔；(requirement_id, relative_path) 唯一
@@ -207,5 +216,36 @@ export const requirementAudit = sqliteTable("requirement_audit", {
     .references(() => requirements.id),
   action: text("action").notNull(),
   payload: text("payload").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+// M3 受控写入：一次性确认令牌（只存哈希）与追加式审计。
+export const mcpWriteConfirmations = sqliteTable("mcp_write_confirmations", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  tokenHash: text("token_hash").notNull().unique(),
+  tool: text("tool").notNull(),
+  requirementId: integer("requirement_id").notNull(),
+  targetType: text("target_type").notNull(),
+  targetId: text("target_id").notNull(),
+  paramsHash: text("params_hash").notNull(),
+  idempotencyKey: text("idempotency_key").notNull().unique(),
+  expiresAt: text("expires_at").notNull(),
+  usedAt: text("used_at"),
+  createdAt: text("created_at").notNull(),
+});
+export const mcpAudit = sqliteTable("mcp_audit", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  tool: text("tool").notNull(),
+  requirementId: integer("requirement_id"),
+  targetType: text("target_type"),
+  targetId: text("target_id"),
+  paramsHash: text("params_hash").notNull(),
+  idempotencyKey: text("idempotency_key").unique(),
+  confirmationId: integer("confirmation_id").references(
+    () => mcpWriteConfirmations.id,
+  ),
+  actorName: text("actor_name"),
+  outcome: text("outcome").$type<"prepared" | "success" | "error">().notNull(),
+  errorCode: text("error_code"),
+  resultSummary: text("result_summary"),
   createdAt: text("created_at").notNull(),
 });

@@ -42,7 +42,7 @@ npm start
 - 需求物理目录自动初始化：可读目录名（`REQ-xxxx 名称`）、默认目录与系统级资源、失败可重试。
 - 前后端共享契约、真实 SQLite 集成测试、浏览器验收和 CI 配置模板。
 
-未实现：测试闭环、任务历史、通知、自定义字段、表格视图持久化、FTS5、备份恢复、MCP。软删除数据目前保留在数据库中，回收站界面随后建设。
+未实现：测试闭环、任务历史、通知、自定义字段、表格视图持久化、FTS5、备份恢复。MCP 提供只读查询与默认关闭的受控写入（问题更新、评论、产出物关联），详见 `docs/mcp.md`。软删除数据目前保留在数据库中，回收站界面随后建设。
 
 描述字段使用 Tiptap 兼容 JSON；需求文档以 Markdown 落盘，图片写入需求根目录 `images/` 并以相对路径引用。
 
@@ -60,6 +60,7 @@ apps/server/src/
   db/                        Drizzle 模型与迁移入口
   repositories/              SQLite 读写
   services/                  事务、编号、父子关系等业务规则
+  mcp/                       stdio MCP Server 与工具注册
   storage/                   Workspace 相对路径校验边界
 apps/server/drizzle/         版本化 SQL 迁移
 packages/shared/src/         枚举、Zod Schema、类型
@@ -67,7 +68,7 @@ tests/e2e/                  浏览器操作验收
 docs/superpowers/            本轮设计与执行计划
 ```
 
-REST 与未来 MCP 都通过 Core Service 访问事实数据，不直接拼接 SQL 或任意读写本地路径。现阶段以需求模块为可执行参考，其他模块逐次增加 schema、repository、service、API 和页面。
+REST 与 MCP 都通过 Core Service 访问事实数据，不直接拼接 SQL 或任意读写本地路径。现阶段以需求模块为可执行参考，其他模块逐次增加 schema、repository、service、API 和页面。
 
 UI 基于 Vue 3 + Element Plus，并按用户指定集成 [Ease UI](https://github.com/Momingyun/ease-ui) 的按钮、抽屉、空状态单文件组件。上游来源、固定提交与 MIT 许可见 `apps/web/src/components/ease-ui/`。
 
@@ -95,6 +96,17 @@ Markdown 中插入的图片真实写入当前需求根目录的 `images/`，正�
 
 数据库启用外键、WAL，启动自动执行 `apps/server/drizzle/*.sql` 中未应用迁移。也可运行 `npm run db:migrate`。新迁移应新增版本文件，避免修改已经应用的迁移。
 
+## MCP（stdio）
+
+M3 提供独立 stdio MCP Server，M4 完成安全攻击用例与敏感端点收敛，M5 使用 Qoder Desktop 作为真实 MCP Client 完成三个只读场景与两条经授权的受控写入；与 HTTP 服务共用服务容器，不监听端口：
+
+```powershell
+npm run build -w @superpm/server
+npm run mcp -w @superpm/server
+```
+
+默认只注册 9 个业务只读工具（`requirement.*`、`issue.*`、`artifact.*`）与 `system.info`；显式设置 `SUPERPM_MCP_WRITE=1` 后，额外开放 4 个受控写入工具与 `write.prepare`。写入必须先取得 5 分钟有效、一次性、绑定参数与幂等键的确认令牌，调用来源记为 `mcp:<客户端名>` 并写入 `mcp_audit`。需求创建、问题创建、文件写入/删除、SQL 与任意路径能力仍不开放。M4 安全用例覆盖非法参数、SQL/提示注入、路径穿越、符号链接、敏感信息泄露、数据库/文件系统异常与未授权写入；Harness 配置、确认流程、工具入参与排查见 `docs/mcp.md`。
+
 ## 检查
 
 ```powershell
@@ -114,7 +126,7 @@ CI 模板保存在 `docs/ci/ci.yml`，包含安装、类型检查、测试、构
 | 接口                                              | 用途                                     |
 | ------------------------------------------------- | ---------------------------------------- |
 | GET `/api/health`                                 | 服务状态                                 |
-| GET `/api/system`                                 | 运行路径与模块状态                       |
+| GET `/api/system`                                 | 运行路径与模块状态（需登录）             |
 | GET `/api/requirements`                           | 搜索/筛选/排序/分页，返回主需求及子需求  |
 | POST `/api/requirements`                          | 创建需求                                 |
 | GET `/api/requirements/:id`                       | 查看需求                                 |
@@ -138,6 +150,6 @@ CI 模板保存在 `docs/ci/ci.yml`，包含安装、类型检查、测试、构
 
 ## 后续实施顺序
 
-需求视图与富文本 → 文件实体/版本/关联 → 问题、决策、跟进 → 测试用例/执行/复测 → 每日任务 → FTS5 与 Context API → 备份恢复 → MCP。
+需求视图与富文本 → 文件实体/版本/关联 → 问题、决策、跟进 → 测试用例/执行/复测 → 每日任务 → FTS5 与 Context API → 备份恢复 → MCP 只读业务工具（M2，已完成）→ MCP 受控写入（M3，已完成）→ MCP 安全测试（M4，已完成）→ MCP 真实 Harness 试运行（M5，已完成）。
 
 需求参考保留在根目录开发文档；当前明确的两级需求、Drizzle 选型与交付边界见 `docs/superpowers/specs/2026-10-13-foundation-design.md`。

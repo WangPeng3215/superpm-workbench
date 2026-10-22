@@ -28,6 +28,10 @@ function appliedVersions(db: Database.Database) {
   ).map((row) => row.version);
 }
 const migrationsDir = join(projectRoot, "apps/server/drizzle");
+const ALL_VERSIONS = Array.from(
+  { length: SCHEMA_VERSION },
+  (_, index) => index + 1,
+);
 const LEGACY_FILES = [
   "0001_initial.sql",
   "0002_stage_workspace.sql",
@@ -102,7 +106,7 @@ afterEach(() => {
 describe("migrations 0006（用户认证）", () => {
   it("新库初始化：users 与 app_meta 结构完整", () => {
     migrate(db);
-    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    expect(appliedVersions(db)).toEqual(ALL_VERSIONS);
     expect(tableColumns(db, "users")).toEqual([
       "id",
       "username",
@@ -118,7 +122,7 @@ describe("migrations 0006（用户认证）", () => {
     seedLegacyDatabase(db);
     migrate(db);
     migrate(db);
-    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    expect(appliedVersions(db)).toEqual(ALL_VERSIONS);
     expect(
       db
         .prepare(
@@ -157,7 +161,7 @@ describe("migrations 0008（问题正文富文本化与关联切换）", () => {
     ).toHaveLength(1);
     // 重复迁移不报错、不重复
     migrate(db);
-    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    expect(appliedVersions(db)).toEqual(ALL_VERSIONS);
   });
   it("存量映射：closed→resolved 补解决时间；design→ui、bug→defect→testing", () => {
     // 模拟已应用 0001-0007 的旧库：写入旧枚举数据后再执行迁移
@@ -189,7 +193,7 @@ describe("migrations 0008（问题正文富文本化与关联切换）", () => {
     insert.run("旧缺陷", "bug", "open", now, now);
     // 迁移：0008 落地并完成存量映射
     migrate(db);
-    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    expect(appliedVersions(db)).toEqual(ALL_VERSIONS);
     const rows = db
       .prepare(
         "SELECT title, issue_type, status, resolved_at FROM issues ORDER BY id",
@@ -226,7 +230,7 @@ describe("migrations 0008（问题正文富文本化与关联切换）", () => {
 describe("migrations 0005（资产与问题管理）", () => {
   it("新库初始化：全部版本可执行且结构完整", () => {
     migrate(db);
-    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    expect(appliedVersions(db)).toEqual(ALL_VERSIONS);
     expect(tableColumns(db, "requirement_files")).toEqual(
       expect.arrayContaining([
         "resource_type",
@@ -281,7 +285,7 @@ describe("migrations 0005（资产与问题管理）", () => {
     const linkRow = insertLegacyFileRow(db, "link", 0);
     expect(appliedVersions(db)).toEqual([1, 2, 3, 4]);
     migrate(db);
-    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    expect(appliedVersions(db)).toEqual(ALL_VERSIONS);
     const rows = db
       .prepare(
         "SELECT id, resource_type, storage_type, status FROM requirement_files ORDER BY id",
@@ -323,7 +327,7 @@ describe("migrations 0005（资产与问题管理）", () => {
     ).run(issueId, fileRow, now);
     // 重复执行迁移：数据行数与关联均不丢失、不重复
     migrate(db);
-    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    expect(appliedVersions(db)).toEqual(ALL_VERSIONS);
     expect(
       db.prepare("SELECT COUNT(*) AS count FROM requirement_files").get(),
     ).toEqual({ count: 2 });
@@ -351,7 +355,7 @@ describe("migrations 0005（资产与问题管理）", () => {
     migrate(db);
     const snapshot = tableColumns(db, "requirement_files");
     migrate(db);
-    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    expect(appliedVersions(db)).toEqual(ALL_VERSIONS);
     expect(tableColumns(db, "requirement_files")).toEqual(snapshot);
   });
   it("新索引与联合主键约束生效", () => {
@@ -449,7 +453,7 @@ describe("migrations 0005（资产与问题管理）", () => {
   });
   it("SCHEMA_VERSION 与已应用迁移数一致", () => {
     migrate(db);
-    expect(SCHEMA_VERSION).toBe(11);
+    expect(SCHEMA_VERSION).toBe(12);
     expect(appliedVersions(db)).toHaveLength(SCHEMA_VERSION);
   });
 });
@@ -534,7 +538,7 @@ describe("migrations 0009（问题枚举整备与正文 md 落盘）", () => {
       status: "resolved",
     });
     migrate(db);
-    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    expect(appliedVersions(db)).toEqual(ALL_VERSIONS);
     const rows = db
       .prepare("SELECT issue_type, status, resolved_at FROM issues ORDER BY id")
       .all() as {
@@ -594,6 +598,76 @@ describe("migrations 0009（问题枚举整备与正文 md 落盘）", () => {
     // 重复迁移：不重写、不报错
     migrate(db, migrationsDir, workspace);
     expect(readFileSync(join(issuesDir, "1.md"), "utf8")).toBe("外部已有内容");
+  });
+});
+
+describe("migrations 0012（MCP 写入确认与审计）", () => {
+  it("确认令牌与审计表结构齐备，唯一约束与结果枚举生效", () => {
+    migrate(db);
+    expect(tableColumns(db, "mcp_write_confirmations")).toEqual([
+      "id",
+      "token_hash",
+      "tool",
+      "requirement_id",
+      "target_type",
+      "target_id",
+      "params_hash",
+      "idempotency_key",
+      "expires_at",
+      "used_at",
+      "created_at",
+    ]);
+    expect(tableColumns(db, "mcp_audit")).toEqual([
+      "id",
+      "tool",
+      "requirement_id",
+      "target_type",
+      "target_id",
+      "params_hash",
+      "idempotency_key",
+      "confirmation_id",
+      "actor_name",
+      "outcome",
+      "error_code",
+      "result_summary",
+      "created_at",
+    ]);
+    const indexes = (
+      db.prepare("SELECT name FROM sqlite_master WHERE type='index'").all() as {
+        name: string;
+      }[]
+    ).map((row) => row.name);
+    expect(indexes).toEqual(
+      expect.arrayContaining([
+        "mcp_write_confirmations_expires_idx",
+        "mcp_audit_requirement_created_idx",
+      ]),
+    );
+    const now = "2026-01-01T00:00:00.000Z";
+    const expiresAt = "2026-01-01T00:05:00.000Z";
+    const insertConfirmation = db.prepare(
+      "INSERT INTO mcp_write_confirmations(token_hash, tool, requirement_id, target_type, target_id, params_hash, idempotency_key, expires_at, created_at) VALUES (?, 'issue.comment', 1, 'issue', '1', 'hash', ?, ?, ?)",
+    );
+    insertConfirmation.run("token-a", "idem-a", expiresAt, now);
+    expect(() =>
+      insertConfirmation.run("token-a", "idem-b", expiresAt, now),
+    ).toThrowError(/UNIQUE/i);
+    expect(() =>
+      insertConfirmation.run("token-b", "idem-a", expiresAt, now),
+    ).toThrowError(/UNIQUE/i);
+
+    const insertAudit = db.prepare(
+      "INSERT INTO mcp_audit(tool, requirement_id, target_type, target_id, params_hash, idempotency_key, confirmation_id, actor_name, outcome, result_summary, created_at) VALUES ('issue.comment', 1, 'issue', '1', 'hash', ?, 1, 'mcp:test', 'success', 'issue.comment #1', ?)",
+    );
+    insertAudit.run("idem-audit", now);
+    expect(() => insertAudit.run("idem-audit", now)).toThrowError(/UNIQUE/i);
+    expect(() =>
+      db
+        .prepare(
+          "INSERT INTO mcp_audit(tool, params_hash, outcome, created_at) VALUES ('issue.comment', 'hash', 'unknown', ?)",
+        )
+        .run(now),
+    ).toThrowError(/CHECK/i);
   });
 });
 
@@ -693,7 +767,7 @@ describe("migrations 0011（问题记录模型）", () => {
       "INSERT INTO issue_activities(issue_id, activity_type, content, old_status, new_status, created_at) VALUES (?, 'status_change', '', 'open', 'testing', ?)",
     ).run(ui, legacyNow);
     migrate(db);
-    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    expect(appliedVersions(db)).toEqual(ALL_VERSIONS);
     expect(tableColumns(db, "issues")).toContain("stage");
     expect(tableColumns(db, "issues")).not.toContain("phase");
     const rows = db
@@ -768,6 +842,6 @@ describe("migrations 0011（问题记录模型）", () => {
     ).toHaveLength(1);
     // 重复迁移不报错、版本不重复
     migrate(db);
-    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    expect(appliedVersions(db)).toEqual(ALL_VERSIONS);
   });
 });

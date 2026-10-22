@@ -132,6 +132,89 @@ export class RequirementDirectoryResolver {
       );
   }
 
+  /**
+   * 只读路径解析（MCP 只读工具使用）：不补目录映射、不收养旧目录、不落盘。
+   * 返回 null 表示需求目录尚未初始化；非法段、越界与符号链接仍然抛 INVALID_PATH。
+   */
+  tryResolveReadOnly(
+    requirementId: number,
+    relativePath: string,
+  ): string | null {
+    this.requirementRow(requirementId);
+    const mapping = this.row(requirementId);
+    const rootAbs = existsSync(this.root) ? realpathSync(this.root) : this.root;
+    let segments: string[];
+    if (mapping) {
+      segments = mapping.relative_path.split("/");
+    } else {
+      const legacyAbs = join(rootAbs, "requirements", String(requirementId));
+      if (!existsSync(legacyAbs)) return null;
+      segments = ["requirements", String(requirementId)];
+    }
+    if (relativePath) {
+      for (const segment of relativePath.split("/")) {
+        if (!segment || segment === "." || segment === "..")
+          throw new DomainError("INVALID_PATH", "路径包含非法段");
+        segments.push(segment);
+      }
+    }
+    let current = rootAbs;
+    for (const segment of segments) {
+      current = join(current, segment);
+      if (!existsSync(current)) continue;
+      if (lstatSync(current).isSymbolicLink())
+        throw new DomainError("INVALID_PATH", "路径不能包含符号链接");
+      const resolved = realpathSync(current);
+      const distance = relative(rootAbs, resolved);
+      if (distance.startsWith("..") || isAbsolute(distance))
+        throw new DomainError("INVALID_PATH", "路径越界");
+    }
+    return current;
+  }
+
+  /** 只读解析；目录尚未初始化时抛 NOT_FOUND，而不是隐式初始化 */
+  resolveReadOnly(requirementId: number, relativePath: string): string {
+    const path = this.tryResolveReadOnly(requirementId, relativePath);
+    if (!path)
+      throw new DomainError(
+        "NOT_FOUND",
+        "需求目录尚未初始化，请先在需求详情中初始化工作区",
+        404,
+      );
+    return path;
+  }
+
+  /**
+   * 只读工作区状态：与 state() 返回同构，但不会补建目录映射。
+   * 未初始化时返回 status="pending" 且 directoryExists=false。
+   */
+  stateReadOnly(requirementId: number): RequirementWorkspaceState {
+    this.requirementRow(requirementId);
+    const mapping = this.row(requirementId);
+    const rootAbs = this.tryResolveReadOnly(requirementId, "");
+    const directoryExists = rootAbs !== null && existsSync(rootAbs);
+    const missingResources: string[] = [];
+    if (directoryExists && rootAbs) {
+      for (const name of [artifactMemoryName, ...defaultWorkspaceFolders])
+        if (!existsSync(join(rootAbs, name))) missingResources.push(name);
+    } else {
+      missingResources.push(artifactMemoryName, ...defaultWorkspaceFolders);
+    }
+    return {
+      requirementId,
+      directoryName: mapping?.directory_name ?? String(requirementId),
+      relativePath:
+        mapping?.relative_path ??
+        (directoryExists ? `requirements/${requirementId}` : ""),
+      status: mapping?.status ?? "pending",
+      failureStage: mapping?.failure_stage ?? null,
+      failureReason: mapping?.failure_reason ?? null,
+      initializedAt: mapping?.initialized_at ?? null,
+      directoryExists,
+      missingResources,
+    };
+  }
+
   /** 需求目录相对工作区根的路径（正斜杠分隔），如 requirements/REQ-0001 名称 */
   relativeRoot(requirementId: number): string {
     return this.ensureMapping(requirementId).relative_path;

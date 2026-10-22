@@ -496,6 +496,19 @@ export interface IssueListResult {
   total: number;
   // 各状态数量（不计入 status 筛选，供状态筛选标签展示实时计数）
   statusCounts: Record<IssueStatus, number>;
+  // 分页信息：limit 为 null 表示调用方未要求分页（返回全部匹配项）
+  limit: number | null;
+  offset: number;
+  hasMore: boolean;
+}
+export interface IssueStats {
+  total: number;
+  // 未结束的问题：待分析 / 待确认 / 处理中
+  open: number;
+  resolved: number;
+  wontFix: number;
+  statusCounts: Record<IssueStatus, number>;
+  byStage: Record<IssueStage, number>;
 }
 // 问题与产出物关联（artifacts 体系）：同一问题与同一 artifact 节点仅允许一条关联记录；
 // assetId 指向 artifact_nodes.id，文件夹与文件均可关联
@@ -776,6 +789,9 @@ export interface ArtifactDirectory {
   links: ArtifactLink[];
   // 非空表示当前处于按名称的全需求范围搜索（结果跨目录，卡片展示相对路径）
   search: string;
+  // 分页附加信息：total 为截断前各类数量，truncated 表示是否因 limit 被截断
+  total?: { folders: number; files: number; links: number };
+  truncated?: boolean;
 }
 export interface ArtifactNodeDetails {
   node: ArtifactNode;
@@ -786,6 +802,39 @@ export interface ArtifactRefreshResult {
   added: number;
   updated: number;
   missing: number;
+}
+// 只读读取结果（MCP 复用）：kind 为 binary 时不返回内容，避免把二进制转成 base64
+export interface ArtifactReadResult {
+  node: ArtifactNode;
+  breadcrumb: ArtifactBreadcrumbItem[];
+  descendantCount: number;
+  kind: "folder" | "text" | "binary";
+  content: string | null;
+  truncated: boolean;
+  maxChars: number;
+}
+export const artifactMemoryStatuses = [
+  "available",
+  "not_initialized",
+  "missing",
+] as const;
+export type ArtifactMemoryStatus = (typeof artifactMemoryStatuses)[number];
+export interface ArtifactMemoryReadResult {
+  requirementId: number;
+  exists: boolean;
+  status: ArtifactMemoryStatus;
+  node: ArtifactNode | null;
+  content: string;
+  truncated: boolean;
+  maxChars: number;
+}
+export interface ArtifactStats {
+  folders: number;
+  files: number;
+  links: number;
+  missing: number;
+  externalChanged: number;
+  memoryStatus: ArtifactMemoryStatus;
 }
 // ===== 需求物理目录映射与初始化（V1.1 文档 §12，迁移 0010）=====
 // 物理根目录名 = 需求编号 + 空格 + 需求名称；数据库以需求 ID 关联，不依赖目录名识别需求
@@ -865,6 +914,14 @@ export interface RequirementWorkspaceState {
   directoryExists: boolean;
   // 缺失的系统级资源与默认目录名（磁盘比对结果，供「修复默认结构」提示）
   missingResources: string[];
+}
+// 需求进度快照（只读组合，不新增数据表）：需求本体 + 工作区 + 阶段历史 + 问题/产出物统计
+export interface RequirementProgress {
+  requirement: Requirement;
+  workspace: RequirementWorkspaceState;
+  stageHistory: StageHistory[];
+  issues: IssueStats;
+  artifacts: ArtifactStats;
 }
 // 图片上传（文档 §12.4）：nodeId 为当前编辑的文档节点，用于按文档所在目录计算相对路径
 export const artifactImageUploadSchema = z

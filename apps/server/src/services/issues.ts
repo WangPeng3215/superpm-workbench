@@ -6,6 +6,7 @@ import {
   issueAssetLinkSchema,
   issueCommentSchema,
   issueCreateSchema,
+  issueStages,
   issueStatuses,
   issueUpdateSchema,
   type Issue,
@@ -15,6 +16,7 @@ import {
   type IssueDetail,
   type IssueListResult,
   type IssueStage,
+  type IssueStats,
   type IssueStatus,
   type IssueType,
 } from "@superpm/shared";
@@ -32,6 +34,9 @@ export interface IssueListQuery {
   type?: IssueType;
   // 标题 + 描述关键词（描述存于 md 文件，读取后在服务层过滤）
   q?: string;
+  // 未指定 limit 时返回全部匹配项（HTTP 界面保持原行为）；MCP 显式分页
+  limit?: number;
+  offset?: number;
 }
 
 interface LinkRow {
@@ -108,7 +113,14 @@ function emptyStatusCounts(): Record<IssueStatus, number> {
     issueStatuses.map((status) => [status, 0]),
   ) as Record<IssueStatus, number>;
 }
-const LOCAL_ACTOR = { actorType: "user" as const, actorName: "local-user" };
+export interface IssueActor {
+  actorType: "user" | "ai" | "system";
+  actorName: string;
+}
+const LOCAL_ACTOR: IssueActor = {
+  actorType: "user",
+  actorName: "local-user",
+};
 
 // 问题正文 md 文件路径：需求根目录下 issues/{id}.md（迁移 0009 起正文的唯一权威存储）。
 // 需求根目录由 RequirementDirectoryResolver 统一解析（可读目录名 + 路径安全）。
@@ -116,9 +128,16 @@ function issueDescriptionFile(
   resolver: RequirementDirectoryResolver,
   requirementId: number,
   issueId: number,
-): string {
-  const directory = resolver.resolve(requirementId, "issues", true);
-  return join(directory, `${issueId}.md`);
+  create: boolean,
+): string | null {
+  if (create)
+    return join(
+      resolver.resolve(requirementId, "issues", true),
+      `${issueId}.md`,
+    );
+  // 读取不得隐式建目录或补映射：目录未初始化时按"无正文"处理
+  const directory = resolver.tryResolveReadOnly(requirementId, "issues");
+  return directory === null ? null : join(directory, `${issueId}.md`);
 }
 
 export class IssueService {
@@ -167,10 +186,58 @@ export class IssueService {
     // 计数只按关键词/类型/阶段过滤，不受状态筛选影响
     const statusCounts = emptyStatusCounts();
     for (const issue of matched) statusCounts[issue.status] += 1;
-    const items = query.status
+    const filtered = query.status
       ? matched.filter((issue) => issue.status === query.status)
       : matched;
-    return { items, total: items.length, statusCounts };
+    const offset = Math.max(0, query.offset ?? 0);
+    const items =
+      query.limit === undefined
+        ? filtered
+        : filtered.slice(offset, offset + query.limit);
+    return {
+      items,
+      total: filtered.length,
+      statusCounts,
+      limit: query.limit ?? null,
+      offset,
+      hasMore:
+        query.limit !== undefined && offset + items.length < filtered.length,
+    };
+  }
+
+  /** 问题统计（只读，不读取正文）：进度快照与 MCP 使用 */
+  stats(requirementId: number): IssueStats {
+    this.requirements.get(requirementId);
+    const statusCounts = emptyStatusCounts();
+    const byStage = Object.fromEntries(
+      issueStages.map((stage) => [stage, 0]),
+    ) as Record<IssueStage, number>;
+    const rows = this.db
+      .prepare(
+        "SELECT status, stage, COUNT(*) AS total FROM issues WHERE requirement_id=? AND is_deleted=0 GROUP BY status, stage",
+      )
+      .all(requirementId) as {
+      status: IssueStatus;
+      stage: IssueStage;
+      total: number;
+    }[];
+    let total = 0;
+    for (const row of rows) {
+      total += row.total;
+      statusCounts[row.status] += row.total;
+      byStage[row.stage] += row.total;
+    }
+    return {
+      total,
+      open:
+        statusCounts.pending +
+        statusCounts.to_confirm +
+        statusCounts.processing,
+      resolved: statusCounts.resolved,
+      wontFix: statusCounts.wont_fix,
+      statusCounts,
+      byStage,
+    };
   }
   detail(requirementId: number, issueId: number): IssueDetail {
     const issue = this.row(requirementId, issueId);
@@ -212,7 +279,12 @@ export class IssueService {
       return this.row(requirementId, issueId);
     })();
   }
-  update(requirementId: number, issueId: number, input: unknown) {
+  update(
+    requirementId: number,
+    issueId: number,
+    input: unknown,
+    actor: IssueActor = LOCAL_ACTOR,
+  ) {
     const issue = this.row(requirementId, issueId);
     const patch = issueUpdateSchema.parse(input);
     const nextSolution = patch.solution ?? issue.solution;
@@ -231,13 +303,7 @@ export class IssueService {
           .prepare(
             "INSERT INTO issue_activities(issue_id, activity_type, content, actor_type, actor_name, created_at) VALUES (?, 'solution', ?, ?, ?, ?)",
           )
-          .run(
-            issueId,
-            patch.solution,
-            LOCAL_ACTOR.actorType,
-            LOCAL_ACTOR.actorName,
-            now,
-          );
+          .run(issueId, patch.solution, actor.actorType, actor.actorName, now);
       }
       // 状态变更：只允许在已解决时保留解决时间，离开已解决即清空
       const nextStatus = patch.status ?? issue.status;
@@ -250,8 +316,8 @@ export class IssueService {
             issueId,
             issue.status,
             patch.status,
-            LOCAL_ACTOR.actorType,
-            LOCAL_ACTOR.actorName,
+            actor.actorType,
+            actor.actorName,
             now,
           );
       }
@@ -276,7 +342,10 @@ export class IssueService {
           now,
           issueId,
         );
-      if (patch.description !== undefined && patch.description !== issue.description)
+      if (
+        patch.description !== undefined &&
+        patch.description !== issue.description
+      )
         this.writeDescription(requirementId, issueId, patch.description);
       return this.row(requirementId, issueId);
     })();
@@ -299,7 +368,12 @@ export class IssueService {
       return { updatedAt: now };
     })();
   }
-  comment(requirementId: number, issueId: number, input: unknown) {
+  comment(
+    requirementId: number,
+    issueId: number,
+    input: unknown,
+    actor: IssueActor = LOCAL_ACTOR,
+  ) {
     this.row(requirementId, issueId);
     const { content } = issueCommentSchema.parse(input);
     const now = new Date().toISOString();
@@ -307,7 +381,7 @@ export class IssueService {
       .prepare(
         "INSERT INTO issue_activities(issue_id, activity_type, content, actor_type, actor_name, created_at) VALUES (?, 'comment', ?, ?, ?, ?)",
       )
-      .run(issueId, content, LOCAL_ACTOR.actorType, LOCAL_ACTOR.actorName, now);
+      .run(issueId, content, actor.actorType, actor.actorName, now);
     this.db
       .prepare("UPDATE issues SET updated_at=? WHERE id=?")
       .run(now, issueId);
@@ -403,11 +477,16 @@ export class IssueService {
     if (result.changes === 0)
       throw new DomainError("NOT_FOUND", "关联关系不存在", 404);
   }
-  // 读取正文 md 文件；工作区未配置或文件缺失时返回空串
+  // 读取正文 md 文件；工作区未配置或文件缺失时返回空串（只读，不建目录）
   private readDescription(requirementId: number, issueId: number): string {
     if (!this.directories) return "";
-    const file = issueDescriptionFile(this.directories, requirementId, issueId);
-    return existsSync(file) ? readFileSync(file, "utf8") : "";
+    const file = issueDescriptionFile(
+      this.directories,
+      requirementId,
+      issueId,
+      false,
+    );
+    return file && existsSync(file) ? readFileSync(file, "utf8") : "";
   }
   private writeDescription(
     requirementId: number,
@@ -415,11 +494,14 @@ export class IssueService {
     content: string,
   ) {
     if (!this.directories) return;
-    writeFileSync(
-      issueDescriptionFile(this.directories, requirementId, issueId),
-      content,
-      "utf8",
+    const file = issueDescriptionFile(
+      this.directories,
+      requirementId,
+      issueId,
+      true,
     );
+    if (!file) return;
+    writeFileSync(file, content, "utf8");
   }
   private row(requirementId: number, issueId: number) {
     this.requirements.get(requirementId);

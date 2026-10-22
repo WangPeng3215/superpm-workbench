@@ -11,7 +11,7 @@ import {
 import { isAbsolute, join, relative } from "node:path";
 import { projectRoot } from "../config/index.js";
 
-export const SCHEMA_VERSION = 11;
+export const SCHEMA_VERSION = 12;
 const defaultMigrationsDir = join(projectRoot, "apps/server/drizzle");
 
 export function migrate(

@@ -1,24 +1,16 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import fastifyStatic from "@fastify/static";
-import Database from "better-sqlite3";
 import { ZodError, z } from "zod";
-import { StageWorkspaceService } from "./services/stage-workspace.js";
-import { RequirementFileService } from "./services/requirement-files.js";
-import { IssueService } from "./services/issues.js";
-import { ArtifactService } from "./services/artifacts.js";
-import { RequirementDirectoryResolver } from "./services/requirement-directory.js";
 import { existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
+import { projectRoot, allowSystemOpen } from "./config/index.js";
+import { SCHEMA_VERSION } from "./db/migrate.js";
+import { DomainError } from "./services/requirements.js";
 import {
-  defaultPaths,
-  ensurePaths,
-  projectRoot,
-  allowSystemOpen,
-} from "./config/index.js";
-import { migrate, SCHEMA_VERSION } from "./db/migrate.js";
-import { RequirementService, DomainError } from "./services/requirements.js";
+  createServiceContainer,
+  type ServiceContainerOptions,
+} from "./services/container.js";
 import {
-  AuthService,
   parseAuthCookie,
   serializeAuthCookie,
   serializeClearAuthCookie,
@@ -32,9 +24,7 @@ declare module "fastify" {
   }
 }
 
-export interface CreateAppOptions {
-  databasePath?: string;
-  workspacePath?: string;
+export interface CreateAppOptions extends ServiceContainerOptions {
   logger?: boolean;
   serveWeb?: boolean;
 }
@@ -68,55 +58,24 @@ const roadmap = {
 export async function createApp(
   options: CreateAppOptions = {},
 ): Promise<FastifyInstance> {
-  const defaults = defaultPaths();
-  const databasePath = options.databasePath ?? defaults.databasePath;
-  const paths = {
-    databasePath:
-      databasePath === ":memory:" ? databasePath : resolve(databasePath),
-    workspacePath: resolve(options.workspacePath ?? defaults.workspacePath),
-  };
-  ensurePaths(paths.databasePath, paths.workspacePath);
-  const db = new Database(paths.databasePath);
-  try {
-    migrate(db, undefined, paths.workspacePath);
-  } catch (error) {
-    db.close();
-    throw error;
-  }
-  const service = new RequirementService(db);
-  const authService = new AuthService(db);
-  authService.ensureSeed();
-  // 需求物理目录解析器：所有涉及需求目录的服务共用，保证命名与路径安全只有一份实现
-  const directories = new RequirementDirectoryResolver(db, paths.workspacePath);
-  const workspaceService = new StageWorkspaceService(
-    db,
-    paths.workspacePath,
-    service,
+  const container = createServiceContainer(options);
+  const {
+    databasePath,
+    workspacePath,
+    requirements: service,
+    auth: authService,
     directories,
-  );
-  const fileService = new RequirementFileService(
-    db,
-    paths.workspacePath,
-    service,
-    directories,
-  );
-  const issueService = new IssueService(
-    db,
-    service,
-    paths.workspacePath,
-    directories,
-  );
-  const artifactService = new ArtifactService(
-    db,
-    paths.workspacePath,
-    service,
-    directories,
-  );
+    workspace: workspaceService,
+    files: fileService,
+    issues: issueService,
+    artifacts: artifactService,
+  } = container;
+  const paths = { databasePath, workspacePath };
   const app = Fastify({
     logger: options.logger ?? true,
     bodyLimit: 8 * 1024 * 1024,
   });
-  app.addHook("onClose", async () => db.close());
+  app.addHook("onClose", async () => container.close());
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof ZodError) {
       return reply.status(400).send({
@@ -149,11 +108,7 @@ export async function createApp(
   });
   app.get("/api/health", async () => ({ status: "ok", version }));
   // 认证中间件：除公开端点外，全部 /api/* 均需有效会话 Cookie
-  const publicApiPaths = new Set([
-    "/api/health",
-    "/api/system",
-    "/api/auth/login",
-  ]);
+  const publicApiPaths = new Set(["/api/health", "/api/auth/login"]);
   // 编辑器内容以 <img src="/api/..."> 引用阶段工作区图片，图片 raw 读取保持公开
   const publicImagePattern = /^\/api\/requirements\/\d+\/images\/[^/]+$/;
   app.addHook("onRequest", async (request, reply) => {
