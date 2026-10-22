@@ -507,7 +507,7 @@ npm run typecheck
 | `http-security.test.ts` | 2    | `/api/health` 公开、`/api/system` 需登录且不泄露数据库与工作区路径                                                                                                                                          |
 | `migrations.test.ts`    | 17   | 迁移链 0005–0012 可重复执行、`mcp_audit` / `mcp_write_confirmations` 表结构与唯一约束/结果枚举、`SCHEMA_VERSION` 与已应用迁移数一致                                                                         |
 
-CI 流水线位于 `.github/workflows/ci.yml`（与模板 `docs/ci/ci.yml` 一致，Node 22 + `npm ci` + `typecheck` + `npm test` + `build` + Playwright E2E，Windows runner）；推送该文件需要 GitHub 凭证具备 `workflow` scope。Playwright 的 `tests/e2e` 覆盖 Web 端功能，不驱动 MCP；MCP 的行为验证以上述单测与 stdio 子进程用例为准。
+CI 流水线位于 `.github/workflows/ci.yml`（与模板 `docs/ci/ci.yml` 一致，Node 22 + `npm ci` + `typecheck` + `npm test` + `build` + Playwright E2E，Windows runner），已随 `main` 推送并在 GitHub Actions 上实际运行。推送含 workflows 目录改动的提交需要凭证具备 `workflow` scope，否则远端会拒收整个提交；本机用 `gh auth refresh --hostname github.com -s workflow` 补齐。Playwright 的 `tests/e2e` 覆盖 Web 端功能，不驱动 MCP；MCP 的行为验证以上述单测与 stdio 子进程用例为准。
 
 ### M4 安全用例
 

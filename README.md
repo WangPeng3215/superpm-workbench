@@ -119,7 +119,7 @@ npm run test:e2e
 
 集成与浏览器测试各使用临时 SQLite 和 Workspace，与默认业务数据隔离。浏览器验收需先构建前端；`npm run test:e2e` 会自动构建并启动隔离服务。
 
-CI 流水线位于 `.github/workflows/ci.yml`（与模板 `docs/ci/ci.yml` 一致），在 Windows runner 上执行安装、类型检查、单元测试、构建与 Playwright 浏览器验收。仓库的 GitHub OAuth 凭证此前缺少 `workflow` 权限，推送该文件时需先授权 `workflow` scope；推送后本流水线才会在 GitHub 上实际运行。
+CI 流水线位于 `.github/workflows/ci.yml`（与模板 `docs/ci/ci.yml` 一致），在 Windows runner 上执行安装、类型检查、单元测试、构建与 Playwright 浏览器验收。推送含 workflows 目录改动的提交需要 GitHub 凭证具备 `workflow` scope，缺失时整个提交会被远端拒收；可用 `gh auth refresh --hostname github.com -s workflow` 补齐。
 
 ## API
 
