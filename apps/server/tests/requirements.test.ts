@@ -18,6 +18,8 @@ import type {
 } from "@superpm/shared";
 import Database from "better-sqlite3";
 import { createApp } from "../src/app";
+import { appVersion } from "../src/config";
+import { SCHEMA_VERSION } from "../src/db/migrate";
 import { authedInject } from "./auth-helper";
 import { requirementRootRelative } from "./workspace-helper";
 
@@ -238,9 +240,11 @@ describe("requirements API with real SQLite", () => {
   it("returns system paths and a health response without writing sample data", async () => {
     expect((await app.inject("/api/health")).json()).toMatchObject({
       status: "ok",
+      version: appVersion,
+      schemaVersion: SCHEMA_VERSION,
     });
     expect((await app.inject("/api/system")).json()).toMatchObject({
-      schemaVersion: 12,
+      schemaVersion: SCHEMA_VERSION,
       workspacePath: join(directory, "workspace"),
     });
     expect((await app.inject("/api/requirements")).json().total).toBe(0);

@@ -8,7 +8,8 @@
     "start": "node dist/index.js",
     "mcp": "node dist/mcp/stdio.js",
     "mcp:dev": "tsx src/mcp/stdio.ts",
-    "build": "tsup",
+    "backup": "tsx src/backup-cli.ts",
+    "build": "node build.mjs",
     "typecheck": "tsc -p tsconfig.json",
     "db:migrate": "tsx src/db/migrate-cli.ts"
   },
@@ -24,7 +25,7 @@
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
-    "tsup": "^8.5.0",
+    "esbuild": "^0.28.1",
     "tsx": "^4.20.0"
   }
 }

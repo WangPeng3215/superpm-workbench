@@ -42,7 +42,7 @@ npm start
 - 需求物理目录自动初始化：可读目录名（`REQ-xxxx 名称`）、默认目录与系统级资源、失败可重试。
 - 前后端共享契约、真实 SQLite 集成测试、浏览器验收和 GitHub Actions CI 流水线。
 
-未实现：测试闭环、任务历史、通知、自定义字段、表格视图持久化、FTS5、备份恢复。MCP 提供只读查询与默认关闭的受控写入（问题更新、评论、产出物关联），详见 `docs/mcp.md`。软删除数据目前保留在数据库中，回收站界面随后建设。
+未实现：测试闭环、任务历史、通知、自定义字段、表格视图持久化、FTS5、备份恢复界面。MCP 提供只读查询与默认关闭的受控写入（问题更新、评论、产出物关联），详见 `docs/mcp.md`。软删除数据目前保留在数据库中，回收站界面随后建设。
 
 描述字段使用 Tiptap 兼容 JSON；需求文档以 Markdown 落盘，图片写入需求根目录 `images/` 并以相对路径引用。
 
@@ -119,16 +119,16 @@ npm run test:e2e
 
 集成与浏览器测试各使用临时 SQLite 和 Workspace，与默认业务数据隔离。浏览器验收需先构建前端；`npm run test:e2e` 会自动构建并启动隔离服务。
 
-CI 流水线位于 `.github/workflows/ci.yml`（与模板 `docs/ci/ci.yml` 一致），在 Windows runner 上执行安装、类型检查、单元测试、构建与 Playwright 浏览器验收。推送含 workflows 目录改动的提交需要 GitHub 凭证具备 `workflow` scope，缺失时整个提交会被远端拒收；可用 `gh auth refresh --hostname github.com -s workflow` 补齐。
+CI 流水线位于 `.github/workflows/ci.yml`（与模板 `docs/ci/ci.yml` 一致），在 Windows runner 上执行安装、类型检查、单元测试、构建与 Playwright 浏览器验收。推送 `v*` 标签时，`.github/workflows/release.yml` 会重新测试、构建完整包与增量包、执行安装冒烟测试并创建 GitHub Release。推送含 workflows 目录改动的提交需要 GitHub 凭证具备 `workflow` scope，缺失时整个提交会被远端拒收；可用 `gh auth refresh --hostname github.com -s workflow` 补齐。
 
 ## 版本管理
 
 版本号格式为 `MAJOR.MINOR.PATCH`。定级依据是**一次正式发布相对上一正式版本的整体最高变更级别**，不按单个提交计算；每次发布只升一位，低位归零。
 
-| 级别    | 适用变更                                       | 示例    |
-| ------- | ---------------------------------------------- | ------- |
-| `0.0.x` | 小幅修改：页面、文案、样式、现有功能内的小修   | `0.1.1` |
-| `0.x.0` | 功能迭代：新功能、重构、数据库结构调整         | `0.2.0` |
+| 级别    | 适用变更                                             | 示例    |
+| ------- | ---------------------------------------------------- | ------- |
+| `0.0.x` | 小幅修改：页面、文案、样式、现有功能内的小修         | `0.1.1` |
+| `0.x.0` | 功能迭代：新功能、重构、数据库结构调整               | `0.2.0` |
 | `x.0.0` | 重大版本：重要模块、大批量更新、重大架构调整或里程碑 | `1.0.0` |
 
 - 主版本谨慎升级，普通功能迭代不触发。
@@ -139,12 +139,53 @@ CI 流水线位于 `.github/workflows/ci.yml`（与模板 `docs/ci/ci.yml` 一�
 
 版本号以根 `package.json` 的 `version` 字段为准，发布时同步 `apps/server`、`apps/web`、`packages/shared` 与部署包。本规范自下一个正式版本起执行。
 
+## 部署与更新
+
+发布包自带 Node 22 运行时，解压后双击 `SuperPM.cmd` 即可使用。更新可在应用内「系统设置 → 版本与更新」完成检查、查看说明、下载校验并交给独立更新器安装；`Update.cmd` 保留为命令行与离线更新入口。安装布局、数据根、更新命令、手动回滚与发布流程见 [`docs/install-update.md`](docs/install-update.md)，设计基线见 [`docs/deployment-update-strategy.md`](docs/deployment-update-strategy.md)。
+
+```powershell
+# 启动发布版（安装目录内）
+SuperPM.cmd
+
+# 从 GitHub Release 更新（命令行入口）
+Update.cmd --manifest https://github.com/WangPeng3215/superpm-workbench/releases/latest/download/update-manifest.json
+```
+
+应用内更新由服务端读取并缓存版本清单、校验 SHA-256 后启动独立更新器；服务重启期间页面自动重连。开发环境仅支持检查更新，安装请使用 `Update.cmd` 或完整安装包。
+
+### 用户数据与备份
+
+开发环境不设置 `SUPERPM_HOME`，数据沿用仓库内 `data/`、`workspace/` 与 `.env`。发布版默认数据根为 `%LOCALAPPDATA%\superPM`，设置 `SUPERPM_HOME` 可覆盖；`data/`、`workspace/`、`.env`、`logs/`、`backups/`、`updates/` 均位于数据根，替换 `app/` 不影响用户数据。
+
+首次使用数据根且安装目录存在旧数据时，会自动执行一次性迁移：SQLite 在线备份、工作区复制，校验完整性、表行数与文件清单后原子落位。旧数据保留不删除，结果写入 `migration-state.json`；迁移失败时服务拒绝启动。数据根 `logs/` 保存 `server-*.log`、`mcp.log`、`migration.log`、`backup.log` 与 `update.log`。
+
+备份与恢复（恢复前必须停止 HTTP 服务与所有 MCP 客户端）：
+
+```powershell
+npm run backup -- create --reason 手动备份
+npm run backup -- list
+npm run backup -- verify --all
+npm run backup -- restore <备份ID>
+```
+
+备份包含 SQLite、工作区与数据根 `.env`，元数据记录 SHA-256、表行数与工作区文件统计。恢复会自动创建 `pre-restore` 备份，原工作区改名保留；服务运行期间备份工具会拒绝恢复。
+
+发布构建、安装包冒烟测试与真实版本升级演练：
+
+```powershell
+node scripts/release/build-release.mjs --version 0.3.0 --notes "更新说明"
+node scripts/release/rehearse-update.mjs --from release/0.2.0/superpm-workbench-0.2.0-win-x64.zip --manifest release/0.3.0/update-manifest.json
+```
+
 ## API
 
 | 接口                                              | 用途                                     |
 | ------------------------------------------------- | ---------------------------------------- |
-| GET `/api/health`                                 | 服务状态                                 |
+| GET `/api/health`                                 | 服务状态、应用版本与 schema 版本         |
 | GET `/api/system`                                 | 运行路径与模块状态（需登录）             |
+| GET `/api/update/status`                          | 当前版本、更新锁、MCP 进程与更新进度     |
+| POST `/api/update/check`                          | 读取并缓存发布源版本清单                 |
+| POST `/api/update/install`                        | 下载校验更新包并启动独立更新器           |
 | GET `/api/requirements`                           | 搜索/筛选/排序/分页，返回主需求及子需求  |
 | POST `/api/requirements`                          | 创建需求                                 |
 | GET `/api/requirements/:id`                       | 查看需求                                 |

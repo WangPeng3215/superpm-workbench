@@ -3,6 +3,10 @@ dist/
 coverage/
 data/
 workspace/
+backups/
+/runtime/
+/release/
+/.release-cache/
 .env
 .env.*
 !.env.example

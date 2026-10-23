@@ -940,3 +940,5 @@ export interface ArtifactImageUploadResult {
 }
 // MCP 工具契约层（阶段 10）：契约只声明、不执行，网关见 apps/server mcp-gateway
 export * from "./mcp-contract.js";
+// 应用内更新契约：清单、检查结果、安装进度与运行时状态
+export * from "./update-contract.js";

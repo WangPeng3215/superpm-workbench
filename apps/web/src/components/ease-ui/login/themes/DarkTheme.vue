@@ -30,7 +30,7 @@
         <div class="status-bar">
           <span class="status-dot" />
           <span class="status-text">本地数据 · 保存在这台电脑</span>
-          <span class="status-value">v0.1.0</span>
+          <span class="status-value">v{{ appVersion }}</span>
         </div>
 
         <!-- ========== 登录表单（内联） ========== -->
@@ -200,6 +200,7 @@ import { ref, reactive, onMounted, onUnmounted } from "vue";
 
 // 项目 logo：复用 public/logo-mark.png
 const logoUrl = "/logo-mark.png";
+const appVersion = __APP_VERSION__;
 
 defineProps<{ loading?: boolean; error?: string }>();
 const emit = defineEmits<{ submit: [form: { username: string; password: string }] }>();

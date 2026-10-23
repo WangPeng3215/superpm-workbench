@@ -2,6 +2,7 @@
 import { onMounted, ref } from "vue";
 import type { SystemInfo } from "@superpm/shared";
 import { errorMessage, request } from "../api/client";
+import UpdatePanel from "../features/settings/UpdatePanel.vue";
 const info = ref<SystemInfo>();
 const loading = ref(false);
 const error = ref("");
@@ -22,7 +23,7 @@ onMounted(load);
   <div class="page-heading">
     <div>
       <h1>系统设置</h1>
-      <p>本地数据位置与系统建设进度。</p>
+      <p>本地数据位置、版本与更新。</p>
     </div>
     <el-button @click="load" :loading="loading">刷新信息</el-button>
   </div>
@@ -53,9 +54,11 @@ onMounted(load);
     </el-descriptions>
     <p class="setting-note">
       目前可在项目根目录的 .env
-      中配置存储位置，重启服务后生效。备份与恢复将在后续模块提供。
+      中配置存储位置，重启服务后生效。备份与恢复通过命令行工具完成，见 README
+      的「用户数据与备份」。
     </p>
   </section>
+  <UpdatePanel />
   <section v-if="info" class="surface settings-section">
     <h2>功能模块</h2>
     <div v-for="module in info.modules" :key="module.key" class="module-row">

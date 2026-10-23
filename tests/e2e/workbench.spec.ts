@@ -92,10 +92,7 @@ test("rich description and column preferences persist", async ({
   await page.getByRole("button", { name: "列设置", exact: true }).click();
   const columns = page.getByRole("dialog");
   // 列设置抽屉里的 el-checkbox 原生 input 为隐藏元素，需点击其可见 label
-  await columns
-    .locator(".el-checkbox")
-    .filter({ hasText: "需求描述" })
-    .click();
+  await columns.locator(".el-checkbox").filter({ hasText: "需求描述" }).click();
   await columns.getByRole("button", { name: "完成", exact: true }).click();
   await expect(
     page.getByRole("columnheader", { name: /需求描述/ }),
@@ -308,5 +305,21 @@ test("workbench tabs open from menu and close with route fallback", async ({
   await expect(page).toHaveURL(/\/requirements$/);
   await expect(page.locator(".topbar-tab")).toHaveCount(1);
   await expect(page.locator(".topbar-tab").first()).toContainText("需求列表");
+  expect(errors).toEqual([]);
+});
+
+test("settings shows version and update entry without contacting release source", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto("/settings");
+  const panel = page
+    .locator("section.update-panel")
+    .filter({ hasText: "版本与更新" });
+  await expect(panel).toBeVisible();
+  await expect(panel.getByText(/当前版本 \d+\.\d+\.\d+/)).toBeVisible();
+  await expect(panel.getByRole("button", { name: "检查更新" })).toBeVisible();
+  await expect(panel.getByText(/开发环境/)).toBeVisible();
   expect(errors).toEqual([]);
 });

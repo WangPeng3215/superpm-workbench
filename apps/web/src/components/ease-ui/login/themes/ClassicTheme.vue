@@ -32,7 +32,7 @@
         </div>
         <div class="brand-footer">
           <span>© 2026 superPM workbench</span>
-          <span>v0.1.0</span>
+          <span>v{{ appVersion }}</span>
         </div>
       </div>
 
@@ -141,6 +141,7 @@ import { ref, reactive } from "vue";
 
 // 项目 logo：复用 public/logo-mark.png
 const logoUrl = "/logo-mark.png";
+const appVersion = __APP_VERSION__;
 
 defineProps<{ loading?: boolean; error?: string }>();
 const emit = defineEmits<{ submit: [form: { username: string; password: string }] }>();

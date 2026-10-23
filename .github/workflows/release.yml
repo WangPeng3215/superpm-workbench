@@ -1,0 +1,50 @@
+name: Release
+on:
+  push:
+    tags:
+      - "v*"
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - name: 校验版本一致性
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          for manifest in package.json apps/server/package.json apps/web/package.json packages/shared/package.json; do
+            actual="$(node -p "require('./${manifest}').version")"
+            if [ "$actual" != "$version" ]; then
+              echo "::error::标签 $GITHUB_REF_NAME 与 ${manifest} 版本 $actual 不一致"
+              exit 1
+            fi
+          done
+      - name: 构建发布产物
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          node scripts/release/build-release.mjs \
+            --version "$version" \
+            --tag "$GITHUB_REF_NAME" \
+            --notes "$GITHUB_REF_NAME 正式发布，详见 GitHub Release。"
+      - name: 创建 GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          gh release create "$GITHUB_REF_NAME" \
+            "release/superpm-workbench-${version}-win-x64.zip" \
+            "release/superpm-workbench-${version}-update-win-x64.zip" \
+            "release/update-manifest.json" \
+            --title "superPM Workbench $GITHUB_REF_NAME" \
+            --generate-notes

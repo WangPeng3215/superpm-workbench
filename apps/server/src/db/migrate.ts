@@ -11,8 +11,22 @@ import {
 import { isAbsolute, join, relative } from "node:path";
 import { projectRoot } from "../config/index.js";
 
-export const SCHEMA_VERSION = 12;
 const defaultMigrationsDir = join(projectRoot, "apps/server/drizzle");
+
+// 版本号从迁移文件推导，避免发版时漏改常量。
+function readSchemaVersion(): number {
+  try {
+    const versions = readdirSync(defaultMigrationsDir)
+      .map((file) => /^(\d+)_.*\.sql$/.exec(file)?.[1])
+      .filter((value): value is string => value !== undefined)
+      .map(Number);
+    return versions.length ? Math.max(...versions) : 0;
+  } catch {
+    return 0;
+  }
+}
+
+export const SCHEMA_VERSION = readSchemaVersion();
 
 export function migrate(
   db: Database.Database,

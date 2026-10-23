@@ -17,6 +17,7 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "vitest run",
     "db:migrate": "npm run db:migrate -w @superpm/server",
+    "backup": "npm run backup -w @superpm/server --",
     "test:e2e": "npm run build -w @superpm/web && playwright test",
     "format": "prettier --write apps packages tests scripts *.ts *.json",
     "format:check": "prettier --check apps packages tests scripts *.ts *.json"
@@ -24,10 +25,14 @@
   "devDependencies": {
     "@playwright/test": "^1.64.0",
     "@types/node": "^22.15.0",
+    "@types/yauzl": "^3.4.0",
+    "@types/yazl": "^3.3.1",
     "concurrently": "^9.2.0",
     "prettier": "^3.9.10",
     "typescript": "~5.9.3",
-    "vitest": "^5.0.4"
+    "vitest": "^5.0.4",
+    "yauzl": "^3.4.0",
+    "yazl": "^3.3.1"
   },
   "overrides": {
     "esbuild": "^0.28.1"

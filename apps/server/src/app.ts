@@ -1,9 +1,20 @@
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, {
+  type FastifyInstance,
+  type FastifyServerOptions,
+} from "fastify";
 import fastifyStatic from "@fastify/static";
 import { ZodError, z } from "zod";
+import { timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { projectRoot, allowSystemOpen } from "./config/index.js";
+import {
+  projectRoot,
+  allowSystemOpen,
+  appVersion,
+  homePath,
+  installRoot,
+  isPackagedInstall,
+} from "./config/index.js";
 import { SCHEMA_VERSION } from "./db/migrate.js";
 import { DomainError } from "./services/requirements.js";
 import {
@@ -11,11 +22,15 @@ import {
   type ServiceContainerOptions,
 } from "./services/container.js";
 import {
+  createUpdateService,
+  type UpdateServiceOptions,
+} from "./services/updates.js";
+import {
   parseAuthCookie,
   serializeAuthCookie,
   serializeClearAuthCookie,
 } from "./services/auth.js";
-import { stages } from "@superpm/shared";
+import { stages, updateInstallRequestSchema } from "@superpm/shared";
 
 // 认证中间件写入的当前用户 ID（由 Token 校验产生）
 declare module "fastify" {
@@ -25,8 +40,13 @@ declare module "fastify" {
 }
 
 export interface CreateAppOptions extends ServiceContainerOptions {
-  logger?: boolean;
+  logger?: FastifyServerOptions["logger"];
   serveWeb?: boolean;
+  /** 更新器通过本机回环地址请求优雅停止时使用的一次性令牌 */
+  shutdownToken?: string;
+  onShutdownRequested?: () => void;
+  /** 测试或嵌入场景覆盖更新服务配置 */
+  update?: Partial<UpdateServiceOptions>;
 }
 // 登录与改密请求体校验
 const loginSchema = z
@@ -44,7 +64,7 @@ const changePasswordSchema = z
       .max(100, "新密码最多 100 位"),
   })
   .strict();
-const version = "0.1.0";
+const version = appVersion;
 const roadmap = {
   files: "文件与版本",
   issues: "问题、决策与跟进",
@@ -71,6 +91,16 @@ export async function createApp(
     artifacts: artifactService,
   } = container;
   const paths = { databasePath, workspacePath };
+  const updates = createUpdateService({
+    home: homePath,
+    installRoot,
+    appRoot: projectRoot,
+    currentVersion: version,
+    schemaVersion: SCHEMA_VERSION,
+    isPackaged: isPackagedInstall,
+    manifestUrl: process.env.SUPERPM_UPDATE_MANIFEST_URL,
+    ...options.update,
+  });
   const app = Fastify({
     logger: options.logger ?? true,
     bodyLimit: 8 * 1024 * 1024,
@@ -106,9 +136,49 @@ export async function createApp(
       .status(500)
       .send({ error: { code: "INTERNAL_ERROR", message: "服务器内部错误" } });
   });
-  app.get("/api/health", async () => ({ status: "ok", version }));
+  app.get("/api/health", async (_request, reply) => {
+    let database: "ok" | "error" = "ok";
+    try {
+      container.db.prepare("SELECT 1").get();
+    } catch {
+      database = "error";
+    }
+    if (database !== "ok") reply.status(503);
+    return {
+      status: database === "ok" ? "ok" : "degraded",
+      version,
+      schemaVersion: SCHEMA_VERSION,
+      database,
+      pid: process.pid,
+    };
+  });
+  // 更新器停止服务的唯一 HTTP 入口：只接受回环地址与运行时目录中的一次性令牌。
+  if (options.shutdownToken && options.onShutdownRequested) {
+    const expected = Buffer.from(options.shutdownToken);
+    app.post("/api/shutdown", async (request, reply) => {
+      if (!isLoopbackAddress(request.socket.remoteAddress))
+        return reply.status(403).send({
+          error: { code: "FORBIDDEN", message: "仅允许本机停止服务" },
+        });
+      const provided = request.headers["x-superpm-shutdown-token"];
+      if (
+        typeof provided !== "string" ||
+        Buffer.byteLength(provided) !== expected.length ||
+        !timingSafeEqual(Buffer.from(provided), expected)
+      )
+        return reply.status(403).send({
+          error: { code: "FORBIDDEN", message: "停止令牌无效" },
+        });
+      await reply.status(202).send({ ok: true });
+      setImmediate(() => options.onShutdownRequested?.());
+    });
+  }
   // 认证中间件：除公开端点外，全部 /api/* 均需有效会话 Cookie
-  const publicApiPaths = new Set(["/api/health", "/api/auth/login"]);
+  const publicApiPaths = new Set([
+    "/api/health",
+    "/api/auth/login",
+    "/api/shutdown",
+  ]);
   // 编辑器内容以 <img src="/api/..."> 引用阶段工作区图片，图片 raw 读取保持公开
   const publicImagePattern = /^\/api\/requirements\/\d+\/images\/[^/]+$/;
   app.addHook("onRequest", async (request, reply) => {
@@ -139,6 +209,7 @@ export async function createApp(
         name: roadmap.issues,
         status: "available",
       },
+      { key: "updates", name: "版本与更新", status: "available" },
       ...Object.entries(roadmap)
         .filter(([key]) => key !== "issues")
         .map(([key, name]) => ({
@@ -148,6 +219,12 @@ export async function createApp(
         })),
     ],
   }));
+  app.get("/api/update/status", async () => updates.status());
+  app.post("/api/update/check", async () => updates.check());
+  app.post("/api/update/install", async (request, reply) => {
+    const body = updateInstallRequestSchema.parse(request.body);
+    return reply.status(202).send(updates.startInstall(body));
+  });
   app.post("/api/auth/login", async (request, reply) => {
     const body = loginSchema.parse(request.body);
     const { user, token } = authService.login(body.username, body.password);
@@ -675,6 +752,13 @@ export async function createApp(
     await app.close();
     throw error;
   }
+}
+function isLoopbackAddress(address: string | undefined): boolean {
+  return (
+    address === "127.0.0.1" ||
+    address === "::1" ||
+    address === "::ffff:127.0.0.1"
+  );
 }
 function parseId(value: string) {
   if (!/^[1-9]\d*$/.test(value))
