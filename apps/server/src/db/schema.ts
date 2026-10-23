@@ -193,6 +193,7 @@ export const artifactNodes = sqliteTable("artifact_nodes", {
     .$type<"normal" | "missing" | "external_changed" | "conflict">()
     .notNull()
     .default("normal"),
+  isFinal: integer("is_final", { mode: "boolean" }).notNull().default(false),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });
@@ -206,6 +207,7 @@ export const artifactLinks = sqliteTable("artifact_links", {
   name: text("name").notNull(),
   url: text("url").notNull(),
   description: text("description"),
+  isFinal: integer("is_final", { mode: "boolean" }).notNull().default(false),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });

@@ -179,32 +179,35 @@ node scripts/release/rehearse-update.mjs --from release/0.2.0/superpm-workbench-
 
 ## API
 
-| 接口                                              | 用途                                     |
-| ------------------------------------------------- | ---------------------------------------- |
-| GET `/api/health`                                 | 服务状态、应用版本与 schema 版本         |
-| GET `/api/system`                                 | 运行路径与模块状态（需登录）             |
-| GET `/api/update/status`                          | 当前版本、更新锁、MCP 进程与更新进度     |
-| POST `/api/update/check`                          | 读取并缓存发布源版本清单                 |
-| POST `/api/update/install`                        | 下载校验更新包并启动独立更新器           |
-| GET `/api/requirements`                           | 搜索/筛选/排序/分页，返回主需求及子需求  |
-| POST `/api/requirements`                          | 创建需求                                 |
-| GET `/api/requirements/:id`                       | 查看需求                                 |
-| PATCH `/api/requirements/:id`                     | 部分更新需求，允许跳过/退回阶段          |
-| DELETE `/api/requirements/:id`                    | 软删除需求                               |
-| GET `/api/requirements/:id/history`               | 阶段变更历史                             |
-| GET `/api/requirements/:id/artifacts`             | 需求文档目录列表（按父目录或全需求搜索） |
-| POST `/api/requirements/:id/artifacts/folders`    | 新建文件夹                               |
-| POST `/api/requirements/:id/artifacts/files`      | 新建文件                                 |
-| POST `/api/requirements/:id/artifacts/links`      | 新建外部链接                             |
-| POST `/api/requirements/:id/artifacts/refresh`    | 扫描磁盘并同步索引                       |
-| PUT `/api/artifacts/nodes/:nodeId/content`        | 保存文档内容                             |
-| POST `/api/artifacts/nodes/:nodeId/open`          | 系统默认可打开目录；`?reveal=1` 定位文件 |
-| POST `/api/requirements/:id/artifacts/images`     | 上传图片到需求 `images/`，返回相对路径   |
-| GET `/api/requirements/:id/artifacts/image`       | 按文档相对路径读取图片                   |
-| GET `/api/requirements/:id/memory`                | 读取需求记忆（懒初始化）                 |
-| GET `/api/requirements/:id/directory`             | 需求物理目录与初始化状态                 |
-| POST `/api/requirements/:id/directory/initialize` | 幂等初始化默认目录与系统级资源           |
-| POST `/api/requirements/:id/directory/repair`     | 显式补建缺失的默认结构                   |
+| 接口                                              | 用途                                             |
+| ------------------------------------------------- | ------------------------------------------------ |
+| GET `/api/health`                                 | 服务状态、应用版本与 schema 版本                 |
+| GET `/api/system`                                 | 运行路径与模块状态（需登录）                     |
+| GET `/api/update/status`                          | 当前版本、更新锁、MCP 进程与更新进度             |
+| POST `/api/update/check`                          | 读取并缓存发布源版本清单                         |
+| POST `/api/update/install`                        | 下载校验更新包并启动独立更新器                   |
+| GET `/api/requirements`                           | 搜索/筛选/排序/分页，返回主需求及子需求          |
+| POST `/api/requirements`                          | 创建需求                                         |
+| GET `/api/requirements/:id`                       | 查看需求                                         |
+| PATCH `/api/requirements/:id`                     | 部分更新需求，允许跳过/退回阶段                  |
+| DELETE `/api/requirements/:id`                    | 软删除需求                                       |
+| GET `/api/requirements/:id/history`               | 阶段变更历史                                     |
+| GET `/api/requirements/:id/artifacts`             | 需求文档目录列表（按父目录或全需求搜索）         |
+| POST `/api/requirements/:id/artifacts/folders`    | 新建文件夹                                       |
+| POST `/api/requirements/:id/artifacts/files`      | 新建文件                                         |
+| POST `/api/requirements/:id/artifacts/links`      | 新建外部链接                                     |
+| POST `/api/requirements/:id/artifacts/refresh`    | 扫描磁盘并同步索引                               |
+| PUT `/api/artifacts/nodes/:nodeId/content`        | 保存文档内容                                     |
+| PATCH `/api/artifacts/nodes/:nodeId/final`        | 标记或取消文件的最终确认版本                     |
+| PATCH `/api/artifacts/links/:linkId/final`        | 标记或取消链接的最终确认版本                     |
+| POST `/api/artifacts/nodes/:nodeId/open`          | 打开目录或在文件夹中定位；文件默认程序打开需开关 |
+| POST `/api/requirements/:id/directory/open`       | 打开需求内物理目录（留空为需求根目录）           |
+| POST `/api/requirements/:id/artifacts/images`     | 上传图片到需求 `images/`，返回相对路径           |
+| GET `/api/requirements/:id/artifacts/image`       | 按文档相对路径读取图片                           |
+| GET `/api/requirements/:id/memory`                | 读取需求记忆（懒初始化）                         |
+| GET `/api/requirements/:id/directory`             | 需求物理目录与初始化状态                         |
+| POST `/api/requirements/:id/directory/initialize` | 幂等初始化默认目录与系统级资源                   |
+| POST `/api/requirements/:id/directory/repair`     | 显式补建缺失的默认结构                           |
 
 输入字段与枚举见 `packages/shared/src/index.ts`。分页总数按主需求计算；子需求匹配筛选时携带父需求作为上下文。统一错误响应 `{ error: { code, message, details? } }`。
 

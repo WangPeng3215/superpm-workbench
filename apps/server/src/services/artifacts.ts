@@ -5,6 +5,7 @@ import {
   artifactFolderCreateSchema,
   artifactLinkCreateSchema,
   artifactLinkUpdateSchema,
+  artifactFinalSchema,
   artifactMoveSchema,
   artifactRefreshSchema,
   artifactRenameSchema,
@@ -66,6 +67,7 @@ export interface ArtifactNodeRow {
   indexed_at: string;
   content_hash: string | null;
   status: ArtifactStatus;
+  is_final: number;
   created_at: string;
   updated_at: string;
 }
@@ -76,6 +78,7 @@ export interface ArtifactLinkRow {
   name: string;
   url: string;
   description: string | null;
+  is_final: number;
   created_at: string;
   updated_at: string;
 }
@@ -93,6 +96,7 @@ function toNode(row: ArtifactNodeRow): ArtifactNode {
     modifiedAt: row.modified_at,
     indexedAt: row.indexed_at,
     status: row.status,
+    isFinal: Boolean(row.is_final),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -105,6 +109,7 @@ function toLink(row: ArtifactLinkRow): ArtifactLink {
     name: row.name,
     url: row.url,
     description: row.description,
+    isFinal: Boolean(row.is_final),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -626,6 +631,19 @@ export class ArtifactService {
     })();
   }
 
+  // ===== 最终确认版本 =====
+
+  setNodeFinal(nodeId: number, input: unknown): ArtifactNode {
+    const data = artifactFinalSchema.parse(input);
+    const node = toNode(this.nodeRow(nodeId));
+    if (node.nodeType === "folder")
+      throw new DomainError("VALIDATION_ERROR", "文件夹不支持标记最终版");
+    this.db
+      .prepare("UPDATE artifact_nodes SET is_final=?, updated_at=? WHERE id=?")
+      .run(data.isFinal ? 1 : 0, new Date().toISOString(), node.id);
+    return toNode(this.nodeRow(node.id));
+  }
+
   // ===== 内容读写（编辑器 / raw）=====
 
   /** 读取文本内容（Markdown 编辑器等）：磁盘缺失时标记 missing 并返回 404 */
@@ -831,23 +849,39 @@ export class ArtifactService {
     };
   }
 
-  /** 本地默认程序打开：总开关关闭时拒绝（与旧体系同一机制） */
-  /** 本地打开：目录进入资源管理器；文件默认程序打开，reveal 时定位并选中 */
+  /** 打开物理位置：目录进入资源管理器；文件默认程序打开，reveal 时定位并选中 */
   openSystem(nodeId: number, options: { reveal?: boolean } = {}): void {
-    if (!allowSystemOpen)
+    const node = toNode(this.nodeRow(nodeId));
+    if (node.nodeType === "folder" && options.reveal)
+      throw new DomainError("VALIDATION_ERROR", "目录不支持定位文件");
+    // 打开目录与在文件夹中定位只做展示；仅“用默认程序打开文件”受执行开关约束
+    if (node.nodeType === "file" && !options.reveal && !allowSystemOpen)
       throw new DomainError(
         "FORBIDDEN",
         "本地程序打开功能未启用（需设置 SUPERPM_ALLOW_SYSTEM_OPEN=1）",
         403,
       );
-    const node = toNode(this.nodeRow(nodeId));
-    if (node.nodeType === "folder" && options.reveal)
-      throw new DomainError("VALIDATION_ERROR", "目录不支持定位文件");
     const path = this.resolvePath(node.requirementId, node.relativePath, false);
     this.assertOnDisk(node, path);
     const { command, args } = buildSystemOpenCommand(path, {
       reveal: options.reveal,
     });
+    const child = spawn(command, args, {
+      detached: true,
+      stdio: "ignore",
+    });
+    child.unref();
+  }
+
+  /** 打开需求内物理目录（relativePath 为空表示需求根目录） */
+  openDirectory(requirementId: number, relativePath = ""): void {
+    this.requirements.get(requirementId);
+    const path = this.resolvePath(requirementId, relativePath, false);
+    if (!existsSync(path))
+      throw new DomainError("NOT_FOUND", "目录不存在，请重新初始化或刷新", 404);
+    if (!statSync(path).isDirectory())
+      throw new DomainError("VALIDATION_ERROR", "目标不是目录");
+    const { command, args } = buildSystemOpenCommand(path);
     const child = spawn(command, args, {
       detached: true,
       stdio: "ignore",
@@ -1081,6 +1115,15 @@ export class ArtifactService {
         new Date().toISOString(),
         link.id,
       );
+    return toLink(this.linkRow(link.id));
+  }
+
+  setLinkFinal(linkId: number, input: unknown): ArtifactLink {
+    const data = artifactFinalSchema.parse(input);
+    const link = toLink(this.linkRow(linkId));
+    this.db
+      .prepare("UPDATE artifact_links SET is_final=?, updated_at=? WHERE id=?")
+      .run(data.isFinal ? 1 : 0, new Date().toISOString(), link.id);
     return toLink(this.linkRow(link.id));
   }
 

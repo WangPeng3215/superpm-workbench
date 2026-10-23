@@ -356,6 +356,70 @@ describe("artifact service", () => {
     expect(root.links).toHaveLength(0);
   });
 
+  it("最终版标记：文件与链接可切换并持久化，文件夹拒绝", async () => {
+    const folder = (await createFolder("定稿资料")).json();
+    const file = (
+      await createFile("定稿方案.md", folder.id, "# 定稿\n")
+    ).json();
+    const link = await app.inject({
+      method: "POST",
+      url: `/api/requirements/${requirementId}/artifacts/links`,
+      payload: {
+        folderNodeId: folder.id,
+        name: "定稿链接",
+        url: "https://example.com/final",
+      },
+    });
+    expect(link.statusCode).toBe(201);
+
+    const marked = await app.inject({
+      method: "PATCH",
+      url: `/api/artifacts/nodes/${file.id}/final`,
+      payload: { isFinal: true },
+    });
+    expect(marked.statusCode).toBe(200);
+    expect(marked.json()).toMatchObject({ id: file.id, isFinal: true });
+    const listed = await list(folder.id);
+    expect(
+      listed.files.find((item: { id: number }) => item.id === file.id),
+    ).toMatchObject({ isFinal: true });
+
+    const cleared = await app.inject({
+      method: "PATCH",
+      url: `/api/artifacts/nodes/${file.id}/final`,
+      payload: { isFinal: false },
+    });
+    expect(cleared.json().isFinal).toBe(false);
+
+    const folderRejected = await app.inject({
+      method: "PATCH",
+      url: `/api/artifacts/nodes/${folder.id}/final`,
+      payload: { isFinal: true },
+    });
+    expect(folderRejected.statusCode).toBe(400);
+
+    const linkMarked = await app.inject({
+      method: "PATCH",
+      url: `/api/artifacts/links/${link.json().id}/final`,
+      payload: { isFinal: true },
+    });
+    expect(linkMarked.statusCode).toBe(200);
+    expect(linkMarked.json()).toMatchObject({ isFinal: true });
+    const folderContents = await list(folder.id);
+    expect(
+      folderContents.links.find(
+        (item: { id: number }) => item.id === link.json().id,
+      ),
+    ).toMatchObject({ isFinal: true });
+
+    const invalid = await app.inject({
+      method: "PATCH",
+      url: `/api/artifacts/nodes/${file.id}/final`,
+      payload: { isFinal: "yes" },
+    });
+    expect(invalid.statusCode).toBe(400);
+  });
+
   it("名称搜索返回全需求范围匹配（含相对路径）", async () => {
     const folder = (await createFolder("资料库")).json();
     await createFile("调研笔记.md", folder.id, "x");

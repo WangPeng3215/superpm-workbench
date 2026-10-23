@@ -453,7 +453,7 @@ describe("migrations 0005（资产与问题管理）", () => {
   });
   it("SCHEMA_VERSION 与已应用迁移数一致", () => {
     migrate(db);
-    expect(SCHEMA_VERSION).toBe(12);
+    expect(SCHEMA_VERSION).toBe(13);
     expect(appliedVersions(db)).toHaveLength(SCHEMA_VERSION);
   });
 });
@@ -843,5 +843,20 @@ describe("migrations 0011（问题记录模型）", () => {
     // 重复迁移不报错、版本不重复
     migrate(db);
     expect(appliedVersions(db)).toEqual(ALL_VERSIONS);
+  });
+});
+
+describe("migrations 0013（文件与链接最终版标记）", () => {
+  it("两类记录新增 is_final，默认 0", () => {
+    migrate(db);
+    for (const table of ["artifact_nodes", "artifact_links"]) {
+      const column = (
+        db.prepare(`PRAGMA table_info(${table})`).all() as {
+          name: string;
+          dflt_value: string | null;
+        }[]
+      ).find((item) => item.name === "is_final");
+      expect(column).toMatchObject({ name: "is_final", dflt_value: "0" });
+    }
   });
 });

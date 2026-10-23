@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import {
   ArrowDown,
   Document,
   Folder,
+  FolderOpened,
   Grid,
   Link as LinkIcon,
   MoreFilled,
@@ -13,6 +14,8 @@ import {
   Refresh,
   Search,
   Sort,
+  Star,
+  StarFilled,
 } from "@element-plus/icons-vue";
 import {
   artifactMemoryName,
@@ -576,6 +579,47 @@ async function openLocally(node: ArtifactNode, reveal = false) {
     ElMessage.error(errorMessage(e));
   }
 }
+async function openCurrentFolder() {
+  if (searching.value) return;
+  try {
+    await artifactApi.openDirectory(
+      props.requirementId,
+      directory.value?.parentPath ?? "",
+    );
+  } catch (e) {
+    ElMessage.error(errorMessage(e));
+  }
+}
+// ===== 最终确认版本（仅文件与链接）=====
+const finalPending = reactive(new Set<string>());
+const finalPendingFor = (kind: "node" | "link", id: number) =>
+  finalPending.has(`${kind}-${id}`);
+async function toggleNodeFinal(node: ArtifactNode) {
+  const key = `node-${node.id}`;
+  if (finalPending.has(key)) return;
+  finalPending.add(key);
+  try {
+    const updated = await artifactApi.setNodeFinal(node.id, !node.isFinal);
+    node.isFinal = updated.isFinal;
+  } catch (e) {
+    ElMessage.error(errorMessage(e));
+  } finally {
+    finalPending.delete(key);
+  }
+}
+async function toggleLinkFinal(link: ArtifactLink) {
+  const key = `link-${link.id}`;
+  if (finalPending.has(key)) return;
+  finalPending.add(key);
+  try {
+    const updated = await artifactApi.setLinkFinal(link.id, !link.isFinal);
+    link.isFinal = updated.isFinal;
+  } catch (e) {
+    ElMessage.error(errorMessage(e));
+  } finally {
+    finalPending.delete(key);
+  }
+}
 function onFileCommand(command: string | number | object, node: ArtifactNode) {
   const action = String(command);
   if (action === "open") void openFile(node);
@@ -661,6 +705,15 @@ function onLinkCommand(command: string | number | object, link: ArtifactLink) {
             </el-dropdown-menu>
           </template>
         </el-dropdown>
+        <el-tooltip content="在资源管理器中打开当前目录">
+          <el-button
+            :icon="FolderOpened"
+            :disabled="searching || loading"
+            @click="openCurrentFolder"
+          >
+            在资源管理器中打开
+          </el-button>
+        </el-tooltip>
         <el-tooltip content="扫描磁盘并同步索引">
           <el-button
             class="refresh-btn"
@@ -739,13 +792,14 @@ function onLinkCommand(command: string | number | object, link: ArtifactLink) {
               class="doc-more-btn"
               :aria-label="`「${folder.name}」操作菜单`"
               @click.stop
+              @keydown.stop
             >
               <el-icon><MoreFilled /></el-icon>
             </button>
             <template #dropdown>
               <el-dropdown-menu>
                 <el-dropdown-item command="enter">进入</el-dropdown-item>
-                <el-dropdown-item v-if="systemOpen" command="open-folder"
+                <el-dropdown-item command="open-folder"
                   >在资源管理器中打开</el-dropdown-item
                 >
                 <el-dropdown-item v-if="!isProtected(folder)" command="rename"
@@ -786,8 +840,35 @@ function onLinkCommand(command: string | number | object, link: ArtifactLink) {
               effect="plain"
               >需求记忆</el-tag
             >
+            <el-tooltip
+              :content="file.isFinal ? '取消最终版标记' : '标记为最终版'"
+              placement="top"
+            >
+              <button
+                type="button"
+                class="doc-final-btn"
+                :class="{
+                  'is-final': file.isFinal,
+                  'is-pending': finalPendingFor('node', file.id),
+                }"
+                :aria-label="`「${file.name}」${file.isFinal ? '取消最终版标记' : '标记为最终版'}`"
+                :aria-pressed="file.isFinal"
+                @click.stop="toggleNodeFinal(file)"
+                @keydown.stop
+              >
+                <el-icon>
+                  <StarFilled v-if="file.isFinal" />
+                  <Star v-else />
+                </el-icon>
+              </button>
+            </el-tooltip>
           </h3>
-          <p class="doc-card-meta">{{ metaOf(file) }}</p>
+          <p class="doc-card-meta">
+            <template v-if="file.isFinal"
+              ><span class="final-label">最终版</span
+              ><span class="meta-sep"> · </span></template
+            >{{ metaOf(file) }}
+          </p>
           <el-tag
             v-if="file.status !== 'normal'"
             class="doc-card-status"
@@ -808,6 +889,7 @@ function onLinkCommand(command: string | number | object, link: ArtifactLink) {
               class="doc-more-btn"
               :aria-label="`「${file.name}」操作菜单`"
               @click.stop
+              @keydown.stop
             >
               <el-icon><MoreFilled /></el-icon>
             </button>
@@ -818,7 +900,7 @@ function onLinkCommand(command: string | number | object, link: ArtifactLink) {
                 <el-dropdown-item v-if="systemOpen" command="open-locally"
                   >本地程序打开</el-dropdown-item
                 >
-                <el-dropdown-item v-if="systemOpen" command="reveal"
+                <el-dropdown-item command="reveal"
                   >在文件夹中显示</el-dropdown-item
                 >
                 <el-dropdown-item
@@ -852,9 +934,36 @@ function onLinkCommand(command: string | number | object, link: ArtifactLink) {
           <div class="doc-card-icon link">
             <el-icon><LinkIcon /></el-icon>
           </div>
-          <h3 class="doc-card-name" :title="link.name">{{ link.name }}</h3>
+          <h3 class="doc-card-name" :title="link.name">
+            <span class="name-text">{{ link.name }}</span>
+            <el-tooltip
+              :content="link.isFinal ? '取消最终版标记' : '标记为最终版'"
+              placement="top"
+            >
+              <button
+                type="button"
+                class="doc-final-btn"
+                :class="{
+                  'is-final': link.isFinal,
+                  'is-pending': finalPendingFor('link', link.id),
+                }"
+                :aria-label="`「${link.name}」${link.isFinal ? '取消最终版标记' : '标记为最终版'}`"
+                :aria-pressed="link.isFinal"
+                @click.stop="toggleLinkFinal(link)"
+                @keydown.stop
+              >
+                <el-icon>
+                  <StarFilled v-if="link.isFinal" />
+                  <Star v-else />
+                </el-icon>
+              </button>
+            </el-tooltip>
+          </h3>
           <p class="doc-card-meta">
-            {{ hostOf(link.url) }}
+            <template v-if="link.isFinal"
+              ><span class="final-label">最终版</span
+              ><span class="meta-sep"> · </span></template
+            >{{ hostOf(link.url) }}
             <span v-if="link.description" class="link-desc"
               >· {{ link.description }}</span
             >
@@ -872,6 +981,7 @@ function onLinkCommand(command: string | number | object, link: ArtifactLink) {
               class="doc-more-btn"
               :aria-label="`「${link.name}」操作菜单`"
               @click.stop
+              @keydown.stop
             >
               <el-icon><MoreFilled /></el-icon>
             </button>
@@ -1086,7 +1196,10 @@ function onLinkCommand(command: string | number | object, link: ArtifactLink) {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex: none;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  min-width: 0;
 }
 .doc-search {
   width: 150px;
@@ -1176,6 +1289,50 @@ function onLinkCommand(command: string | number | object, link: ArtifactLink) {
 }
 .memory-tag {
   flex: none;
+}
+.doc-final-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: var(--text-faint);
+  font-size: 14px;
+  cursor: pointer;
+  flex: none;
+  transition:
+    color 0.15s ease,
+    background-color 0.15s ease;
+}
+.doc-final-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+}
+.doc-final-btn.is-final {
+  color: var(--brand);
+}
+.doc-final-btn.is-final:hover {
+  background: var(--bg-brand-soft);
+}
+.doc-final-btn.is-pending {
+  opacity: 0.45;
+  pointer-events: none;
+}
+.doc-final-btn:focus-visible {
+  outline: 2px solid var(--brand-ring);
+  outline-offset: 1px;
+}
+.final-label {
+  color: var(--brand);
+  font-weight: 600;
+}
+.meta-sep {
+  color: var(--text-faint);
 }
 .doc-card-meta {
   margin: 0;

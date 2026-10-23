@@ -714,6 +714,8 @@ export const artifactRenameSchema = z
 export const artifactMoveSchema = z
   .object({ targetParentId: z.number().int().positive().nullable() })
   .strict();
+// 最终确认版本：仅文件与链接可标记，文件夹由服务层拒绝
+export const artifactFinalSchema = z.object({ isFinal: z.boolean() }).strict();
 // force：磁盘修改时间与索引不一致（外部修改）时，需显式确认才能覆盖保存
 export const artifactContentSaveSchema = z
   .object({
@@ -759,6 +761,8 @@ export interface ArtifactNode {
   modifiedAt: string | null;
   indexedAt: string;
   status: ArtifactStatus;
+  // 最终确认版本：仅文件可标记，文件夹恒为 false
+  isFinal: boolean;
   createdAt: string;
   updatedAt: string;
   // 文件夹卡片的直接子项数（列表接口附加）
@@ -771,6 +775,8 @@ export interface ArtifactLink {
   name: string;
   url: string;
   description: string | null;
+  // 最终确认版本标记
+  isFinal: boolean;
   createdAt: string;
   updatedAt: string;
 }

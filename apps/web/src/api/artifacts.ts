@@ -58,6 +58,11 @@ export const artifactApi = {
       method: "PATCH",
       body: JSON.stringify({ name }),
     }),
+  setNodeFinal: (nodeId: number, isFinal: boolean) =>
+    request<ArtifactNode>(`/artifacts/nodes/${nodeId}/final`, {
+      method: "PATCH",
+      body: JSON.stringify({ isFinal }),
+    }),
   move: (nodeId: number, targetParentId: number | null) =>
     request<ArtifactNode>(`/artifacts/nodes/${nodeId}/move`, {
       method: "POST",
@@ -84,6 +89,12 @@ export const artifactApi = {
       `/artifacts/nodes/${nodeId}/open${options?.reveal ? "?reveal=1" : ""}`,
       { method: "POST" },
     ),
+  // 打开需求内物理目录（relativePath 留空即需求根目录）
+  openDirectory: (requirementId: number, relativePath = "") =>
+    request<void>(`/requirements/${requirementId}/directory/open`, {
+      method: "POST",
+      body: JSON.stringify({ relativePath }),
+    }),
   createLink: (
     requirementId: number,
     payload: {
@@ -112,6 +123,11 @@ export const artifactApi = {
     }),
   removeLink: (linkId: number) =>
     request<void>(`/artifacts/links/${linkId}`, { method: "DELETE" }),
+  setLinkFinal: (linkId: number, isFinal: boolean) =>
+    request<ArtifactLink>(`/artifacts/links/${linkId}/final`, {
+      method: "PATCH",
+      body: JSON.stringify({ isFinal }),
+    }),
   memory: (requirementId: number) =>
     request<ArtifactNode>(`/requirements/${requirementId}/memory`),
   // ===== 需求物理目录与图片上传（文档 §12）=====

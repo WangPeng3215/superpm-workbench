@@ -103,6 +103,28 @@ describe("artifact open endpoint with SUPERPM_ALLOW_SYSTEM_OPEN=1", () => {
     }
   });
 
+  it("opens a file with its default handler", async () => {
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/artifacts/nodes/${fileId}/open`,
+    });
+    expect(response.statusCode).toBe(204);
+    const [command, args] = spawnMock.mock.calls[0] as unknown as [
+      string,
+      string[],
+    ];
+    if (process.platform === "win32") {
+      expect(command).toBe("cmd");
+      expect(args).toEqual(["/c", "start", "", filePath]);
+    } else if (process.platform === "darwin") {
+      expect(command).toBe("open");
+      expect(args).toEqual([filePath]);
+    } else {
+      expect(command).toBe("xdg-open");
+      expect(args).toEqual([filePath]);
+    }
+  });
+
   it("reveals a file in its folder", async () => {
     const response = await app.inject({
       method: "POST",

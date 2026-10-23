@@ -589,6 +589,14 @@ export async function createApp(
     async (request) =>
       artifactService.updateLink(parseId(request.params.linkId), request.body),
   );
+  app.patch<{ Params: { linkId: string } }>(
+    "/api/artifacts/links/:linkId/final",
+    async (request) =>
+      artifactService.setLinkFinal(
+        parseId(request.params.linkId),
+        request.body,
+      ),
+  );
   app.delete<{ Params: { linkId: string } }>(
     "/api/artifacts/links/:linkId",
     async (request, reply) => {
@@ -605,6 +613,14 @@ export async function createApp(
     "/api/artifacts/nodes/:nodeId",
     async (request) =>
       artifactService.renameNode(parseId(request.params.nodeId), request.body),
+  );
+  app.patch<{ Params: { nodeId: string } }>(
+    "/api/artifacts/nodes/:nodeId/final",
+    async (request) =>
+      artifactService.setNodeFinal(
+        parseId(request.params.nodeId),
+        request.body,
+      ),
   );
   app.post<{ Params: { nodeId: string } }>(
     "/api/artifacts/nodes/:nodeId/move",
@@ -647,18 +663,10 @@ export async function createApp(
         .send(raw.data);
     },
   );
-  // 本地默认程序打开（复用 SUPERPM_ALLOW_SYSTEM_OPEN 总开关）；?reveal=1 为“在文件夹中显示”
+  // 打开物理位置：目录与 reveal 始终可用；文件默认程序打开由服务层总开关约束
   app.post<{ Params: { nodeId: string }; Querystring: { reveal?: string } }>(
     "/api/artifacts/nodes/:nodeId/open",
     async (request, reply) => {
-      if (!allowSystemOpen)
-        return reply.status(403).send({
-          error: {
-            code: "FORBIDDEN",
-            message:
-              "本地程序打开功能未启用（需设置 SUPERPM_ALLOW_SYSTEM_OPEN=1）",
-          },
-        });
       artifactService.openSystem(parseId(request.params.nodeId), {
         reveal: request.query.reveal === "1",
       });
@@ -691,6 +699,17 @@ export async function createApp(
     "/api/requirements/:id/directory/repair",
     async (request) => directories.repair(parseId(request.params.id)),
   );
+  // 打开物理目录：relativePath 为空时打开需求根目录，便于从当前浏览位置直达磁盘
+  app.post<{
+    Params: { id: string };
+    Body: { relativePath?: string } | undefined;
+  }>("/api/requirements/:id/directory/open", async (request, reply) => {
+    artifactService.openDirectory(
+      parseId(request.params.id),
+      request.body?.relativePath ?? "",
+    );
+    return reply.status(204).send();
+  });
   // 图片上传：落盘到需求根目录 images/，返回按文档目录计算的相对路径（文档 §12.4）
   app.post<{ Params: { id: string } }>(
     "/api/requirements/:id/artifacts/images",
