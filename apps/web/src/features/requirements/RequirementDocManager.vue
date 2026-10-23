@@ -569,9 +569,9 @@ async function removeLink(link: ArtifactLink) {
 async function downloadFile(node: ArtifactNode) {
   window.open(artifactApi.rawUrl(node.id, true));
 }
-async function openLocally(node: ArtifactNode) {
+async function openLocally(node: ArtifactNode, reveal = false) {
   try {
-    await artifactApi.openLocally(node.id);
+    await artifactApi.openLocally(node.id, { reveal });
   } catch (e) {
     ElMessage.error(errorMessage(e));
   }
@@ -581,6 +581,7 @@ function onFileCommand(command: string | number | object, node: ArtifactNode) {
   if (action === "open") void openFile(node);
   else if (action === "download") void downloadFile(node);
   else if (action === "open-locally") void openLocally(node);
+  else if (action === "reveal") void openLocally(node, true);
   else if (action === "rename") void startRename(node);
   else if (action === "move") startMove(node);
   else if (action === "delete") void removeNode(node);
@@ -591,6 +592,7 @@ function onFolderCommand(
 ) {
   const action = String(command);
   if (action === "enter") enter(node);
+  else if (action === "open-folder") void openLocally(node);
   else if (action === "rename") void startRename(node);
   else if (action === "move") startMove(node);
   else if (action === "delete") void removeNode(node);
@@ -743,6 +745,9 @@ function onLinkCommand(command: string | number | object, link: ArtifactLink) {
             <template #dropdown>
               <el-dropdown-menu>
                 <el-dropdown-item command="enter">进入</el-dropdown-item>
+                <el-dropdown-item v-if="systemOpen" command="open-folder"
+                  >在资源管理器中打开</el-dropdown-item
+                >
                 <el-dropdown-item v-if="!isProtected(folder)" command="rename"
                   >重命名</el-dropdown-item
                 >
@@ -812,6 +817,9 @@ function onLinkCommand(command: string | number | object, link: ArtifactLink) {
                 <el-dropdown-item command="download">下载</el-dropdown-item>
                 <el-dropdown-item v-if="systemOpen" command="open-locally"
                   >本地程序打开</el-dropdown-item
+                >
+                <el-dropdown-item v-if="systemOpen" command="reveal"
+                  >在文件夹中显示</el-dropdown-item
                 >
                 <el-dropdown-item
                   v-if="!isProtected(file)"

@@ -79,8 +79,11 @@ export const artifactApi = {
     }),
   rawUrl: (nodeId: number, download = false) =>
     `/api/artifacts/nodes/${nodeId}/raw${download ? "?download=1" : ""}`,
-  openLocally: (nodeId: number) =>
-    request<void>(`/artifacts/nodes/${nodeId}/open`, { method: "POST" }),
+  openLocally: (nodeId: number, options?: { reveal?: boolean }) =>
+    request<void>(
+      `/artifacts/nodes/${nodeId}/open${options?.reveal ? "?reveal=1" : ""}`,
+      { method: "POST" },
+    ),
   createLink: (
     requirementId: number,
     payload: {

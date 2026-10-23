@@ -570,8 +570,8 @@ export async function createApp(
         .send(raw.data);
     },
   );
-  // 本地默认程序打开（复用 SUPERPM_ALLOW_SYSTEM_OPEN 总开关）
-  app.post<{ Params: { nodeId: string } }>(
+  // 本地默认程序打开（复用 SUPERPM_ALLOW_SYSTEM_OPEN 总开关）；?reveal=1 为“在文件夹中显示”
+  app.post<{ Params: { nodeId: string }; Querystring: { reveal?: string } }>(
     "/api/artifacts/nodes/:nodeId/open",
     async (request, reply) => {
       if (!allowSystemOpen)
@@ -582,7 +582,9 @@ export async function createApp(
               "本地程序打开功能未启用（需设置 SUPERPM_ALLOW_SYSTEM_OPEN=1）",
           },
         });
-      artifactService.openSystem(parseId(request.params.nodeId));
+      artifactService.openSystem(parseId(request.params.nodeId), {
+        reveal: request.query.reveal === "1",
+      });
       return reply.status(204).send();
     },
   );

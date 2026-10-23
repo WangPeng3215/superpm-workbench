@@ -49,6 +49,7 @@ import { DomainError, RequirementService } from "./requirements.js";
 import { RequirementDirectoryResolver } from "./requirement-directory.js";
 import { allowSystemOpen } from "../config/index.js";
 import { MIME_BY_EXTENSION } from "./requirement-files.js";
+import { buildSystemOpenCommand } from "./system-open.js";
 
 // 文件/目录索引行（snake_case，与迁移 0007 列名一致）
 export interface ArtifactNodeRow {
@@ -831,7 +832,8 @@ export class ArtifactService {
   }
 
   /** 本地默认程序打开：总开关关闭时拒绝（与旧体系同一机制） */
-  openSystem(nodeId: number): void {
+  /** 本地打开：目录进入资源管理器；文件默认程序打开，reveal 时定位并选中 */
+  openSystem(nodeId: number, options: { reveal?: boolean } = {}): void {
     if (!allowSystemOpen)
       throw new DomainError(
         "FORBIDDEN",
@@ -839,18 +841,14 @@ export class ArtifactService {
         403,
       );
     const node = toNode(this.nodeRow(nodeId));
-    if (node.nodeType !== "file")
-      throw new DomainError("VALIDATION_ERROR", "目录不支持本地程序打开");
+    if (node.nodeType === "folder" && options.reveal)
+      throw new DomainError("VALIDATION_ERROR", "目录不支持定位文件");
     const path = this.resolvePath(node.requirementId, node.relativePath, false);
     this.assertOnDisk(node, path);
-    // Windows 用 start，macOS 用 open，其余走 xdg-open；detached 避免阻塞请求
-    const command =
-      process.platform === "win32"
-        ? ["cmd", "/c", "start", "", path]
-        : process.platform === "darwin"
-          ? ["open", path]
-          : ["xdg-open", path];
-    const child = spawn(command[0], command.slice(1), {
+    const { command, args } = buildSystemOpenCommand(path, {
+      reveal: options.reveal,
+    });
+    const child = spawn(command, args, {
       detached: true,
       stdio: "ignore",
     });

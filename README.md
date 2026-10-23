@@ -121,6 +121,24 @@ npm run test:e2e
 
 CI 流水线位于 `.github/workflows/ci.yml`（与模板 `docs/ci/ci.yml` 一致），在 Windows runner 上执行安装、类型检查、单元测试、构建与 Playwright 浏览器验收。推送含 workflows 目录改动的提交需要 GitHub 凭证具备 `workflow` scope，缺失时整个提交会被远端拒收；可用 `gh auth refresh --hostname github.com -s workflow` 补齐。
 
+## 版本管理
+
+版本号格式为 `MAJOR.MINOR.PATCH`。定级依据是**一次正式发布相对上一正式版本的整体最高变更级别**，不按单个提交计算；每次发布只升一位，低位归零。
+
+| 级别    | 适用变更                                       | 示例    |
+| ------- | ---------------------------------------------- | ------- |
+| `0.0.x` | 小幅修改：页面、文案、样式、现有功能内的小修   | `0.1.1` |
+| `0.x.0` | 功能迭代：新功能、重构、数据库结构调整         | `0.2.0` |
+| `x.0.0` | 重大版本：重要模块、大批量更新、重大架构调整或里程碑 | `1.0.0` |
+
+- 主版本谨慎升级，普通功能迭代不触发。
+- 数据库结构调整不自动触发主版本，但必须提供迁移方案，升级前备份、迁移失败可恢复。
+- 同一版本号只对应一个正式产物，已发布版本不可覆盖；需要修复时用新版本号重新发布。
+- 正式发布需打 Git 标签（如 `v0.2.0`），Git 标签、应用内版本号、发布包版本号三者一致，并记录版本号、日期、变更内容与升级说明。
+- 日常开发提交不修改版本号；只在准备正式发布时确定最终版本号。
+
+版本号以根 `package.json` 的 `version` 字段为准，发布时同步 `apps/server`、`apps/web`、`packages/shared` 与部署包。本规范自下一个正式版本起执行。
+
 ## API
 
 | 接口                                              | 用途                                     |
@@ -139,6 +157,7 @@ CI 流水线位于 `.github/workflows/ci.yml`（与模板 `docs/ci/ci.yml` 一�
 | POST `/api/requirements/:id/artifacts/links`      | 新建外部链接                             |
 | POST `/api/requirements/:id/artifacts/refresh`    | 扫描磁盘并同步索引                       |
 | PUT `/api/artifacts/nodes/:nodeId/content`        | 保存文档内容                             |
+| POST `/api/artifacts/nodes/:nodeId/open`          | 系统默认可打开目录；`?reveal=1` 定位文件 |
 | POST `/api/requirements/:id/artifacts/images`     | 上传图片到需求 `images/`，返回相对路径   |
 | GET `/api/requirements/:id/artifacts/image`       | 按文档相对路径读取图片                   |
 | GET `/api/requirements/:id/memory`                | 读取需求记忆（懒初始化）                 |
