@@ -80,6 +80,20 @@ describe("artifact service", () => {
     });
     return response.json();
   }
+  async function upload(
+    name: string,
+    content: Buffer | string,
+    parentId: number | null = null,
+  ) {
+    const params = new URLSearchParams({ name });
+    if (parentId) params.set("parentId", String(parentId));
+    return app.inject({
+      method: "POST",
+      url: `/api/requirements/${requirementId}/artifacts/upload?${params.toString()}`,
+      headers: { "content-type": "application/octet-stream" },
+      payload: typeof content === "string" ? Buffer.from(content) : content,
+    });
+  }
 
   it("创建需求时初始化需求记忆（模板落盘且含关键章节）", async () => {
     const memory = await app.inject({
@@ -418,6 +432,77 @@ describe("artifact service", () => {
       payload: { isFinal: "yes" },
     });
     expect(invalid.statusCode).toBe(400);
+  });
+
+  it("上传文件：子目录落盘、重名自动改名、非法名称与目标校验", async () => {
+    const folder = (await createFolder("上传资料")).json();
+    const content = "# 上传\n";
+    const first = await upload("上传文档.md", content, folder.id);
+    expect(first.statusCode).toBe(201);
+    expect(first.json()).toMatchObject({
+      parentId: folder.id,
+      name: "上传文档.md",
+      extension: ".md",
+      mimeType: "text/markdown; charset=utf-8",
+      sizeBytes: Buffer.byteLength(content),
+    });
+    expect(
+      readFileSync(join(requirementRoot(), "上传资料", "上传文档.md"), "utf8"),
+    ).toBe(content);
+    const listed = await list(folder.id);
+    expect(
+      listed.files.find((item: { id: number }) => item.id === first.json().id),
+    ).toMatchObject({ name: "上传文档.md" });
+
+    // 同名不覆盖，自动追加序号后再次落盘
+    const second = await upload("上传文档.md", "第二份", folder.id);
+    expect(second.statusCode).toBe(201);
+    expect(second.json().name).toBe("上传文档-1.md");
+    expect(
+      readFileSync(
+        join(requirementRoot(), "上传资料", "上传文档-1.md"),
+        "utf8",
+      ),
+    ).toBe("第二份");
+
+    // 二进制内容按原始字节落盘，未知扩展名以二进制返回
+    const binaryContent = Buffer.from([0, 1, 2, 255]);
+    const binary = await upload("原始数据.bin", binaryContent, folder.id);
+    expect(binary.statusCode).toBe(201);
+    expect(binary.json()).toMatchObject({
+      extension: ".bin",
+      mimeType: null,
+      sizeBytes: 4,
+    });
+    const raw = await app.inject({
+      method: "GET",
+      url: `/api/artifacts/nodes/${binary.json().id}/raw`,
+    });
+    expect(raw.statusCode).toBe(200);
+    expect(raw.rawPayload.equals(binaryContent)).toBe(true);
+
+    // 需求根目录也可直接上传
+    const rootFile = await upload("根目录说明.txt", "root");
+    expect(rootFile.statusCode).toBe(201);
+    const root = await list();
+    expect(
+      root.files.some((item: { id: number }) => item.id === rootFile.json().id),
+    ).toBe(true);
+
+    const missingName = await app.inject({
+      method: "POST",
+      url: `/api/requirements/${requirementId}/artifacts/upload`,
+      headers: { "content-type": "application/octet-stream" },
+      payload: Buffer.from("x"),
+    });
+    expect(missingName.statusCode).toBe(400);
+    const invalidName = await upload("越界/文件.txt", "x");
+    expect(invalidName.statusCode).toBe(400);
+    const badParent = await upload("x.txt", "x", 999999);
+    expect(badParent.statusCode).toBe(404);
+    const fileAsParent = await upload("x.txt", "x", first.json().id);
+    expect(fileAsParent.statusCode).toBe(400);
+    expect(existsSync(join(requirementRoot(), "上传资料", "越界"))).toBe(false);
   });
 
   it("名称搜索返回全需求范围匹配（含相对路径）", async () => {

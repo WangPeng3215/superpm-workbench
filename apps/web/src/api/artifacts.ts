@@ -43,6 +43,18 @@ export const artifactApi = {
           : { parentId, name, initialContent },
       ),
     }),
+  uploadFile: (requirementId: number, parentId: number | null, file: File) => {
+    const params = new URLSearchParams({ name: file.name });
+    if (parentId !== null) params.set("parentId", String(parentId));
+    return request<ArtifactNode>(
+      `/requirements/${requirementId}/artifacts/upload?${params.toString()}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/octet-stream" },
+        body: file,
+      },
+    );
+  },
   refresh: (requirementId: number, relativePath?: string) =>
     request<ArtifactRefreshResult>(
       `/requirements/${requirementId}/artifacts/refresh`,

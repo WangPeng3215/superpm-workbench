@@ -10,6 +10,8 @@ import {
   artifactRefreshSchema,
   artifactRenameSchema,
   artifactImageUploadSchema,
+  artifactUploadMaxBytes,
+  artifactUploadMaxLabel,
   artifactMemoryName,
   requirementImagesFolder,
   isSafeExternalUrl,
@@ -465,6 +467,56 @@ export class ArtifactService {
         sizeBytes: stat.size,
         modifiedAt: stat.mtime.toISOString(),
         contentHash: this.hashOf(content),
+      },
+    );
+  }
+
+  /**
+   * 上传本地文件到指定文件夹：原名写入磁盘并登记索引。
+   * 同名时自动追加 -1、-2 等后缀，不覆盖已有文件（与图片上传策略一致）。
+   */
+  uploadFile(
+    requirementId: number,
+    parentId: number | null,
+    rawName: string,
+    data: Buffer,
+  ): ArtifactNode {
+    if (!Buffer.isBuffer(data))
+      throw new DomainError("VALIDATION_ERROR", "缺少文件内容");
+    if (data.length > artifactUploadMaxBytes)
+      throw new DomainError(
+        "PAYLOAD_TOO_LARGE",
+        `单个文件不能超过 ${artifactUploadMaxLabel}`,
+        413,
+      );
+    const requestedName = this.assertNodeName(rawName);
+    const parent = this.requireParent(requirementId, parentId);
+    this.assertParentOnDisk(parent);
+    const name = this.uniqueUploadName(
+      requirementId,
+      parentId,
+      parent,
+      requestedName,
+    );
+    const relativePath = this.childPath(parent, name);
+    const target = this.resolvePath(requirementId, relativePath, false);
+    writeFileSync(target, data, { flag: "wx" });
+    const stat = statSync(target);
+    const extension = extensionOf(name);
+    return this.insertNode(
+      requirementId,
+      parentId,
+      "file",
+      name,
+      relativePath,
+      {
+        extension,
+        mimeType: extension
+          ? (MIME_BY_EXTENSION[extension.slice(1)] ?? null)
+          : null,
+        sizeBytes: stat.size,
+        modifiedAt: stat.mtime.toISOString(),
+        contentHash: this.hashOf(data),
       },
     );
   }
@@ -1291,6 +1343,53 @@ export class ArtifactService {
         "父目录在磁盘上已缺失，请先刷新目录树或恢复该目录",
         409,
       );
+  }
+
+  // 同级重名检测：上传需要在保留原名与自动改名之间判断，不抛错
+  private siblingExists(
+    requirementId: number,
+    parentId: number | null,
+    name: string,
+  ): boolean {
+    const node = this.db
+      .prepare(
+        "SELECT id FROM artifact_nodes WHERE requirement_id=? AND parent_id IS ? AND name=?",
+      )
+      .get(requirementId, parentId, name);
+    if (node) return true;
+    const link = this.db
+      .prepare(
+        "SELECT id FROM artifact_links WHERE requirement_id=? AND folder_node_id IS ? AND name=?",
+      )
+      .get(requirementId, parentId, name);
+    return Boolean(link);
+  }
+
+  // 同名上传不覆盖：保留扩展名并追加 -1、-2 等安全后缀
+  private uniqueUploadName(
+    requirementId: number,
+    parentId: number | null,
+    parent: ArtifactNode | null,
+    name: string,
+  ): string {
+    const extension = extname(name);
+    const stem = extension ? name.slice(0, -extension.length) : name;
+    const taken = (candidate: string) =>
+      existsSync(
+        this.resolvePath(
+          requirementId,
+          this.childPath(parent, candidate),
+          false,
+        ),
+      ) || this.siblingExists(requirementId, parentId, candidate);
+    if (!taken(name)) return name;
+    for (let index = 1; index <= 999; index += 1) {
+      const suffix = `-${index}`;
+      const maxStem = Math.max(0, 200 - suffix.length - extension.length);
+      const candidate = `${stem.slice(0, maxStem)}${suffix}${extension}`;
+      if (!taken(candidate)) return candidate;
+    }
+    throw new DomainError("CONFLICT", "同名文件过多，请更换文件名", 409);
   }
 
   // 同级重名拒绝：文件夹/文件/链接共享命名空间，避免索引与磁盘歧义

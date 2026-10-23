@@ -30,7 +30,12 @@ import {
   serializeAuthCookie,
   serializeClearAuthCookie,
 } from "./services/auth.js";
-import { stages, updateInstallRequestSchema } from "@superpm/shared";
+import {
+  artifactUploadMaxBytes,
+  artifactUploadMaxLabel,
+  stages,
+  updateInstallRequestSchema,
+} from "@superpm/shared";
 
 // 认证中间件写入的当前用户 ID（由 Token 校验产生）
 declare module "fastify" {
@@ -105,6 +110,12 @@ export async function createApp(
     logger: options.logger ?? true,
     bodyLimit: 8 * 1024 * 1024,
   });
+  // 文档上传以原始二进制提交，单独放宽到单文件上限；其它接口仍保持 8 MB
+  app.addContentTypeParser(
+    "application/octet-stream",
+    { parseAs: "buffer", bodyLimit: artifactUploadMaxBytes },
+    (_request, body, done) => done(null, body),
+  );
   app.addHook("onClose", async () => container.close());
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof ZodError) {
@@ -120,6 +131,17 @@ export async function createApp(
       return reply
         .status(error.status)
         .send({ error: { code: error.code, message: error.message } });
+    if (
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "FST_ERR_CTP_BODY_TOO_LARGE"
+    )
+      return reply.status(413).send({
+        error: {
+          code: "PAYLOAD_TOO_LARGE",
+          message: `单个文件不能超过 ${artifactUploadMaxLabel}`,
+        },
+      });
     if (
       error instanceof Error &&
       "statusCode" in error &&
@@ -566,6 +588,32 @@ export async function createApp(
         .send(
           artifactService.createFile(parseId(request.params.id), request.body),
         ),
+  );
+  // 本地文件上传：原始二进制 + 查询参数携带目标目录与文件名
+  app.post<{ Params: { id: string } }>(
+    "/api/requirements/:id/artifacts/upload",
+    { bodyLimit: artifactUploadMaxBytes },
+    async (request, reply) => {
+      const query = (request.query ?? {}) as Record<string, unknown>;
+      const parentIdRaw =
+        typeof query.parentId === "string" ? query.parentId : "";
+      if (parentIdRaw && !/^[1-9]\d*$/.test(parentIdRaw))
+        throw new DomainError("VALIDATION_ERROR", "父目录参数无效");
+      const name = typeof query.name === "string" ? query.name : "";
+      if (!name) throw new DomainError("VALIDATION_ERROR", "缺少文件名");
+      if (!Buffer.isBuffer(request.body))
+        throw new DomainError("VALIDATION_ERROR", "缺少文件内容");
+      return reply
+        .status(201)
+        .send(
+          artifactService.uploadFile(
+            parseId(request.params.id),
+            parentIdRaw ? Number(parentIdRaw) : null,
+            name,
+            request.body,
+          ),
+        );
+    },
   );
   app.post<{ Params: { id: string } }>(
     "/api/requirements/:id/artifacts/refresh",

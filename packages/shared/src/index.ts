@@ -716,6 +716,9 @@ export const artifactMoveSchema = z
   .strict();
 // 最终确认版本：仅文件与链接可标记，文件夹由服务层拒绝
 export const artifactFinalSchema = z.object({ isFinal: z.boolean() }).strict();
+// 文档管理上传：单文件上限，前端预检与服务端请求体限制共用
+export const artifactUploadMaxBytes = 50 * 1024 * 1024;
+export const artifactUploadMaxLabel = "50 MB";
 // force：磁盘修改时间与索引不一致（外部修改）时，需显式确认才能覆盖保存
 export const artifactContentSaveSchema = z
   .object({

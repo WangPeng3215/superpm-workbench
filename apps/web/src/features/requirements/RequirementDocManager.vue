@@ -16,10 +16,14 @@ import {
   Sort,
   Star,
   StarFilled,
+  Upload,
+  UploadFilled,
 } from "@element-plus/icons-vue";
 import {
   artifactMemoryName,
   artifactStatusLabels,
+  artifactUploadMaxBytes,
+  artifactUploadMaxLabel,
   requirementImagesFolder,
   requirementWorkspaceStageLabels,
   type ArtifactDirectory,
@@ -59,7 +63,10 @@ const isEmpty = computed(
 const emptyText = computed(() =>
   searching.value
     ? `没有匹配「${directory.value?.search}」的文件`
-    : "此目录为空，点击右上角「新建」添加内容",
+    : "此目录为空，点击「新建」创建，或将文件拖到这里上传",
+);
+const currentFolderName = computed(
+  () => crumbs.value[crumbs.value.length - 1]?.name ?? props.requirementName,
 );
 // 打开策略（文档 2.6）：md→左栏编辑器；图片→页内预览；pdf→新窗口预览；其余→本地打开或下载，未知格式永不自动执行
 const imageExtensions = new Set([
@@ -620,6 +627,92 @@ async function toggleLinkFinal(link: ArtifactLink) {
     finalPending.delete(key);
   }
 }
+// ===== 上传本地文件到当前文件夹 =====
+const uploadInput = ref<HTMLInputElement>();
+const uploading = ref(false);
+const uploadProgress = reactive({ done: 0, total: 0 });
+const dragDepth = ref(0);
+const dragActive = ref(false);
+const canUpload = computed(() => !searching.value && !loading.value);
+const hasDraggedFiles = (event: DragEvent) =>
+  Array.from(event.dataTransfer?.types ?? []).includes("Files");
+function pickFiles() {
+  if (!canUpload.value || uploading.value) return;
+  uploadInput.value?.click();
+}
+function onFilesPicked(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const files = Array.from(input.files ?? []);
+  // 清空后同一文件可再次选择上传
+  input.value = "";
+  void uploadFiles(files);
+}
+function onDragEnter(event: DragEvent) {
+  if (!canUpload.value || uploading.value || !hasDraggedFiles(event)) return;
+  event.preventDefault();
+  dragDepth.value += 1;
+  dragActive.value = true;
+}
+function onDragOver(event: DragEvent) {
+  if (!hasDraggedFiles(event)) return;
+  event.preventDefault();
+  if (canUpload.value && !uploading.value && event.dataTransfer)
+    event.dataTransfer.dropEffect = "copy";
+}
+function onDragLeave() {
+  if (!dragActive.value) return;
+  dragDepth.value = Math.max(0, dragDepth.value - 1);
+  if (dragDepth.value === 0) dragActive.value = false;
+}
+function onDrop(event: DragEvent) {
+  if (hasDraggedFiles(event)) event.preventDefault();
+  const wasActive = dragActive.value;
+  dragDepth.value = 0;
+  dragActive.value = false;
+  if (!wasActive || !canUpload.value || uploading.value) return;
+  void uploadFiles(Array.from(event.dataTransfer?.files ?? []));
+}
+async function uploadFiles(files: File[]) {
+  if (!files.length || !canUpload.value || uploading.value) return;
+  const accepted = files.filter((file) => file.size <= artifactUploadMaxBytes);
+  const oversized = files.length - accepted.length;
+  if (oversized)
+    ElMessage.warning(
+      `${oversized} 个文件超过 ${artifactUploadMaxLabel}，已跳过`,
+    );
+  if (!accepted.length) return;
+  const requirementId = props.requirementId;
+  const targetParentId = parentId.value;
+  const targetName = currentFolderName.value;
+  uploading.value = true;
+  uploadProgress.done = 0;
+  uploadProgress.total = accepted.length;
+  let succeeded = 0;
+  const failures: string[] = [];
+  try {
+    for (const file of accepted) {
+      try {
+        await artifactApi.uploadFile(requirementId, targetParentId, file);
+        succeeded += 1;
+      } catch (e) {
+        failures.push(`${file.name}：${errorMessage(e)}`);
+      } finally {
+        uploadProgress.done += 1;
+      }
+    }
+  } finally {
+    uploading.value = false;
+  }
+  if (failures.length)
+    ElMessage.error(
+      `上传完成：成功 ${succeeded} 个，失败 ${failures.length} 个（${failures[0]}${failures.length > 1 ? " 等" : ""}）`,
+    );
+  else ElMessage.success(`已上传 ${succeeded} 个文件到「${targetName}」`);
+  if (succeeded > 0 && requirementId === props.requirementId) {
+    await load();
+    await loadWorkspace();
+  }
+}
 function onFileCommand(command: string | number | object, node: ArtifactNode) {
   const action = String(command);
   if (action === "open") void openFile(node);
@@ -650,7 +743,21 @@ function onLinkCommand(command: string | number | object, link: ArtifactLink) {
 }
 </script>
 <template>
-  <section class="doc-manager" aria-label="需求知识库">
+  <section
+    class="doc-manager"
+    aria-label="需求知识库"
+    @dragenter="onDragEnter"
+    @dragover="onDragOver"
+    @dragleave="onDragLeave"
+    @drop="onDrop"
+  >
+    <input
+      ref="uploadInput"
+      class="doc-upload-input"
+      type="file"
+      multiple
+      @change="onFilesPicked"
+    />
     <header class="doc-toolbar">
       <nav class="doc-breadcrumb" aria-label="目录路径">
         <template v-for="(crumb, index) in crumbs" :key="crumb.id ?? 'root'">
@@ -705,6 +812,22 @@ function onLinkCommand(command: string | number | object, link: ArtifactLink) {
             </el-dropdown-menu>
           </template>
         </el-dropdown>
+        <el-tooltip
+          :content="`从资源管理器选择文件，上传到「${currentFolderName}」`"
+        >
+          <el-button
+            :icon="Upload"
+            :loading="uploading"
+            :disabled="searching || loading"
+            @click="pickFiles"
+          >
+            {{
+              uploading
+                ? `上传中 ${uploadProgress.done}/${uploadProgress.total}`
+                : "上传文件"
+            }}
+          </el-button>
+        </el-tooltip>
         <el-tooltip content="在资源管理器中打开当前目录">
           <el-button
             :icon="FolderOpened"
@@ -745,6 +868,13 @@ function onLinkCommand(command: string | number | object, link: ArtifactLink) {
       </div>
     </el-alert>
     <div v-loading="loading" class="doc-body">
+      <div v-if="dragActive" class="doc-drop-overlay">
+        <el-icon class="doc-drop-icon"><UploadFilled /></el-icon>
+        <p class="doc-drop-title">释放以上传到「{{ currentFolderName }}」</p>
+        <span class="doc-drop-hint"
+          >支持多文件，单个不超过 {{ artifactUploadMaxLabel }}</span
+        >
+      </div>
       <el-alert
         v-if="error"
         :title="error"
@@ -1212,6 +1342,38 @@ function onLinkCommand(command: string | number | object, link: ArtifactLink) {
   min-height: 0;
   overflow-y: auto;
   padding: 12px 14px;
+  position: relative;
+}
+.doc-upload-input {
+  display: none;
+}
+.doc-drop-overlay {
+  position: absolute;
+  inset: 10px;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px dashed var(--brand);
+  border-radius: 8px;
+  background: var(--bg-brand-soft);
+  pointer-events: none;
+}
+.doc-drop-icon {
+  font-size: 22px;
+  color: var(--brand);
+}
+.doc-drop-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-title);
+}
+.doc-drop-hint {
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 .doc-empty {
   height: 100%;

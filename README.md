@@ -37,7 +37,7 @@ npm start
 - 详情抽屉与四阶段工作区骨架。浏览阶段不修改业务数据，“设为当前阶段”才保存并记录历史。
 - 状态与阶段独立；关键变更和阶段历史通过数据库事务保存。
 - 未保存关闭和页面离开保护，API 失败提示，真实存储路径查看。
-- 需求文档知识库：多层级文件夹、Markdown 文件、外部链接，磁盘为唯一事实来源，支持外部修改刷新。
+- 需求文档知识库：多层级文件夹、Markdown 文件、外部链接，磁盘为唯一事实来源，支持本地文件上传（选择/拖拽）、最终版标记与外部修改刷新。
 - 需求问题跟踪：问题、活动记录与文件关联。
 - 需求物理目录自动初始化：可读目录名（`REQ-xxxx 名称`）、默认目录与系统级资源、失败可重试。
 - 前后端共享契约、真实 SQLite 集成测试、浏览器验收和 GitHub Actions CI 流水线。
@@ -195,6 +195,7 @@ node scripts/release/rehearse-update.mjs --from release/0.2.0/superpm-workbench-
 | GET `/api/requirements/:id/artifacts`             | 需求文档目录列表（按父目录或全需求搜索）         |
 | POST `/api/requirements/:id/artifacts/folders`    | 新建文件夹                                       |
 | POST `/api/requirements/:id/artifacts/files`      | 新建文件                                         |
+| POST `/api/requirements/:id/artifacts/upload`     | 上传本地文件到指定目录（≤50 MB，重名自动加序号） |
 | POST `/api/requirements/:id/artifacts/links`      | 新建外部链接                                     |
 | POST `/api/requirements/:id/artifacts/refresh`    | 扫描磁盘并同步索引                               |
 | PUT `/api/artifacts/nodes/:nodeId/content`        | 保存文档内容                                     |
