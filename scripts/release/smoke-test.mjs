@@ -82,6 +82,7 @@ async function main() {
   const appManifest = readJson(join(install, "app", "package.json"));
   const node = join(install, "runtime", "node.exe");
   const launcher = join(install, "bin", "launcher.mjs");
+  const stopCmd = join(install, "Stop.cmd");
   for (const path of [
     node,
     launcher,
@@ -90,6 +91,8 @@ async function main() {
     join(install, "runtime", "LICENSE"),
     join(install, "SuperPM.cmd"),
     join(install, "Update.cmd"),
+    stopCmd,
+    join(install, "Stop.ps1"),
     join(install, "app", "apps", "web", "dist", "index.html"),
     join(install, "app", "node_modules", "better-sqlite3", "package.json"),
   ])
@@ -100,6 +103,7 @@ async function main() {
   const env = {
     ...process.env,
     SUPERPM_HOME: home,
+    SUPERPM_CONFIG_DIR: join(home, "config"),
     SUPERPM_INSTALL_ROOT: install,
     SUPERPM_LEGACY_ROOT: install,
     PORT: String(port),
@@ -266,19 +270,24 @@ async function main() {
       throw new Error("备份校验失败");
     step("backup", { id: backupResult.backup.id });
 
-    const response = await fetch(`http://127.0.0.1:${port}/api/shutdown`, {
-      method: "POST",
-      headers: {
-        "x-superpm-shutdown-token": serverState.shutdownToken,
-      },
-      signal: AbortSignal.timeout(3000),
+    const stop = spawn(stopCmd, [], {
+      env: { ...env, SUPERPM_NO_PAUSE: "1" },
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+      shell: true,
     });
-    if (response.status !== 202)
-      throw new Error(`优雅停止失败：HTTP ${response.status}`);
+    let stopOutput = "";
+    stop.stdout.on("data", (chunk) => (stopOutput += chunk));
+    stop.stderr.on("data", (chunk) => (stopOutput += chunk));
+    const stopCode = await waitExit(stop, 30000);
+    if (stopCode !== 0)
+      throw new Error(`Stop.cmd 退出码 ${stopCode}：${stopOutput.trim()}`);
+    if (!stopOutput.includes("服务已停止"))
+      throw new Error(`Stop.cmd 未报告停止成功：${stopOutput.trim()}`);
     await waitExit(launcherProcess, 15000);
     if (existsSync(join(home, "runtime", "server.json")))
       throw new Error("服务退出后未清理 server.json");
-    step("graceful-shutdown", { port });
+    step("stop-script", { exitCode: stopCode, port });
 
     if (!options.keepHome) rmSync(home, { recursive: true, force: true });
     report.ok = true;

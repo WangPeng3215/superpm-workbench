@@ -2,13 +2,13 @@
 import { computed, nextTick, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import {
-  Plus,
-  Search,
-  Setting,
-  ArrowDown,
-  ArrowUp,
-  Document,
-} from "@element-plus/icons-vue";
+  DownOutlined,
+  FileTextOutlined,
+  PlusOutlined,
+  SearchOutlined,
+  SettingOutlined,
+  UpOutlined,
+} from "@ant-design/icons-vue";
 import {
   dateFields,
   dateLabels,
@@ -20,9 +20,14 @@ import {
 } from "@superpm/shared";
 import XlyButton from "../components/ease-ui/xly-button/index.vue";
 import XlyEmpty from "../components/ease-ui/xly-empty/index.vue";
+import { decorative } from "../components/decorativeIcon";
 import RichTextEditor from "../features/requirements/RichTextEditor.vue";
 import { isEnumField, tagTone } from "../features/requirements/enum-tags";
 import { useEditableTable } from "../features/requirements/useEditableTable";
+
+const SearchIcon = decorative(SearchOutlined);
+const SettingIcon = decorative(SettingOutlined);
+
 const router = useRouter();
 const {
   list,
@@ -155,14 +160,18 @@ function openDetailPage(row: Requirement) {
             v-model="filters.q"
             clearable
             placeholder="搜索名称或编号"
-            :prefix-icon="Search"
+            :prefix-icon="SearchIcon"
             @keyup.enter="applyFilters"
           />
         </el-form-item>
         <el-form-item label="需求类型">
           <el-select v-model="filters.type" placeholder="全部类型" clearable>
             <template #label="{ label, value }">
-              <el-tag size="small" class="enum-tag" :class="tagTone('type', value)">
+              <el-tag
+                size="small"
+                class="enum-tag"
+                :class="tagTone('type', value)"
+              >
                 {{ label }}
               </el-tag>
             </template>
@@ -172,7 +181,11 @@ function openDetailPage(row: Requirement) {
               :label="label"
               :value="value"
             >
-              <el-tag size="small" class="enum-tag" :class="tagTone('type', value)">
+              <el-tag
+                size="small"
+                class="enum-tag"
+                :class="tagTone('type', value)"
+              >
                 {{ label }}
               </el-tag>
             </el-option>
@@ -181,7 +194,11 @@ function openDetailPage(row: Requirement) {
         <el-form-item label="状态">
           <el-select v-model="filters.status" placeholder="全部状态" clearable>
             <template #label="{ label, value }">
-              <el-tag size="small" class="enum-tag" :class="tagTone('status', value)">
+              <el-tag
+                size="small"
+                class="enum-tag"
+                :class="tagTone('status', value)"
+              >
                 {{ label }}
               </el-tag>
             </template>
@@ -191,16 +208,28 @@ function openDetailPage(row: Requirement) {
               :label="label"
               :value="value"
             >
-              <el-tag size="small" class="enum-tag" :class="tagTone('status', value)">
+              <el-tag
+                size="small"
+                class="enum-tag"
+                :class="tagTone('status', value)"
+              >
                 {{ label }}
               </el-tag>
             </el-option>
           </el-select>
         </el-form-item>
         <el-form-item label="优先级">
-          <el-select v-model="filters.priority" placeholder="全部优先级" clearable>
+          <el-select
+            v-model="filters.priority"
+            placeholder="全部优先级"
+            clearable
+          >
             <template #label="{ label, value }">
-              <el-tag size="small" class="enum-tag" :class="tagTone('priority', value)">
+              <el-tag
+                size="small"
+                class="enum-tag"
+                :class="tagTone('priority', value)"
+              >
                 {{ label }}
               </el-tag>
             </template>
@@ -210,7 +239,11 @@ function openDetailPage(row: Requirement) {
               :label="value"
               :value="value"
             >
-              <el-tag size="small" class="enum-tag" :class="tagTone('priority', value)">
+              <el-tag
+                size="small"
+                class="enum-tag"
+                :class="tagTone('priority', value)"
+              >
                 {{ value }}
               </el-tag>
             </el-option>
@@ -226,9 +259,13 @@ function openDetailPage(row: Requirement) {
           @click="expandedDates = !expandedDates"
         >
           {{ expandedDates ? "收起时间条件" : "更多时间条件" }}
-          <el-icon><ArrowUp v-if="expandedDates" /><ArrowDown v-else /></el-icon>
+          <el-icon aria-hidden="true"
+            ><UpOutlined v-if="expandedDates" /><DownOutlined v-else
+          /></el-icon>
         </el-button>
-        <el-button :icon="Setting" @click="showColumns = true">列设置</el-button>
+        <el-button :icon="SettingIcon" @click="showColumns = true"
+          >列设置</el-button
+        >
       </div>
     </div>
     <div v-if="expandedDates" class="filter-drawer">
@@ -303,8 +340,9 @@ function openDetailPage(row: Requirement) {
               :aria-label="collapsed.has(row.id) ? '展开子需求' : '收起子需求'"
               @click="toggle(row.id)"
             >
-              <el-icon
-                ><ArrowDown v-if="!collapsed.has(row.id)" /><ArrowUp v-else
+              <el-icon aria-hidden="true"
+                ><DownOutlined v-if="!collapsed.has(row.id)" /><UpOutlined
+                  v-else
               /></el-icon></button
             ><span v-if="row.draft" class="draft-number">待生成编号</span
             ><button
@@ -363,7 +401,7 @@ function openDetailPage(row: Requirement) {
             class="rich-cell"
             @click="openRich(row)"
           >
-            <el-icon><Document /></el-icon
+            <el-icon aria-hidden="true"><FileTextOutlined /></el-icon
             ><span>{{
               (isEditing(row) ? form.description : row.description)?.slice(
                 0,
@@ -429,7 +467,7 @@ function openDetailPage(row: Requirement) {
       >
     </el-table>
     <button class="add-row-button" :disabled="saving" @click="create()">
-      <el-icon><Plus /></el-icon>在底部新增一行<span
+      <el-icon aria-hidden="true"><PlusOutlined /></el-icon>在底部新增一行<span
         >输入名称后保存，其他信息可逐步补充</span
       >
     </button>

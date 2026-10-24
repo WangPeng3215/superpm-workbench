@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Setting } from "@element-plus/icons-vue";
+import { SettingOutlined } from "@ant-design/icons-vue";
 import type { Component } from "vue";
 
 defineProps<{
@@ -21,7 +21,7 @@ defineProps<{
         class="nav-item"
         :title="item.label"
       >
-        <el-icon><component :is="item.icon" /></el-icon>
+        <el-icon aria-hidden="true"><component :is="item.icon" /></el-icon>
         <span>{{ item.label }}</span>
       </RouterLink>
     </nav>
@@ -32,7 +32,7 @@ defineProps<{
         aria-label="系统设置"
         title="系统设置"
       >
-        <el-icon><Setting /></el-icon>
+        <el-icon aria-hidden="true"><SettingOutlined /></el-icon>
         <span>系统设置</span>
       </RouterLink>
     </div>

@@ -10,6 +10,7 @@ import { RequirementFileService } from "./requirement-files.js";
 import { IssueService } from "./issues.js";
 import { ArtifactService } from "./artifacts.js";
 import { RequirementProgressService } from "./requirement-progress.js";
+import { DailyTaskService } from "./daily-tasks.js";
 
 export interface ServiceContainerOptions {
   databasePath?: string;
@@ -28,6 +29,7 @@ export interface ServiceContainer {
   issues: IssueService;
   artifacts: ArtifactService;
   progress: RequirementProgressService;
+  dailyTasks: DailyTaskService;
   close(): void;
 }
 
@@ -89,6 +91,7 @@ export function createServiceContainer(
       artifacts,
       directories,
     ),
+    dailyTasks: new DailyTaskService(db),
     close() {
       if (closed) return;
       closed = true;

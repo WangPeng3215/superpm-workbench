@@ -22,7 +22,7 @@ export const router = createRouter({
     },
     {
       path: "/tasks",
-      component: () => import("../pages/PlannedPage.vue"),
+      component: () => import("../pages/DailyTasksPage.vue"),
       meta: { title: "每日任务", module: "tasks" },
     },
     {

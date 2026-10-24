@@ -3,7 +3,8 @@
   color: var(--text-body);
   background: var(--bg-page);
   font-synthesis: none;
-  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
   --el-color-primary: #3370ff;
   --el-border-radius-base: 6px;
   --el-font-family: var(--font-sans);
@@ -72,6 +73,8 @@
   --brand-strong: #245bdb;
   --brand-ring: rgb(51 112 255 / 18%);
   --border-brand: #b7c9f8;
+  --theme-switch-track: #c7c9cd;
+  --theme-switch-track-active: #5c97f8;
   --success-text: #18794e;
   --warning-text: #a15c07;
   --danger-text: #b42318;

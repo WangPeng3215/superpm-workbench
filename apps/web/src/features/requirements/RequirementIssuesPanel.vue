@@ -2,22 +2,20 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import {
-  Aim,
-  ArrowLeft,
-  ArrowRight,
-  Brush,
-  Cpu,
-  DataAnalysis,
-  Delete,
-  Document,
-  Folder,
-  Link,
-  MoreFilled,
-  Plus,
-  RefreshRight,
-  Search,
+  BarChartOutlined,
+  BugOutlined,
+  CodeOutlined,
+  DeleteOutlined,
+  FormatPainterOutlined,
+  LeftOutlined,
+  LinkOutlined,
+  MoreOutlined,
+  PlusOutlined,
+  ReloadOutlined,
+  RightOutlined,
+  SearchOutlined,
   WarningFilled,
-} from "@element-plus/icons-vue";
+} from "@ant-design/icons-vue";
 import {
   issueAssetRelationLabels,
   issueStatuses,
@@ -37,6 +35,7 @@ import {
 import { issueApi, type IssueUpdatePayload } from "../../api/issues";
 import { artifactApi } from "../../api/artifacts";
 import { errorMessage } from "../../api/client";
+import FileTypeIcon from "../../components/FileTypeIcon.vue";
 import InlineRichTextEditor from "./InlineRichTextEditor.vue";
 import { toDisplayHtml, toStoredHtml } from "./doc-images";
 import { documentToEditorHtml, htmlToMarkdown } from "./doc-markdown";
@@ -227,15 +226,15 @@ function statusTone(status: IssueStatus): string {
 function typeIcon(type: IssueType | null) {
   switch (type) {
     case "analysis":
-      return DataAnalysis;
+      return BarChartOutlined;
     case "ui":
-      return Brush;
+      return FormatPainterOutlined;
     case "development":
-      return Cpu;
+      return CodeOutlined;
     case "testing":
-      return Aim;
+      return BugOutlined;
     default:
-      return MoreFilled;
+      return MoreOutlined;
   }
 }
 function pad2(value: number) {
@@ -898,7 +897,7 @@ onBeforeUnmount(() => {
         分析、设计、开发和测试中的疑问都可以记录在这里。每条问题都有独立的描述、解决方案与关联产出物。
       </p>
       <button class="issue-primary" type="button" @click="openCreate()">
-        <el-icon :size="14"><Plus /></el-icon>
+        <el-icon aria-hidden="true" :size="14"><PlusOutlined /></el-icon>
         新增第一个问题
       </button>
     </div>
@@ -964,7 +963,7 @@ onBeforeUnmount(() => {
 
         <div class="filter-row filter-row--search">
           <label class="search-box">
-            <el-icon :size="13"><Search /></el-icon>
+            <el-icon aria-hidden="true" :size="13"><SearchOutlined /></el-icon>
             <input
               v-model="keyword"
               type="search"
@@ -993,7 +992,7 @@ onBeforeUnmount(() => {
             type="button"
             @click="openCreate()"
           >
-            <el-icon :size="12"><Plus /></el-icon>
+            <el-icon aria-hidden="true" :size="12"><PlusOutlined /></el-icon>
             新增
           </button>
         </div>
@@ -1004,10 +1003,11 @@ onBeforeUnmount(() => {
         :class="{ 'is-refreshing': listLoading && issues.length }"
       >
         <div v-if="listError" class="rail-error">
-          <el-icon :size="15"><WarningFilled /></el-icon>
+          <el-icon aria-hidden="true" :size="15"><WarningFilled /></el-icon>
           <p>{{ listError }}</p>
           <button class="text-button" type="button" @click="loadList()">
-            <el-icon :size="12"><RefreshRight /></el-icon>重新加载
+            <el-icon aria-hidden="true" :size="12"><ReloadOutlined /></el-icon
+            >重新加载
           </button>
         </div>
         <div v-else-if="listLoading && !issues.length" class="list-skeleton">
@@ -1023,7 +1023,7 @@ onBeforeUnmount(() => {
             @click="openIssue(issue.id)"
           >
             <span class="type-tile" :class="typeTone(issue.type)">
-              <el-icon :size="14"
+              <el-icon aria-hidden="true" :size="14"
                 ><component :is="typeIcon(issue.type)"
               /></el-icon>
             </span>
@@ -1055,7 +1055,8 @@ onBeforeUnmount(() => {
             <template v-else>
               <p>还没有问题记录</p>
               <button class="text-button" type="button" @click="openCreate()">
-                <el-icon :size="12"><Plus /></el-icon>新增第一个问题
+                <el-icon aria-hidden="true" :size="12"><PlusOutlined /></el-icon
+                >新增第一个问题
               </button>
             </template>
           </div>
@@ -1072,7 +1073,7 @@ onBeforeUnmount(() => {
             type="button"
             @click="mobileDetailOpen = false"
           >
-            <el-icon :size="13"><ArrowLeft /></el-icon>
+            <el-icon aria-hidden="true" :size="13"><LeftOutlined /></el-icon>
             列表
           </button>
 
@@ -1149,7 +1150,7 @@ onBeforeUnmount(() => {
                 class="ai-badge"
                 :title="`最近 AI 写入：${latestAiActivity.actorName ?? 'AI'} · ${formatFull(latestAiActivity.createdAt)}`"
               >
-                <el-icon :size="9"><Cpu /></el-icon>
+                <el-icon aria-hidden="true" :size="9"><CodeOutlined /></el-icon>
                 <span class="ai-badge-name">{{
                   latestAiActivity.actorName ?? "AI"
                 }}</span>
@@ -1164,7 +1165,9 @@ onBeforeUnmount(() => {
                 type="button"
                 @click="removeIssue()"
               >
-                <el-icon :size="11"><Delete /></el-icon>
+                <el-icon aria-hidden="true" :size="11"
+                  ><DeleteOutlined
+                /></el-icon>
                 删除
               </button>
             </div>
@@ -1193,7 +1196,7 @@ onBeforeUnmount(() => {
             <div class="section-head">
               <h3 class="section-title">解决方案 / 最终结论</h3>
               <span class="section-note" :class="{ 'is-warn': needsSolution }">
-                <el-icon v-if="needsSolution" :size="11"
+                <el-icon aria-hidden="true" v-if="needsSolution" :size="11"
                   ><WarningFilled
                 /></el-icon>
                 {{
@@ -1228,7 +1231,9 @@ onBeforeUnmount(() => {
                 type="button"
                 @click="openLinkDialog()"
               >
-                <el-icon :size="12"><Link /></el-icon>
+                <el-icon aria-hidden="true" :size="12"
+                  ><LinkOutlined
+                /></el-icon>
                 关联
               </button>
             </div>
@@ -1239,9 +1244,11 @@ onBeforeUnmount(() => {
                 class="asset-chip"
                 :title="link.asset.relativePath"
               >
-                <el-icon :size="12">
-                  <Folder v-if="link.asset.nodeType === 'folder'" />
-                  <Document v-else />
+                <el-icon aria-hidden="true" :size="12">
+                  <FileTypeIcon
+                    :node-type="link.asset.nodeType"
+                    :name="link.asset.name"
+                  />
                 </el-icon>
                 <span class="asset-name">{{ link.asset.name }}</span>
                 <span
@@ -1297,7 +1304,7 @@ onBeforeUnmount(() => {
       </div>
 
       <div v-else-if="detailError" class="detail-state">
-        <el-icon :size="22"><WarningFilled /></el-icon>
+        <el-icon aria-hidden="true" :size="22"><WarningFilled /></el-icon>
         <p>{{ detailError }}</p>
         <button
           v-if="selectedId"
@@ -1305,7 +1312,8 @@ onBeforeUnmount(() => {
           type="button"
           @click="openIssue(selectedId, { force: true })"
         >
-          <el-icon :size="12"><RefreshRight /></el-icon>重新加载
+          <el-icon aria-hidden="true" :size="12"><ReloadOutlined /></el-icon
+          >重新加载
         </button>
       </div>
 
@@ -1337,16 +1345,16 @@ onBeforeUnmount(() => {
           class="tree-caret"
           :class="{ expanded: expandedIds.has(row.item.id) }"
         >
-          <el-icon :size="11"><ArrowRight /></el-icon>
+          <el-icon aria-hidden="true" :size="11"><RightOutlined /></el-icon>
         </span>
         <span v-else class="tree-caret tree-caret--leaf"></span>
         <el-icon
+          aria-hidden="true"
           class="tree-icon"
           :class="{ 'tree-icon--folder': row.item.nodeType === 'folder' }"
           :size="13"
         >
-          <Folder v-if="row.item.nodeType === 'folder'" />
-          <Document v-else />
+          <FileTypeIcon :node-type="row.item.nodeType" :name="row.item.name" />
         </el-icon>
         <span class="tree-name">{{ row.item.name }}</span>
         <el-checkbox

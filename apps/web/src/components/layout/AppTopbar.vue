@@ -2,21 +2,19 @@
 import { computed } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
-  ArrowDown,
-  Bell,
-  Close,
-  Connection,
-  Moon,
-  Sunny,
-} from "@element-plus/icons-vue";
+  BellOutlined,
+  CloseOutlined,
+  CloudServerOutlined,
+  DownOutlined,
+} from "@ant-design/icons-vue";
 import { authStore } from "../../stores/auth";
+import ThemeSwitch from "../ThemeSwitch.vue";
 import {
   closeTab,
   syncRoute,
   tabsStore,
   type WorkTab,
 } from "../../stores/tabs";
-import { dark, toggleTheme } from "../../theme";
 
 defineProps<{ connected: boolean }>();
 const emit = defineEmits<{
@@ -49,11 +47,7 @@ function handleUserCommand(command: string | number | object) {
 
 <template>
   <header class="topbar">
-    <nav
-      v-if="tabsStore.tabs.length"
-      class="topbar-tabs"
-      aria-label="功能页签"
-    >
+    <nav v-if="tabsStore.tabs.length" class="topbar-tabs" aria-label="功能页签">
       <button
         v-for="tab in tabsStore.tabs"
         :key="tab.key"
@@ -74,13 +68,13 @@ function handleUserCommand(command: string | number | object) {
           @keydown.enter.stop="onCloseTab(tab)"
           @keydown.space.prevent.stop="onCloseTab(tab)"
         >
-          <el-icon><Close /></el-icon>
+          <el-icon aria-hidden="true"><CloseOutlined /></el-icon>
         </span>
       </button>
     </nav>
     <div class="topbar-actions">
       <span class="service-status" :class="{ offline: !connected }">
-        <el-icon><Connection /></el-icon>
+        <el-icon aria-hidden="true"><CloudServerOutlined /></el-icon>
         {{ connected ? "本地服务已连接" : "本地服务未连接" }}
       </span>
       <RouterLink
@@ -89,17 +83,9 @@ function handleUserCommand(command: string | number | object) {
         aria-label="系统通知"
         title="系统通知"
       >
-        <el-icon><Bell /></el-icon>
+        <el-icon aria-hidden="true"><BellOutlined /></el-icon>
       </RouterLink>
-      <button
-        class="topbar-icon-button"
-        type="button"
-        :aria-label="dark ? '切换到浅色模式' : '切换到深色模式'"
-        :title="dark ? '切换到浅色模式' : '切换到深色模式'"
-        @click="toggleTheme"
-      >
-        <el-icon><Sunny v-if="dark" /><Moon v-else /></el-icon>
-      </button>
+      <ThemeSwitch />
       <el-dropdown
         class="user-menu"
         trigger="click"
@@ -108,7 +94,9 @@ function handleUserCommand(command: string | number | object) {
         <button class="user-trigger" type="button" aria-label="账户菜单">
           <span class="user-avatar">{{ avatarChar }}</span>
           <strong>{{ authStore.user?.displayName ?? "未登录" }}</strong>
-          <el-icon class="user-caret"><ArrowDown /></el-icon>
+          <el-icon aria-hidden="true" class="user-caret"
+            ><DownOutlined
+          /></el-icon>
         </button>
         <template #dropdown>
           <el-dropdown-menu>

@@ -5,6 +5,9 @@ import {
   type AnySQLiteColumn,
 } from "drizzle-orm/sqlite-core";
 import type {
+  DailyTaskStatus,
+  DailyTimeEntryEndReason,
+  DailyTimeEntryStatus,
   IssueType,
   Requirement,
   RequirementFile,
@@ -249,5 +252,51 @@ export const mcpAudit = sqliteTable("mcp_audit", {
   outcome: text("outcome").$type<"prepared" | "success" | "error">().notNull(),
   errorCode: text("error_code"),
   resultSummary: text("result_summary"),
+  createdAt: text("created_at").notNull(),
+});
+// 每日任务：plan_date 为计划归属日期，实际工时另按工时记录的开始日期统计
+export const dailyTasks = sqliteTable("daily_tasks", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  title: text("title").notNull(),
+  description: text("description").notNull().default(""),
+  planDate: text("plan_date").notNull(),
+  requirementId: integer("requirement_id").references(() => requirements.id),
+  plannedStartAt: text("planned_start_at"),
+  plannedEndAt: text("planned_end_at"),
+  estimatedMinutes: integer("estimated_minutes").notNull(),
+  status: text("status").$type<DailyTaskStatus>().notNull().default("pending"),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+  deletedAt: text("deleted_at"),
+});
+// 工时记录：全实例最多一条 active；duration_seconds 由后端按时间区间计算
+export const dailyTimeEntries = sqliteTable("daily_time_entries", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  taskId: integer("task_id")
+    .notNull()
+    .references(() => dailyTasks.id),
+  startedAt: text("started_at").notNull(),
+  endedAt: text("ended_at"),
+  durationSeconds: integer("duration_seconds").notNull().default(0),
+  status: text("status")
+    .$type<DailyTimeEntryStatus>()
+    .notNull()
+    .default("active"),
+  endReason: text("end_reason").$type<DailyTimeEntryEndReason>(),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+// 手动修正审计：只追加
+export const dailyTimeEntryAudits = sqliteTable("daily_time_entry_audits", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  entryId: integer("entry_id")
+    .notNull()
+    .references(() => dailyTimeEntries.id),
+  beforeStartedAt: text("before_started_at").notNull(),
+  beforeEndedAt: text("before_ended_at"),
+  afterStartedAt: text("after_started_at").notNull(),
+  afterEndedAt: text("after_ended_at"),
+  reason: text("reason").notNull().default(""),
   createdAt: text("created_at").notNull(),
 });

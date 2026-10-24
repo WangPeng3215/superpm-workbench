@@ -8,6 +8,21 @@ import { TaskItem, TaskList } from "@tiptap/extension-list";
 import { Placeholder } from "@tiptap/extensions";
 import DOMPurify from "dompurify";
 import { ElMessage, ElMessageBox } from "element-plus";
+import {
+  BoldOutlined,
+  CheckSquareOutlined,
+  CodeOutlined,
+  ItalicOutlined,
+  LinkOutlined,
+  MinusOutlined,
+  OrderedListOutlined,
+  PictureOutlined,
+  RedoOutlined,
+  StrikethroughOutlined,
+  UnderlineOutlined,
+  UndoOutlined,
+  UnorderedListOutlined,
+} from "@ant-design/icons-vue";
 import { artifactApi } from "../../api/artifacts";
 import { errorMessage } from "../../api/client";
 import { imageDisplayUrl, toDisplayHtml } from "./doc-images";
@@ -293,18 +308,7 @@ onBeforeUnmount(() => editor.value?.destroy());
           title="撤销 (Ctrl+Z)"
           @click="editor.chain().focus().undo().run()"
         >
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
-            <path d="M9 14 4 9l5-5" />
-            <path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11" />
-          </svg>
+          <UndoOutlined />
         </button>
         <button
           :disabled="!editor.can().redo()"
@@ -312,18 +316,7 @@ onBeforeUnmount(() => editor.value?.destroy());
           title="重做 (Ctrl+Shift+Z)"
           @click="editor.chain().focus().redo().run()"
         >
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
-            <path d="m15 14 5-5-5-5" />
-            <path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13" />
-          </svg>
+          <RedoOutlined />
         </button>
       </div>
       <span class="toolbar-divider"></span>
@@ -334,7 +327,7 @@ onBeforeUnmount(() => editor.value?.destroy());
           title="加粗 (Ctrl+B)"
           @click="editor.chain().focus().toggleBold().run()"
         >
-          <b>B</b>
+          <BoldOutlined />
         </button>
         <button
           :class="{ active: editor.isActive('italic') }"
@@ -342,7 +335,7 @@ onBeforeUnmount(() => editor.value?.destroy());
           title="斜体 (Ctrl+I)"
           @click="editor.chain().focus().toggleItalic().run()"
         >
-          <i>I</i>
+          <ItalicOutlined />
         </button>
         <button
           :class="{ active: editor.isActive('underline') }"
@@ -350,7 +343,7 @@ onBeforeUnmount(() => editor.value?.destroy());
           title="下划线 (Ctrl+U)"
           @click="editor.chain().focus().toggleUnderline().run()"
         >
-          <u>U</u>
+          <UnderlineOutlined />
         </button>
         <button
           :class="{ active: editor.isActive('strike') }"
@@ -358,7 +351,7 @@ onBeforeUnmount(() => editor.value?.destroy());
           title="删除线"
           @click="editor.chain().focus().toggleStrike().run()"
         >
-          <s>S</s>
+          <StrikethroughOutlined />
         </button>
         <button
           :class="{ active: editor.isActive('code') }"
@@ -405,22 +398,7 @@ onBeforeUnmount(() => editor.value?.destroy());
           title="项目列表"
           @click="editor.chain().focus().toggleBulletList().run()"
         >
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
-            <path d="M8 6h13" />
-            <path d="M8 12h13" />
-            <path d="M8 18h13" />
-            <path d="M3 6h.01" />
-            <path d="M3 12h.01" />
-            <path d="M3 18h.01" />
-          </svg>
+          <UnorderedListOutlined />
         </button>
         <button
           :class="{ active: editor.isActive('orderedList') }"
@@ -428,49 +406,7 @@ onBeforeUnmount(() => editor.value?.destroy());
           title="编号列表"
           @click="editor.chain().focus().toggleOrderedList().run()"
         >
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
-            <path d="M10 6h11" />
-            <path d="M10 12h11" />
-            <path d="M10 18h11" />
-            <text
-              x="2.5"
-              y="8.5"
-              fill="currentColor"
-              stroke="none"
-              font-size="7"
-              font-weight="600"
-            >
-              1
-            </text>
-            <text
-              x="2.5"
-              y="14.5"
-              fill="currentColor"
-              stroke="none"
-              font-size="7"
-              font-weight="600"
-            >
-              2
-            </text>
-            <text
-              x="2.5"
-              y="20.5"
-              fill="currentColor"
-              stroke="none"
-              font-size="7"
-              font-weight="600"
-            >
-              3
-            </text>
-          </svg>
+          <OrderedListOutlined />
         </button>
         <button
           :class="{ active: editor.isActive('taskList') }"
@@ -478,21 +414,7 @@ onBeforeUnmount(() => editor.value?.destroy());
           title="任务清单"
           @click="toggleListTask"
         >
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
-            <path d="m3 7 2 2 4-4" />
-            <path d="m3 17 2 2 4-4" />
-            <path d="M13 6h8" />
-            <path d="M13 12h8" />
-            <path d="M13 18h8" />
-          </svg>
+          <CheckSquareOutlined />
         </button>
         <button
           aria-label="减少缩进"
@@ -564,37 +486,14 @@ onBeforeUnmount(() => editor.value?.destroy());
           title="代码块"
           @click="editor.chain().focus().toggleCodeBlock().run()"
         >
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
-            <path d="m16 18 6-6-6-6" />
-            <path d="m8 6-6 6 6 6" />
-          </svg>
+          <CodeOutlined />
         </button>
         <button
           aria-label="分割线"
           title="分割线"
           @click="editor.chain().focus().setHorizontalRule().run()"
         >
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
-            <path d="M8 5.5h8" />
-            <path d="M3 12h18" stroke-width="2.4" />
-            <path d="M8 18.5h8" />
-          </svg>
+          <MinusOutlined />
         </button>
       </div>
       <span class="toolbar-divider"></span>
@@ -605,22 +504,7 @@ onBeforeUnmount(() => editor.value?.destroy());
           title="插入或编辑链接"
           @click="setLink"
         >
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
-            <path
-              d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"
-            />
-            <path
-              d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"
-            />
-          </svg>
+          <LinkOutlined />
         </button>
         <button
           :disabled="uploading || !requirementId"
@@ -634,19 +518,7 @@ onBeforeUnmount(() => editor.value?.destroy());
           aria-label="插入图片"
           @click="input?.click()"
         >
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
-            <rect x="3" y="3" width="18" height="18" rx="2" />
-            <circle cx="9" cy="9" r="2" />
-            <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
-          </svg>
+          <PictureOutlined />
         </button>
         <input
           ref="input"
@@ -722,6 +594,10 @@ onBeforeUnmount(() => editor.value?.destroy());
   height: 15px;
   display: block;
   flex: none;
+}
+.inline-rich .rich-toolbar button .anticon {
+  display: inline-flex;
+  align-items: center;
 }
 .inline-rich .rich-toolbar button:hover,
 .inline-rich .rich-toolbar button.active {

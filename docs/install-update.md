@@ -7,6 +7,8 @@
 ```text
 superpm-workbench-<version>-win-x64/
   SuperPM.cmd              启动入口
+  Stop.cmd                 停止入口（调用 Stop.ps1）
+  Stop.ps1                 停止脚本
   Update.cmd               更新入口
   bin/launcher.mjs         稳定启动器
   bin/updater.mjs          独立更新器
@@ -25,7 +27,7 @@ superpm-workbench-<version>-win-x64/
 1. 解压完整安装包到当前用户可写的目录，例如 `D:\Apps\superPM`。不要放进需要管理员权限才能写入的目录，否则更新无法替换 `app/`。
 2. 双击 `SuperPM.cmd`。启动器直接使用 `runtime\node.exe`，不依赖系统 Node。
 3. 打开 <http://127.0.0.1:3001>，默认账号 `admin`，密码 `admin123`，首次登录后立即修改。
-4. 停止服务：在启动窗口按 `Ctrl+C`。
+4. 停止服务：在启动窗口按 `Ctrl+C`，或双击 `Stop.cmd`。更新或迁移后服务可能由独立进程静默启动，此时没有前台窗口，请使用 `Stop.cmd`。
 
 数据根默认位于 `%LOCALAPPDATA%\superPM`：
 
@@ -49,6 +51,25 @@ updates/       清单缓存、更新包暂存、update-progress.json 与 last-up
 SuperPM.cmd --version
 SuperPM.cmd --home
 ```
+
+### 停止服务
+
+更新或迁移完成后服务可能由独立进程静默启动，没有保持前台窗口。双击安装目录中的 `Stop.cmd`，或在命令行执行：
+
+```powershell
+Stop.cmd                        # 使用当前配置的数据根
+Stop.cmd -Home D:\data\superPM  # 显式指定数据根
+Stop.cmd -Force                 # 优雅停止失败时强制结束服务进程树
+```
+
+- 数据根解析顺序与启动器一致：`-Home` > `SUPERPM_HOME` > `%APPDATA%\superPM\config.json` 指针 > 默认 `%LOCALAPPDATA%\superPM`。
+- 默认发送优雅停止请求并等待最多 10 秒；服务本来未运行时直接成功返回，并清理残留的 `runtime\server.json`。
+- 存在更新锁或数据目录迁移锁时拒绝执行，避免打断更新或迁移。
+- `-Force` 使用 `taskkill /T /F` 结束服务进程树；执行前会校验 PID 命令行确为 superPM 服务入口，无法确认时拒绝结束，避免误杀其他程序。
+- 脚本只停止 HTTP 服务，不会结束已连接的 MCP 客户端进程；更新或迁移前请先关闭这些客户端。
+- 退出码：`0` 表示已停止或本来未运行；`1` 表示被锁拒绝、优雅停止超时或强制结束失败。双击运行时失败会暂停窗口以显示原因。
+
+已发布的 0.4.0 安装包尚未内置停止脚本。可把仓库 `scripts/install/Stop.cmd` 与 `Stop.ps1` 复制到安装目录（与 `SuperPM.cmd` 同级）后直接使用，无需更新程序或迁移数据。
 
 ### 修改数据保存位置
 
@@ -119,12 +140,18 @@ MCP 与 HTTP 服务共用数据根，由客户端以 stdio 拉起：
 
 从 0.3.3 升级到 0.4.0 请使用完整安装包：
 
-1. 停止应用并确认 `runtime\server.json` 已消失。
+1. 用 `Stop.cmd` 停止应用（或在启动窗口按 `Ctrl+C`），确认 `runtime\server.json` 已消失。
 2. 将 0.4.0 完整包解压覆盖原安装目录，或解压到新目录后改用新目录启动。数据根不在安装目录内，数据不受影响。
 3. 若使用新安装目录，更新 MCP 客户端配置中的 `runtime\node.exe` 与 `app\...\stdio.js` 路径。
 4. 启动 0.4.0，确认版本与业务数据正常；此后版本恢复应用内增量更新。
 
 发布说明和 `docs/install-update.md` 需要保留这一步说明；清单、`install.json` 与诊断接口的更新器版本均应为 `1.1.0`。
+
+### 0.4.0 → 0.5.0
+
+0.5.0 没有启动器或更新器变更，已安装 0.4.0 的用户可在「系统设置 → 版本与更新」直接增量升级。更新器会先创建 `pre-update` 备份，再替换程序并自动执行 schema 14 的每日任务表迁移，随后重启并检查健康状态；重启期间页面会短暂离线。
+
+增量包只替换 `app/`，不会补装安装目录根下的 `Stop.cmd` 与 `Stop.ps1`。需要这两个停止脚本时，下载 0.5.0 完整包，先用现有方式停止服务，再覆盖安装目录并双击 `SuperPM.cmd` 启动；数据根与业务数据不受影响。0.3.3 或更早版本仍必须先按上一节用 0.4.0 完整包完成 bootstrap。
 
 ### 命令行更新（备用）
 
@@ -213,7 +240,7 @@ release/update-manifest.json
 node scripts/release/build-release.mjs --version 0.2.0 --notes "本次更新说明"
 ```
 
-冒烟测试会解压完整包、使用自带运行时启动服务、检查健康状态与运行时状态、运行 MCP、验证更新锁拒绝、创建并校验备份、优雅停止服务。任一环节失败时构建失败，产物不应发布。
+冒烟测试会解压完整包、使用自带运行时启动服务、检查健康状态与运行时状态、运行 MCP、验证更新锁拒绝、创建并校验备份、通过安装包内 `Stop.cmd` 停止服务并确认 `server.json` 清理。任一环节失败时构建失败，产物不应发布。
 
 ### 升级演练
 

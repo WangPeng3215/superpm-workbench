@@ -39,10 +39,11 @@ npm start
 - 未保存关闭和页面离开保护，API 失败提示，真实存储路径查看。
 - 需求文档知识库：多层级文件夹、Markdown 文件、外部链接，磁盘为唯一事实来源，支持本地文件上传（选择/拖拽）、最终版标记与外部修改刷新。
 - 需求问题跟踪：问题、活动记录与文件关联。
+- 每日任务：按日计划与拖拽排序、关联需求、计划时段、状态筛选与月度日历；支持单活动计时、18:00/8 小时自动结束、工时校正与审计，以及可复制的每日工作总结。规则与接口见 `docs/daily-tasks.md`。
 - 需求物理目录自动初始化：可读目录名（`REQ-xxxx 名称`）、默认目录与系统级资源、失败可重试。
 - 前后端共享契约、真实 SQLite 集成测试、浏览器验收和 GitHub Actions CI 流水线。
 
-未实现：测试闭环、任务历史、通知、自定义字段、表格视图持久化、FTS5、备份恢复界面。MCP 提供只读查询与默认关闭的受控写入（问题更新、评论、产出物关联），详见 `docs/mcp.md`。软删除数据目前保留在数据库中，回收站界面随后建设。
+未实现：测试闭环、通知、自定义字段、表格视图持久化、FTS5、备份恢复界面。MCP 提供只读查询与默认关闭的受控写入（问题更新、评论、产出物关联），详见 `docs/mcp.md`。软删除数据目前保留在数据库中，回收站界面随后建设。
 
 描述字段使用 Tiptap 兼容 JSON；需求文档以 Markdown 落盘，图片写入需求根目录 `images/` 并以相对路径引用。
 
@@ -53,7 +54,7 @@ apps/web/src/
   api/                       HTTP 客户端
   components/ease-ui/         Ease UI 实际复制组件与 MIT 许可
   features/requirements/     需求业务逻辑与详情工作区
-  pages/                     工作台、任务/通知骨架、设置
+  pages/                     工作台、每日任务、设置
   router/                    页面导航
 apps/server/src/
   config/                    根目录配置与 .env
@@ -141,11 +142,14 @@ CI 流水线位于 `.github/workflows/ci.yml`（与模板 `docs/ci/ci.yml` 一�
 
 ## 部署与更新
 
-发布包自带 Node 22 运行时，解压后双击 `SuperPM.cmd` 即可使用。更新可在应用内「系统设置 → 版本与更新」完成检查、查看说明、下载校验并交给独立更新器安装；`Update.cmd` 保留为命令行与离线更新入口。安装布局、数据根、更新命令、手动回滚与发布流程见 [`docs/install-update.md`](docs/install-update.md)，设计基线见 [`docs/deployment-update-strategy.md`](docs/deployment-update-strategy.md)。
+发布包自带 Node 22 运行时，解压后双击 `SuperPM.cmd` 即可使用，双击 `Stop.cmd` 停止服务（更新后静默启动的服务没有前台窗口，也用它停止；无响应时用 `Stop.cmd -Force`）。更新可在应用内「系统设置 → 版本与更新」完成检查、查看说明、下载校验并交给独立更新器安装；`Update.cmd` 保留为命令行与离线更新入口。安装布局、数据根、停止与更新命令、手动回滚与发布流程见 [`docs/install-update.md`](docs/install-update.md)，设计基线见 [`docs/deployment-update-strategy.md`](docs/deployment-update-strategy.md)。
 
 ```powershell
 # 启动发布版（安装目录内）
 SuperPM.cmd
+
+# 停止发布版；更新或迁移后服务静默启动时同样使用
+Stop.cmd
 
 # 从 GitHub Release 更新（命令行入口）
 Update.cmd --manifest https://github.com/WangPeng3215/superpm-workbench/releases/latest/download/update-manifest.json
@@ -177,7 +181,7 @@ npm run backup -- restore <备份ID>
 发布构建、安装包冒烟测试、真实版本升级演练与数据根迁移演练：
 
 ```powershell
-node scripts/release/build-release.mjs --version 0.4.0 --notes "更新说明"
+node scripts/release/build-release.mjs --version 0.5.0 --notes "更新说明"
 node scripts/release/rehearse-update.mjs --from release/0.2.0/superpm-workbench-0.2.0-win-x64.zip --manifest release/0.3.0/update-manifest.json
 node scripts/release/rehearse-move-home.mjs
 ```
@@ -220,11 +224,23 @@ node scripts/release/rehearse-move-home.mjs
 | GET `/api/requirements/:id/directory`             | 需求物理目录与初始化状态                         |
 | POST `/api/requirements/:id/directory/initialize` | 幂等初始化默认目录与系统级资源                   |
 | POST `/api/requirements/:id/directory/repair`     | 显式补建缺失的默认结构                           |
+| GET `/api/daily-tasks`                            | 指定业务日的任务、统计、活动计时与总结           |
+| GET `/api/daily-tasks/calendar`                   | 月度每日任务数、完成数、工时与活动标记           |
+| GET `/api/daily-tasks/active`                     | 当前活动计时                                     |
+| GET `/api/daily-tasks/summary-text`               | 指定业务日的工作总结文本                         |
+| POST `/api/daily-tasks`                           | 创建每日任务                                     |
+| PATCH `/api/daily-tasks/:id`                      | 部分更新每日任务                                 |
+| PATCH `/api/daily-tasks/order`                    | 重写某日任务顺序                                 |
+| DELETE `/api/daily-tasks/:id`                     | 删除任务；有工时记录时归档                       |
+| GET `/api/daily-tasks/:id/time-entries`           | 任务的历史工时记录                               |
+| POST `/api/daily-tasks/:id/start`                 | 开始计时                                         |
+| POST `/api/daily-tasks/:id/stop`                  | 结束计时                                         |
+| PATCH `/api/daily-time-entries/:id`               | 校正已完成工时并写入审计                         |
 
 输入字段与枚举见 `packages/shared/src/index.ts`。分页总数按主需求计算；子需求匹配筛选时携带父需求作为上下文。统一错误响应 `{ error: { code, message, details? } }`。
 
 ## 后续实施顺序
 
-需求视图与富文本 → 文件实体/版本/关联 → 问题、决策、跟进 → 测试用例/执行/复测 → 每日任务 → FTS5 与 Context API → 备份恢复 → MCP 只读业务工具（M2，已完成）→ MCP 受控写入（M3，已完成）→ MCP 安全测试（M4，已完成）→ MCP 真实 Harness 试运行（M5，已完成）→ MCP 文档收尾（M6，已完成）。
+需求视图与富文本 → 文件实体/版本/关联 → 问题、决策、跟进 → 测试用例/执行/复测 → 每日任务（已完成）→ FTS5 与 Context API → 备份恢复 → MCP 只读业务工具（M2，已完成）→ MCP 受控写入（M3，已完成）→ MCP 安全测试（M4，已完成）→ MCP 真实 Harness 试运行（M5，已完成）→ MCP 文档收尾（M6，已完成）。
 
 需求参考保留在根目录开发文档；当前明确的两级需求、Drizzle 选型与交付边界见 `docs/superpowers/specs/2026-10-13-foundation-design.md`。

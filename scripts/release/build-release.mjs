@@ -305,6 +305,14 @@ async function stageInstall(work, options, appStage, runtime) {
     join(repoRoot, "scripts/install/Update.cmd"),
     join(install, "Update.cmd"),
   );
+  copyFileSync(
+    join(repoRoot, "scripts/install/Stop.cmd"),
+    join(install, "Stop.cmd"),
+  );
+  copyFileSync(
+    join(repoRoot, "scripts/install/Stop.ps1"),
+    join(install, "Stop.ps1"),
+  );
   const bundleEntry = async (entry, target) => {
     await build({
       absWorkingDir: repoRoot,
@@ -355,6 +363,7 @@ async function stageInstall(work, options, appStage, runtime) {
     `superPM Workbench v${options.version}
 
 启动：双击 SuperPM.cmd
+停止：Stop.cmd（服务无响应时用 Stop.cmd -Force 强制结束）
 更新：Update.cmd --manifest <更新清单地址>
 数据根：%LOCALAPPDATA%\\superPM（可用 SUPERPM_HOME 覆盖）
       可在应用「设置 → 数据存储位置」中修改并迁移现有数据

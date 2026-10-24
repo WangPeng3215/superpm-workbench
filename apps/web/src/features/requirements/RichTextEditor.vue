@@ -5,6 +5,14 @@ import StarterKit from "@tiptap/starter-kit";
 import Image from "@tiptap/extension-image";
 import DOMPurify from "dompurify";
 import { ElMessage, ElMessageBox } from "element-plus";
+import {
+  BoldOutlined,
+  CodeOutlined,
+  ItalicOutlined,
+  OrderedListOutlined,
+  PictureOutlined,
+  UnorderedListOutlined,
+} from "@ant-design/icons-vue";
 import { requirementApi } from "../../api/requirements";
 const props = defineProps<{
   modelValue: boolean;
@@ -122,35 +130,59 @@ onBeforeUnmount(() => editor.value?.destroy());
         <button
           :class="{ active: editor.isActive('bold') }"
           aria-label="加粗"
+          title="加粗 (Ctrl+B)"
           @click="editor.chain().focus().toggleBold().run()"
         >
-          <b>B</b>
+          <BoldOutlined />
         </button>
         <button
           :class="{ active: editor.isActive('italic') }"
           aria-label="斜体"
+          title="斜体 (Ctrl+I)"
           @click="editor.chain().focus().toggleItalic().run()"
         >
-          <i>I</i>
+          <ItalicOutlined />
         </button>
         <button
           :class="{ active: editor.isActive('heading', { level: 2 }) }"
+          aria-label="标题"
+          title="标题"
           @click="editor.chain().focus().toggleHeading({ level: 2 }).run()"
         >
           标题
         </button>
         <span class="toolbar-divider"></span>
-        <button @click="editor.chain().focus().toggleBulletList().run()">
-          项目列表
+        <button
+          :class="{ active: editor.isActive('bulletList') }"
+          aria-label="项目列表"
+          title="项目列表"
+          @click="editor.chain().focus().toggleBulletList().run()"
+        >
+          <UnorderedListOutlined />
         </button>
-        <button @click="editor.chain().focus().toggleOrderedList().run()">
-          编号列表
+        <button
+          :class="{ active: editor.isActive('orderedList') }"
+          aria-label="编号列表"
+          title="编号列表"
+          @click="editor.chain().focus().toggleOrderedList().run()"
+        >
+          <OrderedListOutlined />
         </button>
-        <button @click="editor.chain().focus().toggleBlockquote().run()">
+        <button
+          :class="{ active: editor.isActive('blockquote') }"
+          aria-label="引用"
+          title="引用"
+          @click="editor.chain().focus().toggleBlockquote().run()"
+        >
           引用
         </button>
-        <button @click="editor.chain().focus().toggleCodeBlock().run()">
-          代码
+        <button
+          :class="{ active: editor.isActive('codeBlock') }"
+          aria-label="代码块"
+          title="代码块"
+          @click="editor.chain().focus().toggleCodeBlock().run()"
+        >
+          <CodeOutlined />
         </button>
         <span class="toolbar-divider"></span>
         <button
@@ -158,9 +190,10 @@ onBeforeUnmount(() => editor.value?.destroy());
           :title="
             !requirementId ? '先保存需求后可插入图片' : '图片保存在本地工作区'
           "
+          aria-label="插入图片"
           @click="input?.click()"
         >
-          {{ uploading ? "上传中…" : "插入图片" }}
+          <PictureOutlined />{{ uploading ? "上传中…" : "插入图片" }}
         </button>
         <input
           ref="input"
@@ -209,6 +242,9 @@ onBeforeUnmount(() => editor.value?.destroy());
   border-bottom: 1px solid var(--border-base);
 }
 .rich-toolbar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   height: 28px;
   border: 0;
   background: transparent;
@@ -220,6 +256,9 @@ onBeforeUnmount(() => editor.value?.destroy());
   transition:
     color var(--duration-fast) var(--ease-standard),
     background-color var(--duration-fast) var(--ease-standard);
+}
+.rich-toolbar .anticon {
+  font-size: 15px;
 }
 .rich-toolbar button:focus-visible {
   outline: 2px solid var(--brand);

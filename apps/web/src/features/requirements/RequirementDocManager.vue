@@ -2,23 +2,18 @@
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import {
-  ArrowDown,
-  Document,
-  Folder,
-  FolderOpened,
-  Grid,
-  Link as LinkIcon,
-  MoreFilled,
-  Picture,
-  Plus,
-  Refresh,
-  Search,
-  Sort,
-  Star,
+  CloudUploadOutlined,
+  DownOutlined,
+  FolderOpenOutlined,
+  MoreOutlined,
+  PlusOutlined,
+  SearchOutlined,
+  SortAscendingOutlined,
   StarFilled,
-  Upload,
-  UploadFilled,
-} from "@element-plus/icons-vue";
+  StarOutlined,
+  SyncOutlined,
+  UploadOutlined,
+} from "@ant-design/icons-vue";
 import {
   artifactMemoryName,
   artifactStatusLabels,
@@ -34,6 +29,14 @@ import {
 } from "@superpm/shared";
 import { artifactApi } from "../../api/artifacts";
 import { ApiError, errorMessage, request } from "../../api/client";
+import FileTypeIcon from "../../components/FileTypeIcon.vue";
+import { decorative } from "../../components/decorativeIcon";
+
+const FolderOpenIcon = decorative(FolderOpenOutlined);
+const SearchIcon = decorative(SearchOutlined);
+const SortIcon = decorative(SortAscendingOutlined);
+const SyncIcon = decorative(SyncOutlined);
+const UploadIcon = decorative(UploadOutlined);
 
 // 需求知识库卡片视图（文档管理 tab）：UI 只做展示与交互编排，业务规则全部在服务层
 const props = defineProps<{ requirementId: number; requirementName: string }>();
@@ -78,11 +81,9 @@ const imageExtensions = new Set([
   ".svg",
   ".bmp",
 ]);
-const iconMap: Record<string, typeof Document> = {
-  picture: Picture,
-  grid: Grid,
-  document: Document,
-};
+function extensionOf(node: ArtifactNode) {
+  return node.extension ?? "";
+}
 const isMemory = (node: ArtifactNode) =>
   node.nodeType === "file" && node.relativePath === artifactMemoryName;
 // 系统级资源（文档 §12.3）：需求记忆文件与根目录 images/ 不可改名、移动、删除。
@@ -90,15 +91,6 @@ const isMemory = (node: ArtifactNode) =>
 const isProtected = (node: ArtifactNode) =>
   node.relativePath === artifactMemoryName ||
   node.relativePath === requirementImagesFolder;
-function extensionOf(node: ArtifactNode) {
-  return node.extension ?? "";
-}
-function fileIcon(node: ArtifactNode) {
-  const extension = extensionOf(node);
-  if (imageExtensions.has(extension)) return iconMap.picture;
-  if ([".xlsx", ".xls", ".csv"].includes(extension)) return iconMap.grid;
-  return iconMap.document;
-}
 function formatSize(bytes: number | null) {
   if (bytes === null || bytes === undefined) return "";
   if (bytes < 1024) return `${bytes} B`;
@@ -779,7 +771,7 @@ function onLinkCommand(command: string | number | object, link: ArtifactLink) {
           class="doc-search"
           placeholder="搜索文件名"
           clearable
-          :prefix-icon="Search"
+          :prefix-icon="SearchIcon"
         />
         <el-select v-model="sortKey" class="doc-sort" aria-label="排序方式">
           <el-option label="按名称" value="name" />
@@ -789,7 +781,7 @@ function onLinkCommand(command: string | number | object, link: ArtifactLink) {
         <el-tooltip :content="sortOrder === 'asc' ? '升序' : '降序'">
           <el-button
             class="sort-order-btn"
-            :icon="Sort"
+            :icon="SortIcon"
             :aria-label="sortOrder === 'asc' ? '切换为降序' : '切换为升序'"
             @click="sortOrder = sortOrder === 'asc' ? 'desc' : 'asc'"
           />
@@ -800,8 +792,9 @@ function onLinkCommand(command: string | number | object, link: ArtifactLink) {
           @command="onCreateCommand"
         >
           <el-button type="primary" plain :disabled="searching">
-            <el-icon><Plus /></el-icon>新建<el-icon class="el-icon--right"
-              ><ArrowDown
+            <el-icon aria-hidden="true"><PlusOutlined /></el-icon>新建<el-icon
+              class="el-icon--right"
+              ><DownOutlined
             /></el-icon>
           </el-button>
           <template #dropdown>
@@ -816,7 +809,7 @@ function onLinkCommand(command: string | number | object, link: ArtifactLink) {
           :content="`从资源管理器选择文件，上传到「${currentFolderName}」`"
         >
           <el-button
-            :icon="Upload"
+            :icon="UploadIcon"
             :loading="uploading"
             :disabled="searching || loading"
             @click="pickFiles"
@@ -830,7 +823,7 @@ function onLinkCommand(command: string | number | object, link: ArtifactLink) {
         </el-tooltip>
         <el-tooltip content="在资源管理器中打开当前目录">
           <el-button
-            :icon="FolderOpened"
+            :icon="FolderOpenIcon"
             :disabled="searching || loading"
             @click="openCurrentFolder"
           >
@@ -840,7 +833,7 @@ function onLinkCommand(command: string | number | object, link: ArtifactLink) {
         <el-tooltip content="扫描磁盘并同步索引">
           <el-button
             class="refresh-btn"
-            :icon="Refresh"
+            :icon="SyncIcon"
             aria-label="刷新目录"
             @click="refresh"
           />
@@ -869,7 +862,9 @@ function onLinkCommand(command: string | number | object, link: ArtifactLink) {
     </el-alert>
     <div v-loading="loading" class="doc-body">
       <div v-if="dragActive" class="doc-drop-overlay">
-        <el-icon class="doc-drop-icon"><UploadFilled /></el-icon>
+        <el-icon aria-hidden="true" class="doc-drop-icon"
+          ><CloudUploadOutlined
+        /></el-icon>
         <p class="doc-drop-title">释放以上传到「{{ currentFolderName }}」</p>
         <span class="doc-drop-hint"
           >支持多文件，单个不超过 {{ artifactUploadMaxLabel }}</span
@@ -895,9 +890,7 @@ function onLinkCommand(command: string | number | object, link: ArtifactLink) {
           @click="enter(folder)"
           @keydown.enter="enter(folder)"
         >
-          <div class="doc-card-icon folder">
-            <el-icon><Folder /></el-icon>
-          </div>
+          <FileTypeIcon class="doc-card-icon folder" node-type="folder" />
           <h3 class="doc-card-name" :title="folder.name">
             <span class="name-text">{{ folder.name }}</span>
             <el-tag
@@ -924,7 +917,7 @@ function onLinkCommand(command: string | number | object, link: ArtifactLink) {
               @click.stop
               @keydown.stop
             >
-              <el-icon><MoreFilled /></el-icon>
+              <el-icon aria-hidden="true"><MoreOutlined /></el-icon>
             </button>
             <template #dropdown>
               <el-dropdown-menu>
@@ -958,9 +951,11 @@ function onLinkCommand(command: string | number | object, link: ArtifactLink) {
           @click="openFile(file)"
           @keydown.enter="openFile(file)"
         >
-          <div class="doc-card-icon file">
-            <el-icon><component :is="fileIcon(file)" /></el-icon>
-          </div>
+          <FileTypeIcon
+            class="doc-card-icon file"
+            :name="file.name"
+            node-type="file"
+          />
           <h3 class="doc-card-name" :title="file.name">
             <span class="name-text">{{ file.name }}</span>
             <el-tag
@@ -986,9 +981,9 @@ function onLinkCommand(command: string | number | object, link: ArtifactLink) {
                 @click.stop="toggleNodeFinal(file)"
                 @keydown.stop
               >
-                <el-icon>
+                <el-icon aria-hidden="true">
                   <StarFilled v-if="file.isFinal" />
-                  <Star v-else />
+                  <StarOutlined v-else />
                 </el-icon>
               </button>
             </el-tooltip>
@@ -1021,7 +1016,7 @@ function onLinkCommand(command: string | number | object, link: ArtifactLink) {
               @click.stop
               @keydown.stop
             >
-              <el-icon><MoreFilled /></el-icon>
+              <el-icon aria-hidden="true"><MoreOutlined /></el-icon>
             </button>
             <template #dropdown>
               <el-dropdown-menu>
@@ -1061,9 +1056,7 @@ function onLinkCommand(command: string | number | object, link: ArtifactLink) {
           @click="openLink(link)"
           @keydown.enter="openLink(link)"
         >
-          <div class="doc-card-icon link">
-            <el-icon><LinkIcon /></el-icon>
-          </div>
+          <FileTypeIcon class="doc-card-icon link" node-type="link" />
           <h3 class="doc-card-name" :title="link.name">
             <span class="name-text">{{ link.name }}</span>
             <el-tooltip
@@ -1082,9 +1075,9 @@ function onLinkCommand(command: string | number | object, link: ArtifactLink) {
                 @click.stop="toggleLinkFinal(link)"
                 @keydown.stop
               >
-                <el-icon>
+                <el-icon aria-hidden="true">
                   <StarFilled v-if="link.isFinal" />
-                  <Star v-else />
+                  <StarOutlined v-else />
                 </el-icon>
               </button>
             </el-tooltip>
@@ -1113,7 +1106,7 @@ function onLinkCommand(command: string | number | object, link: ArtifactLink) {
               @click.stop
               @keydown.stop
             >
-              <el-icon><MoreFilled /></el-icon>
+              <el-icon aria-hidden="true"><MoreOutlined /></el-icon>
             </button>
             <template #dropdown>
               <el-dropdown-menu>
@@ -1422,15 +1415,12 @@ function onLinkCommand(command: string | number | object, link: ArtifactLink) {
   flex: none;
 }
 .doc-card-icon.folder {
-  color: var(--brand);
   background: var(--bg-brand-soft);
 }
 .doc-card-icon.file {
-  color: var(--text-secondary);
   background: var(--bg-subtle);
 }
 .doc-card-icon.link {
-  color: #1a7f37;
   background: rgb(26 127 55 / 0.12);
 }
 .doc-card-name {

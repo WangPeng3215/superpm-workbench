@@ -3,7 +3,7 @@ import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import type { FormInstance, FormRules } from "element-plus";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { Calendar, Grid } from "@element-plus/icons-vue";
+import { CalendarOutlined, ProjectOutlined } from "@ant-design/icons-vue";
 import type { SystemInfo } from "@superpm/shared";
 import type { PendingOldData } from "@superpm/shared/data-root-contract";
 import { request } from "./api/client";
@@ -58,8 +58,8 @@ watch(
 );
 
 const navigation = [
-  { path: "/requirements", label: "需求列表", icon: Grid },
-  { path: "/tasks", label: "每日任务", icon: Calendar },
+  { path: "/requirements", label: "需求列表", icon: ProjectOutlined },
+  { path: "/tasks", label: "每日任务", icon: CalendarOutlined },
 ];
 onMounted(async () => {
   try {

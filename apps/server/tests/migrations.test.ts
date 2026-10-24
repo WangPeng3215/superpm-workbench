@@ -453,7 +453,7 @@ describe("migrations 0005（资产与问题管理）", () => {
   });
   it("SCHEMA_VERSION 与已应用迁移数一致", () => {
     migrate(db);
-    expect(SCHEMA_VERSION).toBe(13);
+    expect(SCHEMA_VERSION).toBe(14);
     expect(appliedVersions(db)).toHaveLength(SCHEMA_VERSION);
   });
 });
@@ -858,5 +858,62 @@ describe("migrations 0013（文件与链接最终版标记）", () => {
       ).find((item) => item.name === "is_final");
       expect(column).toMatchObject({ name: "is_final", dflt_value: "0" });
     }
+  });
+});
+
+describe("migrations 0014（每日任务与工时）", () => {
+  it("创建任务、工时与修正审计表，并限制单条活动计时", () => {
+    migrate(db);
+    for (const table of [
+      "daily_tasks",
+      "daily_time_entries",
+      "daily_time_entry_audits",
+    ])
+      expect(tableColumns(db, table).length).toBeGreaterThan(0);
+    expect(tableColumns(db, "daily_tasks")).toEqual(
+      expect.arrayContaining([
+        "plan_date",
+        "estimated_minutes",
+        "status",
+        "sort_order",
+        "deleted_at",
+      ]),
+    );
+    expect(tableColumns(db, "daily_time_entries")).toEqual(
+      expect.arrayContaining([
+        "task_id",
+        "started_at",
+        "ended_at",
+        "duration_seconds",
+        "end_reason",
+      ]),
+    );
+    // plan_date 索引与活动计时部分唯一索引就位
+    const indexes = (
+      db
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name IN ('daily_tasks','daily_time_entries')",
+        )
+        .all() as { name: string }[]
+    ).map((row) => row.name);
+    expect(indexes).toEqual(
+      expect.arrayContaining([
+        "idx_daily_tasks_plan_date",
+        "idx_daily_time_entries_active",
+      ]),
+    );
+    const timestamp = "2026-10-24T01:00:00.000Z";
+    db.prepare(
+      `INSERT INTO daily_tasks
+        (title, description, plan_date, estimated_minutes, status, sort_order, created_at, updated_at)
+       VALUES ('任务', '', '2026-10-24', 60, 'pending', 0, ?, ?)`,
+    ).run(timestamp, timestamp);
+    const insertEntry = db.prepare(
+      `INSERT INTO daily_time_entries
+        (task_id, started_at, duration_seconds, status, created_at, updated_at)
+       VALUES (1, ?, 0, 'active', ?, ?)`,
+    );
+    insertEntry.run(timestamp, timestamp, timestamp);
+    expect(() => insertEntry.run(timestamp, timestamp, timestamp)).toThrow();
   });
 });

@@ -44,6 +44,8 @@ import {
 import {
   artifactUploadMaxBytes,
   artifactUploadMaxLabel,
+  dailyDateSchema,
+  dailyMonthSchema,
   stages,
   updateInstallRequestSchema,
 } from "@superpm/shared";
@@ -107,6 +109,7 @@ export async function createApp(
     files: fileService,
     issues: issueService,
     artifacts: artifactService,
+    dailyTasks,
   } = container;
   const paths = { databasePath, workspacePath };
   const updates = createUpdateService({
@@ -143,6 +146,21 @@ export async function createApp(
     (_request, body, done) => done(null, body),
   );
   app.addHook("onClose", async () => container.close());
+  // 18:00 与每日 8 小时上限的兜底检查；启动时先补偿一次错过的边界。
+  try {
+    dailyTasks.reconcile();
+  } catch (error) {
+    app.log.error(error, "启动时检查每日任务计时失败");
+  }
+  const dailyTimer = setInterval(() => {
+    try {
+      dailyTasks.reconcile();
+    } catch (error) {
+      app.log.error(error, "每日任务自动结束检查失败");
+    }
+  }, 15_000);
+  dailyTimer.unref();
+  app.addHook("onClose", async () => clearInterval(dailyTimer));
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof ZodError) {
       return reply.status(400).send({
@@ -278,9 +296,10 @@ export async function createApp(
           name: roadmap.issues,
           status: "available",
         },
+        { key: "tasks", name: roadmap.tasks, status: "available" },
         { key: "updates", name: "版本与更新", status: "available" },
         ...Object.entries(roadmap)
-          .filter(([key]) => key !== "issues")
+          .filter(([key]) => key !== "issues" && key !== "tasks")
           .map(([key, name]) => ({
             key,
             name,
@@ -577,6 +596,64 @@ export async function createApp(
       );
       return reply.status(204).send();
     },
+  );
+  // ===== 每日任务与工时 =====
+  const dailyDayQuery = z.object({ date: dailyDateSchema.optional() }).strict();
+  const dailyCalendarQuery = z
+    .object({ month: dailyMonthSchema.optional() })
+    .strict();
+  app.get("/api/daily-tasks/calendar", async (request) => {
+    const query = dailyCalendarQuery.parse(request.query ?? {});
+    return dailyTasks.calendar(query.month ?? dailyTasks.currentMonth());
+  });
+  app.get("/api/daily-tasks/active", async () => dailyTasks.activeState());
+  app.get("/api/daily-tasks/summary-text", async (request) => {
+    const query = dailyDayQuery.parse(request.query ?? {});
+    return dailyTasks.summaryText(query.date ?? dailyTasks.today());
+  });
+  app.get("/api/daily-tasks", async (request) => {
+    const query = dailyDayQuery.parse(request.query ?? {});
+    return dailyTasks.day(query.date);
+  });
+  app.post("/api/daily-tasks", async (request, reply) =>
+    reply.status(201).send(dailyTasks.create(request.body)),
+  );
+  // 静态路径先于 /:id 注册，避免排序与详情路由混淆
+  app.patch("/api/daily-tasks/order", async (request) =>
+    dailyTasks.reorder(request.body),
+  );
+  app.get<{ Params: { id: string } }>(
+    "/api/daily-tasks/:id/time-entries",
+    async (request) =>
+      dailyTasks.listTaskEntries(parseScopedId(request.params.id, "任务")),
+  );
+  app.post<{ Params: { id: string } }>(
+    "/api/daily-tasks/:id/start",
+    async (request) =>
+      dailyTasks.start(parseScopedId(request.params.id, "任务")),
+  );
+  app.post<{ Params: { id: string } }>(
+    "/api/daily-tasks/:id/stop",
+    async (request) =>
+      dailyTasks.stop(parseScopedId(request.params.id, "任务")),
+  );
+  app.patch<{ Params: { id: string } }>(
+    "/api/daily-tasks/:id",
+    async (request) =>
+      dailyTasks.update(parseScopedId(request.params.id, "任务"), request.body),
+  );
+  app.delete<{ Params: { id: string } }>(
+    "/api/daily-tasks/:id",
+    async (request) =>
+      dailyTasks.remove(parseScopedId(request.params.id, "任务")),
+  );
+  app.patch<{ Params: { id: string } }>(
+    "/api/daily-time-entries/:id",
+    async (request) =>
+      dailyTasks.updateTimeEntry(
+        parseScopedId(request.params.id, "工时记录"),
+        request.body,
+      ),
   );
   const webRoot = join(projectRoot, "apps", "web", "dist");
   // legacy：阶段工作区 JSON 接口，Web 已不再调用；进度以需求字段、阶段历史与问题/产出物统计为准。
@@ -910,5 +987,13 @@ function parseId(value: string) {
   const id = Number(value);
   if (!Number.isSafeInteger(id))
     throw new DomainError("VALIDATION_ERROR", "需求 ID 无效");
+  return id;
+}
+function parseScopedId(value: string, label: string) {
+  if (!/^[1-9]\d*$/.test(value))
+    throw new DomainError("VALIDATION_ERROR", `${label} ID 无效`);
+  const id = Number(value);
+  if (!Number.isSafeInteger(id))
+    throw new DomainError("VALIDATION_ERROR", `${label} ID 无效`);
   return id;
 }

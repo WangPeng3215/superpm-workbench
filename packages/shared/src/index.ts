@@ -953,3 +953,5 @@ export interface ArtifactImageUploadResult {
 export * from "./mcp-contract.js";
 // 应用内更新契约：清单、检查结果、安装进度与运行时状态
 export * from "./update-contract.js";
+// 每日任务与工时记录契约
+export * from "./daily-tasks.js";
