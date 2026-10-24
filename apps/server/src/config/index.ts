@@ -19,8 +19,27 @@ function findProjectRoot() {
   }
 }
 export const projectRoot = findProjectRoot();
-// 发布包中项目根位于 <安装目录>/app，程序目录之外才是稳定安装布局。
-export const isPackagedInstall = basename(projectRoot) === "app";
+function readManifest(directory: string): Record<string, unknown> | null {
+  try {
+    return JSON.parse(
+      readFileSync(join(directory, "package.json"), "utf8"),
+    ) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+// 发布包的程序目录固定为 <安装目录>/app；打包脚本生成的 app/package.json 只含运行依赖，
+// 开发仓库根清单始终带 workspaces。用清单形状兜底，目录被改名或单独拷贝时也能识别发布模式。
+export function isPackagedRoot(directory: string): boolean {
+  if (basename(directory) === "app") return true;
+  const manifest = readManifest(directory);
+  return (
+    manifest !== null &&
+    manifest.name === "superpm-workbench" &&
+    !("workspaces" in manifest)
+  );
+}
+export const isPackagedInstall = isPackagedRoot(projectRoot);
 export const installRoot = resolve(
   process.env.SUPERPM_INSTALL_ROOT ||
     (isPackagedInstall ? dirname(projectRoot) : projectRoot),

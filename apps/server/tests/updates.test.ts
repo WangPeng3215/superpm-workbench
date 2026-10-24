@@ -422,7 +422,7 @@ describe("更新状态", () => {
     const service = createService(directory, { home, isPackaged: false });
     const status = service.status();
     expect(status.installSupported).toBe(false);
-    expect(status.unsupportedReason).toContain("开发环境");
+    expect(status.unsupportedReason).toContain("未检测到发布安装布局");
     expect(status.updaterVersion).toBe("1.0.0");
     expect(status.progress).toMatchObject({ status: "running", percent: 42 });
     expect(status.lastUpdate).toMatchObject({ status: "updated", to: "0.3.0" });
@@ -488,7 +488,7 @@ describe("更新接口", () => {
       latestVersion: "99.0.0",
       available: true,
       installable: false,
-      blockedReason: expect.stringContaining("开发环境"),
+      blockedReason: expect.stringContaining("未检测到发布安装布局"),
     });
   });
 });

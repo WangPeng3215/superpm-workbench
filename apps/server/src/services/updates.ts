@@ -241,7 +241,7 @@ export class UpdateService {
       return {
         supported: false,
         reason:
-          "当前为开发环境，应用内更新仅在发布安装包中可用；请使用 Update.cmd 或完整安装包。",
+          "当前未检测到发布安装布局（程序目录应为安装目录下的 app/），应用内更新不可用；请使用 Update.cmd 或完整安装包。",
       };
     if (!existsSync(join(this.appRoot, "package.json")))
       return { supported: false, reason: "当前程序目录不完整，无法执行更新。" };

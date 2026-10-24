@@ -9,7 +9,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { appVersion, loadEnv, projectRoot } from "../src/config/index.js";
+import { appVersion, isPackagedRoot, loadEnv, projectRoot } from "../src/config/index.js";
 import { SCHEMA_VERSION } from "../src/db/migrate.js";
 
 const directories: string[] = [];
@@ -78,6 +78,42 @@ describe("版本号与环境加载", () => {
     const env: NodeJS.ProcessEnv = {};
     expect(loadEnv(project, env)).toBeUndefined();
     expect(env.PORT).toBe("4100");
+  });
+
+  it("发布模式按目录名或打包清单识别，开发仓库不被误判", () => {
+    const base = tempDir();
+    const packaged = join(base, "app");
+    const renamed = join(base, "superPM");
+    const workspace = join(base, "repo");
+    for (const directory of [packaged, renamed, workspace])
+      mkdirSync(directory, { recursive: true });
+    // 打包脚本生成的 app/package.json：无 workspaces
+    writeFileSync(
+      join(renamed, "package.json"),
+      JSON.stringify({
+        name: "superpm-workbench",
+        version: "0.3.1",
+        private: true,
+        dependencies: { "better-sqlite3": "12.11.1" },
+      }),
+      "utf8",
+    );
+    // 开发仓库根清单：带 workspaces
+    writeFileSync(
+      join(workspace, "package.json"),
+      JSON.stringify({
+        name: "superpm-workbench",
+        version: "0.3.1",
+        private: true,
+        workspaces: ["apps/*", "packages/*"],
+      }),
+      "utf8",
+    );
+
+    expect(isPackagedRoot(packaged)).toBe(true);
+    expect(isPackagedRoot(renamed)).toBe(true);
+    expect(isPackagedRoot(workspace)).toBe(false);
+    expect(isPackagedRoot(join(base, "empty"))).toBe(false);
   });
 
   it("defaultPaths 在数据根内解析相对路径", async () => {
