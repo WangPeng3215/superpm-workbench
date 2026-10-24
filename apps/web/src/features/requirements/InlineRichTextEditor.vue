@@ -9,6 +9,9 @@ import { Placeholder } from "@tiptap/extensions";
 import DOMPurify from "dompurify";
 import { ElMessage, ElMessageBox } from "element-plus";
 import {
+  AlignCenterOutlined,
+  AlignLeftOutlined,
+  AlignRightOutlined,
   BoldOutlined,
   CheckSquareOutlined,
   CodeOutlined,
@@ -25,6 +28,7 @@ import {
 } from "@ant-design/icons-vue";
 import { artifactApi } from "../../api/artifacts";
 import { errorMessage } from "../../api/client";
+import { BlockStyle, MAX_BLOCK_INDENT, type BlockAlign } from "./block-style";
 import { imageDisplayUrl, toDisplayHtml } from "./doc-images";
 import { looksLikeMarkdown, markdownToHtml } from "./doc-markdown";
 
@@ -66,7 +70,19 @@ async function waitForUpload() {
     });
   });
 }
-defineExpose({ waitForUpload });
+function getContent() {
+  const instance = editor.value;
+  if (!instance)
+    return {
+      html: toHtml(props.html, props.text ?? ""),
+      text: props.text ?? "",
+    };
+  return {
+    html: DOMPurify.sanitize(instance.getHTML(), SANITIZE),
+    text: instance.getText(),
+  };
+}
+defineExpose({ waitForUpload, getContent });
 function toHtml(source: string, text: string) {
   if (source) return DOMPurify.sanitize(source, SANITIZE);
   return text
@@ -93,6 +109,7 @@ const editor = useEditor({
     TableKit.configure({ table: { resizable: false } }),
     TaskList,
     TaskItem.configure({ nested: true }),
+    BlockStyle,
     Placeholder.configure({
       placeholder: props.placeholder ?? "在这里输入或粘贴内容…",
     }),
@@ -173,12 +190,48 @@ function setHeading(level: 1 | 2 | 3) {
 function toggleListTask() {
   editor.value?.chain().focus().toggleTaskList().run();
 }
-function indentList(outdent: boolean) {
+// 列表内缩进改变嵌套层级；普通段落/标题则调整块级缩进量
+function indentBlock(outdent: boolean) {
   const instance = editor.value;
   if (!instance) return;
-  const type = instance.isActive("taskItem") ? "taskItem" : "listItem";
-  const chain = instance.chain().focus();
-  (outdent ? chain.liftListItem(type) : chain.sinkListItem(type)).run();
+  const inList = instance.isActive("taskItem") || instance.isActive("listItem");
+  if (inList) {
+    const type = instance.isActive("taskItem") ? "taskItem" : "listItem";
+    const chain = instance.chain().focus();
+    (outdent ? chain.liftListItem(type) : chain.sinkListItem(type)).run();
+    return;
+  }
+  instance
+    .chain()
+    .focus()
+    .indentBlock(outdent ? -1 : 1)
+    .run();
+}
+function currentAlign(): BlockAlign | null {
+  const instance = editor.value;
+  if (!instance) return null;
+  const attrs = instance.isActive("heading")
+    ? instance.getAttributes("heading")
+    : instance.getAttributes("paragraph");
+  return (attrs.textAlign as BlockAlign | null) ?? null;
+}
+function currentIndent() {
+  const instance = editor.value;
+  if (!instance) return 0;
+  const attrs = instance.isActive("heading")
+    ? instance.getAttributes("heading")
+    : instance.getAttributes("paragraph");
+  return Number(attrs.indent) || 0;
+}
+function alignBlock(align: BlockAlign) {
+  const instance = editor.value;
+  if (!instance) return;
+  // 再次点击当前对齐方式时恢复默认左对齐（不写入多余样式）
+  instance
+    .chain()
+    .focus()
+    .setBlockAlign(currentAlign() === align ? null : align)
+    .run();
 }
 async function setLink() {
   const instance = editor.value;
@@ -300,9 +353,10 @@ onBeforeUnmount(() => editor.value?.destroy());
     v-if="editor"
     @error.capture="onImageError"
   >
-    <div class="rich-toolbar">
+    <div class="rich-toolbar" @mousedown.prevent>
       <div class="toolbar-group">
         <button
+          type="button"
           :disabled="!editor.can().undo()"
           aria-label="撤销"
           title="撤销 (Ctrl+Z)"
@@ -311,6 +365,7 @@ onBeforeUnmount(() => editor.value?.destroy());
           <UndoOutlined />
         </button>
         <button
+          type="button"
           :disabled="!editor.can().redo()"
           aria-label="重做"
           title="重做 (Ctrl+Shift+Z)"
@@ -322,6 +377,7 @@ onBeforeUnmount(() => editor.value?.destroy());
       <span class="toolbar-divider"></span>
       <div class="toolbar-group">
         <button
+          type="button"
           :class="{ active: editor.isActive('bold') }"
           aria-label="加粗"
           title="加粗 (Ctrl+B)"
@@ -330,6 +386,7 @@ onBeforeUnmount(() => editor.value?.destroy());
           <BoldOutlined />
         </button>
         <button
+          type="button"
           :class="{ active: editor.isActive('italic') }"
           aria-label="斜体"
           title="斜体 (Ctrl+I)"
@@ -338,6 +395,7 @@ onBeforeUnmount(() => editor.value?.destroy());
           <ItalicOutlined />
         </button>
         <button
+          type="button"
           :class="{ active: editor.isActive('underline') }"
           aria-label="下划线"
           title="下划线 (Ctrl+U)"
@@ -346,6 +404,7 @@ onBeforeUnmount(() => editor.value?.destroy());
           <UnderlineOutlined />
         </button>
         <button
+          type="button"
           :class="{ active: editor.isActive('strike') }"
           aria-label="删除线"
           title="删除线"
@@ -354,6 +413,7 @@ onBeforeUnmount(() => editor.value?.destroy());
           <StrikethroughOutlined />
         </button>
         <button
+          type="button"
           :class="{ active: editor.isActive('code') }"
           aria-label="行内代码"
           title="行内代码"
@@ -362,6 +422,7 @@ onBeforeUnmount(() => editor.value?.destroy());
           代码
         </button>
         <button
+          type="button"
           aria-label="清除格式"
           title="清除格式"
           @click="editor.chain().focus().unsetAllMarks().clearNodes().run()"
@@ -372,6 +433,7 @@ onBeforeUnmount(() => editor.value?.destroy());
       <span class="toolbar-divider toolbar-divider--heading"></span>
       <div class="toolbar-group toolbar-group--heading">
         <button
+          type="button"
           :class="{ active: editor.isActive('paragraph') }"
           aria-label="正文"
           title="正文"
@@ -380,6 +442,7 @@ onBeforeUnmount(() => editor.value?.destroy());
           正文
         </button>
         <button
+          type="button"
           v-for="level in [1, 2, 3] as const"
           :key="level"
           :class="{ active: editor.isActive('heading', { level }) }"
@@ -391,8 +454,60 @@ onBeforeUnmount(() => editor.value?.destroy());
         </button>
       </div>
       <span class="toolbar-divider"></span>
+      <div class="toolbar-group toolbar-group--align">
+        <button
+          type="button"
+          :class="{ active: currentAlign() === 'left' }"
+          aria-label="左对齐"
+          title="左对齐"
+          @click="alignBlock('left')"
+        >
+          <AlignLeftOutlined />
+        </button>
+        <button
+          type="button"
+          :class="{ active: currentAlign() === 'center' }"
+          aria-label="居中对齐"
+          title="居中对齐"
+          @click="alignBlock('center')"
+        >
+          <AlignCenterOutlined />
+        </button>
+        <button
+          type="button"
+          :class="{ active: currentAlign() === 'right' }"
+          aria-label="右对齐"
+          title="右对齐"
+          @click="alignBlock('right')"
+        >
+          <AlignRightOutlined />
+        </button>
+        <button
+          type="button"
+          :class="{ active: currentAlign() === 'justify' }"
+          aria-label="两端对齐"
+          title="两端对齐"
+          @click="alignBlock('justify')"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            aria-hidden="true"
+          >
+            <path d="M4 6h16" />
+            <path d="M4 10h16" />
+            <path d="M4 14h16" />
+            <path d="M4 18h16" />
+          </svg>
+        </button>
+      </div>
+      <span class="toolbar-divider"></span>
       <div class="toolbar-group">
         <button
+          type="button"
           :class="{ active: editor.isActive('bulletList') }"
           aria-label="项目列表"
           title="项目列表"
@@ -401,6 +516,7 @@ onBeforeUnmount(() => editor.value?.destroy());
           <UnorderedListOutlined />
         </button>
         <button
+          type="button"
           :class="{ active: editor.isActive('orderedList') }"
           aria-label="编号列表"
           title="编号列表"
@@ -409,6 +525,7 @@ onBeforeUnmount(() => editor.value?.destroy());
           <OrderedListOutlined />
         </button>
         <button
+          type="button"
           :class="{ active: editor.isActive('taskList') }"
           aria-label="任务清单"
           title="任务清单"
@@ -417,9 +534,15 @@ onBeforeUnmount(() => editor.value?.destroy());
           <CheckSquareOutlined />
         </button>
         <button
+          type="button"
+          :disabled="
+            !editor.isActive('listItem') &&
+            !editor.isActive('taskItem') &&
+            currentIndent() <= 0
+          "
           aria-label="减少缩进"
           title="减少缩进"
-          @click="indentList(true)"
+          @click="indentBlock(true)"
         >
           <svg
             viewBox="0 0 24 24"
@@ -437,9 +560,15 @@ onBeforeUnmount(() => editor.value?.destroy());
           </svg>
         </button>
         <button
+          type="button"
+          :disabled="
+            !editor.isActive('listItem') &&
+            !editor.isActive('taskItem') &&
+            currentIndent() >= MAX_BLOCK_INDENT
+          "
           aria-label="增加缩进"
           title="增加缩进"
-          @click="indentList(false)"
+          @click="indentBlock(false)"
         >
           <svg
             viewBox="0 0 24 24"
@@ -460,6 +589,7 @@ onBeforeUnmount(() => editor.value?.destroy());
       <span class="toolbar-divider"></span>
       <div class="toolbar-group">
         <button
+          type="button"
           :class="{ active: editor.isActive('blockquote') }"
           aria-label="引用"
           title="引用"
@@ -481,6 +611,7 @@ onBeforeUnmount(() => editor.value?.destroy());
           </svg>
         </button>
         <button
+          type="button"
           :class="{ active: editor.isActive('codeBlock') }"
           aria-label="代码块"
           title="代码块"
@@ -489,6 +620,7 @@ onBeforeUnmount(() => editor.value?.destroy());
           <CodeOutlined />
         </button>
         <button
+          type="button"
           aria-label="分割线"
           title="分割线"
           @click="editor.chain().focus().setHorizontalRule().run()"
@@ -499,6 +631,7 @@ onBeforeUnmount(() => editor.value?.destroy());
       <span class="toolbar-divider"></span>
       <div class="toolbar-group">
         <button
+          type="button"
           :class="{ active: editor.isActive('link') }"
           aria-label="链接"
           title="插入或编辑链接"
@@ -507,6 +640,7 @@ onBeforeUnmount(() => editor.value?.destroy());
           <LinkOutlined />
         </button>
         <button
+          type="button"
           :disabled="uploading || !requirementId"
           :title="
             uploading
@@ -805,21 +939,46 @@ onBeforeUnmount(() => editor.value?.destroy());
 .inline-rich :deep(.rich-document .column-resize-handle) {
   display: none;
 }
+/* 块级缩进：Markdown 没有缩进语法，段落/标题以 data-indent 记录层级 */
+.inline-rich :deep(.rich-document [data-indent="1"]) {
+  margin-left: 1.5em;
+}
+.inline-rich :deep(.rich-document [data-indent="2"]) {
+  margin-left: 3em;
+}
+.inline-rich :deep(.rich-document [data-indent="3"]) {
+  margin-left: 4.5em;
+}
+.inline-rich :deep(.rich-document [data-indent="4"]) {
+  margin-left: 6em;
+}
+.inline-rich :deep(.rich-document [data-indent="5"]) {
+  margin-left: 7.5em;
+}
+.inline-rich :deep(.rich-document [data-indent="6"]) {
+  margin-left: 9em;
+}
 .inline-rich :deep(.rich-document ul[data-type="taskList"]) {
   list-style: none;
   padding-left: 2px;
 }
+/* 复选框独占一列，正文占另一列：文字紧跟复选框并从同一列换行 */
 .inline-rich :deep(.rich-document ul[data-type="taskList"] li) {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  column-gap: 8px;
 }
 .inline-rich :deep(.rich-document ul[data-type="taskList"] li > label) {
-  flex: 1;
+  display: flex;
+  align-items: center;
+  padding-top: 5px;
+}
+.inline-rich :deep(.rich-document ul[data-type="taskList"] li > div) {
   min-width: 0;
 }
 .inline-rich :deep(.rich-document ul[data-type="taskList"] input) {
-  margin: 5px 0 0;
+  margin: 0;
   accent-color: var(--brand);
 }
 .inline-rich :deep(.rich-document p.is-editor-empty:first-child::before) {

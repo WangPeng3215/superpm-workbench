@@ -91,6 +91,76 @@ describe("document markdown serialization", () => {
     expect(documentToEditorHtml("# 新正文\n")).toContain("<h1>新正文</h1>");
     expect(documentToEditorHtml("   ")).toBe("");
   });
+
+  it("keeps aligned and indented blocks as inline html", () => {
+    const centered = '<p style="text-align: center">居中段落</p>';
+    const aligned = htmlToMarkdown(centered);
+    expect(aligned).toContain('style="text-align: center"');
+    expect(roundtrip(aligned)).toBe(aligned);
+
+    const indented = '<p data-indent="2">缩进段落</p>';
+    const indentMarkdown = htmlToMarkdown(indented);
+    expect(indentMarkdown).toContain('data-indent="2"');
+    expect(roundtrip(indentMarkdown)).toBe(indentMarkdown);
+
+    const both =
+      '<h2 style="text-align: right" data-indent="1">右对齐标题</h2>';
+    const bothMarkdown = htmlToMarkdown(both);
+    expect(bothMarkdown).toContain('style="text-align: right"');
+    expect(bothMarkdown).toContain('data-indent="1"');
+    expect(roundtrip(bothMarkdown)).toBe(bothMarkdown);
+  });
+
+  it("keeps styles inside list items", () => {
+    const markdown = htmlToMarkdown(
+      '<ul><li><p style="text-align: center">列表项</p></li></ul>',
+    );
+    expect(markdown).toBe('- <span data-block="center">列表项</span>\n');
+    expect(roundtrip(markdown)).toBe(markdown);
+
+    const indented = htmlToMarkdown(
+      '<ul><li><p data-indent="2">缩进列表项</p></li></ul>',
+    );
+    expect(indented).toBe('- <span data-block="i2">缩进列表项</span>\n');
+    expect(roundtrip(indented)).toBe(indented);
+  });
+
+  it("keeps styles inside task list items", () => {
+    const markdown = htmlToMarkdown(
+      '<ul data-type="taskList"><li data-type="taskItem" data-checked="true">' +
+        '<label><input type="checkbox" checked><span></span></label>' +
+        '<div><p style="text-align: right" data-indent="1">已完成</p></div></li></ul>',
+    );
+    expect(markdown).toBe('- [x] <span data-block="right:i1">已完成</span>\n');
+    const html = markdownToHtml(markdown);
+    expect(html).toContain('data-type="taskItem"');
+    expect(html).toContain('style="text-align: right"');
+    expect(html).toContain('data-indent="1"');
+    expect(html).not.toContain("data-block");
+    expect(html.match(/<p/g)?.length).toBe(1);
+    expect(roundtrip(markdown)).toBe(markdown);
+  });
+
+  it("keeps list nesting and siblings alongside a styled item", () => {
+    const markdown =
+      '- <span data-block="center">父项</span>\n  - 子项\n- 另一项\n';
+    const html = markdownToHtml(markdown);
+    expect(html).toContain('<li><p style="text-align: center">父项</p>');
+    expect(html.indexOf("父项")).toBeLessThan(html.indexOf("子项"));
+    expect(roundtrip(markdown)).toBe(markdown);
+  });
+
+  it("does not mistake styled blocks at the start for legacy html", () => {
+    expect(
+      isLegacyHtmlContent('<p style="text-align: center">居中</p>\n\n- 列表\n'),
+    ).toBe(false);
+    expect(
+      isLegacyHtmlContent('<p style="text-align: center">居中</p>\n\n正文\n'),
+    ).toBe(false);
+    expect(
+      isLegacyHtmlContent('<h2 data-indent="1">标题</h2>\n\n**重点**\n'),
+    ).toBe(false);
+  });
 });
 
 describe("markdown paste detection", () => {

@@ -103,6 +103,115 @@ test("rich description and column preferences persist", async ({
   ).toHaveCount(0);
 });
 
+test("list description dialog shares the detail editor and keeps block styles", async ({
+  page,
+  request,
+}) => {
+  const name = `描述编辑器-${Date.now()}`;
+  await page.goto("/requirements");
+  const row = await addRequirement(page, name);
+  await row.getByRole("button", { name: "添加描述", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  const content = dialog.getByLabel("富文本内容");
+  await expect(content).toBeVisible();
+  // 与需求详情使用同一套工具栏：下划线、任务清单、对齐、缩进都应存在
+  for (const label of [
+    "下划线",
+    "任务清单",
+    "左对齐",
+    "居中对齐",
+    "右对齐",
+    "两端对齐",
+    "增加缩进",
+    "减少缩进",
+  ])
+    await expect(
+      dialog.getByRole("button", { name: label, exact: true }),
+    ).toBeVisible();
+  await content.fill("复选框后的文字应紧跟复选框排列，而不是被推到最右侧。");
+  // 任务清单：正文紧邻复选框所在列
+  await dialog.getByRole("button", { name: "任务清单", exact: true }).click();
+  const item = content.locator('ul[data-type="taskList"] li').first();
+  await expect(item).toBeVisible();
+  const labelBox = await item.locator("label").boundingBox();
+  const contentBox = await item.locator("div").first().boundingBox();
+  expect(contentBox!.x - (labelBox!.x + labelBox!.width)).toBeLessThan(20);
+  // 退出任务清单后设置对齐与块级缩进
+  await dialog.getByRole("button", { name: "任务清单", exact: true }).click();
+  await dialog.getByRole("button", { name: "居中对齐", exact: true }).click();
+  const paragraph = content.locator("p").first();
+  await expect(paragraph).toHaveCSS("text-align", "center");
+  await dialog.getByRole("button", { name: "增加缩进", exact: true }).click();
+  await expect(paragraph).toHaveAttribute("data-indent", "1");
+  // 真实选区内斜体生效
+  await content.click();
+  await page.keyboard.press("ControlOrMeta+a");
+  await dialog.getByRole("button", { name: "斜体", exact: true }).click();
+  await expect(content.locator("em").first()).toContainText("复选框");
+  await dialog.getByRole("button", { name: "应用内容", exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await page
+    .locator("tr.editing-row")
+    .getByRole("button", { name: "保存", exact: true })
+    .click();
+  const saved = (
+    await (
+      await request.get(`/api/requirements?q=${encodeURIComponent(name)}`)
+    ).json()
+  ).items[0];
+  expect(saved.descriptionHtml).toContain("text-align: center");
+  expect(saved.descriptionHtml).toContain('data-indent="1"');
+  expect(saved.descriptionHtml).toContain("<em>");
+  // 刷新后从列表再次打开，仍复用统一编辑器并回显样式
+  await page.reload();
+  const reopened = page
+    .getByRole("button", { name, exact: true })
+    .locator("xpath=ancestor::tr");
+  await reopened.locator(".rich-cell").click();
+  await expect(dialog).toBeVisible();
+  await expect(content).toContainText("复选框后的文字");
+  await expect(content.locator("p").first()).toHaveCSS("text-align", "center");
+  await expect(content.locator("p").first()).toHaveAttribute(
+    "data-indent",
+    "1",
+  );
+  await expect(
+    dialog.getByRole("button", { name: "居中对齐", exact: true }),
+  ).toHaveCount(1);
+});
+
+test("document editor keeps list item alignment in markdown", async ({
+  page,
+}) => {
+  const name = `文档对齐-${Date.now()}`;
+  await page.goto("/requirements");
+  const row = await addRequirement(page, name);
+  await row.locator(".requirement-no").click();
+  await expect(page).toHaveURL(/\/requirements\/\d+$/);
+  await page.getByRole("tab", { name: "文档管理" }).click();
+  await page.locator('.doc-card[data-name="需求记忆.md"]').click();
+  const editor = page.getByLabel("文档内容");
+  const toolbar = page
+    .locator(".inline-rich")
+    .filter({ has: editor })
+    .locator(".rich-toolbar");
+  await editor.fill("列表项也要保留对齐");
+  await page.keyboard.press("ControlOrMeta+a");
+  await toolbar.getByRole("button", { name: "项目列表", exact: true }).click();
+  const item = editor.locator("li p").first();
+  await expect(item).toBeVisible();
+  await toolbar.getByRole("button", { name: "居中对齐", exact: true }).click();
+  await expect(item).toHaveCSS("text-align", "center");
+  await expect(page.getByText("已自动保存到本地文件")).toBeVisible();
+  // 重新打开文档：对齐由 Markdown 内的行内承载还原，而不是被静默丢弃
+  await page.reload();
+  await page.getByRole("tab", { name: "文档管理" }).click();
+  await page.locator('.doc-card[data-name="需求记忆.md"]').click();
+  const reopened = page.getByLabel("文档内容").locator("li p").first();
+  await expect(reopened).toHaveCSS("text-align", "center");
+  await expect(reopened).toContainText("列表项也要保留对齐");
+});
+
 test("stage workspace persists analysis docs and issue resolution", async ({
   page,
   request,

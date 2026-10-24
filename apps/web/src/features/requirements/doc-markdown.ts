@@ -7,8 +7,9 @@ import { gfm } from "turndown-plugin-gfm";
 import { Marked, Renderer, type Token } from "marked";
 
 /** 是否为旧版以 HTML 保存的正文（首次编辑后会被改写为 Markdown） */
+// 新版 Markdown 用内嵌 HTML 承载对齐/缩进，首块带这些属性时不能按旧版 HTML 处理
 const HTML_SOURCE_PATTERN =
-  /^\s*<(?:!doctype|h[1-6]|p|ul|ol|li|div|table|pre|blockquote|img)\b/i;
+  /^\s*<(?:!doctype|h[1-6]|p|ul|ol|li|div|table|pre|blockquote|img)\b(?![^>]*(?:text-align|data-indent))/i;
 
 export function isLegacyHtmlContent(content: string): boolean {
   return HTML_SOURCE_PATTERN.test(content.trim());
@@ -62,10 +63,39 @@ function createMarkdownParser() {
 
 const markdownParser = createMarkdownParser();
 
+// 列表项内的对齐/缩进以行内 <span data-block="center:i2"> 承载，读入时换回段落属性，
+// 再由编辑器的块属性解析还原；块级 HTML 在列表里会吞掉后续条目，因此不能用 <p> 承载。
+const BLOCK_ALIGNS = ["left", "center", "right", "justify"];
+
+function carrierAttributes(value: string) {
+  let align = "";
+  let level = "";
+  for (const part of value.split(":")) {
+    if (BLOCK_ALIGNS.includes(part)) align = part;
+    else level = /^i(\d+)$/.exec(part)?.[1] ?? level;
+  }
+  const style = align ? ` style="text-align: ${align}"` : "";
+  return `${style}${level ? ` data-indent="${level}"` : ""}`;
+}
+
+function restoreBlockCarriers(html: string) {
+  return html
+    .replace(
+      /<p><span data-block="([^"]+)">([\s\S]*?)<\/span><\/p>/g,
+      (_match, value: string, body: string) =>
+        `<p${carrierAttributes(value)}>${body}</p>`,
+    )
+    .replace(
+      /<li><span data-block="([^"]+)">([\s\S]*?)<\/span>/g,
+      (_match, value: string, body: string) =>
+        `<li><p${carrierAttributes(value)}>${body}</p>`,
+    );
+}
+
 /** Markdown 正文 → 编辑器 HTML（未做图片地址转换，调用方按文档目录再处理） */
 export function markdownToHtml(markdown: string): string {
   if (!markdown.trim()) return "";
-  return String(markdownParser.parse(markdown));
+  return restoreBlockCarriers(String(markdownParser.parse(markdown)));
 }
 
 /**
@@ -141,6 +171,47 @@ function listItem(content: string, prefix: string, indentSize: number) {
   return `${prefix}${text}\n`;
 }
 
+// 对齐与块级缩进没有 Markdown 语法：顶层段落/标题带样式时原样保留为行内 HTML 块，
+// 列表项内改用行内 span 承载（块级 HTML 会吞掉后续列表行，破坏嵌套与同级条目），
+// 读入时再由编辑器的块属性解析还原。表格单元格没有承载样式的语法，仍按纯文本收敛。
+function inList(element: Element) {
+  let parent = element.parentNode as Element | null;
+  while (parent) {
+    if (["TD", "TH"].includes(parent.nodeName)) return false;
+    if (parent.nodeName === "LI") return true;
+    parent = parent.parentNode as Element | null;
+  }
+  return false;
+}
+
+function blockStyleOf(element: Element) {
+  const align = /text-align\s*:\s*([a-z]+)/i.exec(
+    element.getAttribute("style") ?? "",
+  )?.[1];
+  const indent = Math.min(
+    6,
+    Math.max(0, Number(element.getAttribute("data-indent")) || 0),
+  );
+  if (!align && !indent) return null;
+  return [align, indent ? `i${indent}` : ""].filter(Boolean).join(":");
+}
+
+function isStyledBlock(node: Node) {
+  if (!/^(P|H[1-6])$/.test(node.nodeName)) return false;
+  const element = node as Element;
+  return blockStyleOf(element) !== null && !isTableCell(element);
+}
+
+function isTableCell(element: Element) {
+  let parent = element.parentNode as Element | null;
+  while (parent) {
+    if (["TD", "TH"].includes(parent.nodeName)) return true;
+    if (parent.nodeName === "LI") return false;
+    parent = parent.parentNode as Element | null;
+  }
+  return false;
+}
+
 function createMarkdownWriter() {
   const service = new TurndownService({
     headingStyle: "atx",
@@ -153,6 +224,30 @@ function createMarkdownWriter() {
     linkStyle: "inlined",
   });
   service.use(gfm);
+  service.addRule("styledBlock", {
+    filter: (node) => isStyledBlock(node),
+    replacement: (content, node) => {
+      const element = node as Element;
+      if (inList(element))
+        return `<span data-block="${blockStyleOf(element)}">${content.trim()}</span>`;
+      return `\n\n${element.outerHTML}\n\n`;
+    },
+  });
+  // 列表项内的样式已经以 span 承载，重新序列化时原样保留
+  service.addRule("blockCarrier", {
+    filter: (node) => {
+      const element = node as Element;
+      const parent = element.parentNode as Element | null;
+      return (
+        element.nodeName === "SPAN" &&
+        Boolean(element.getAttribute("data-block")) &&
+        (parent?.nodeName === "LI" || parent?.nodeName === "P") &&
+        !isTableCell(element)
+      );
+    },
+    replacement: (content, node) =>
+      `<span data-block="${(node as Element).getAttribute("data-block")}">${content.trim()}</span>`,
+  });
   // 列表项：保留起始序号与嵌套缩进（gfm 默认会把条目写成四空格缩进的松散列表）
   service.addRule("listItem", {
     filter: "li",
