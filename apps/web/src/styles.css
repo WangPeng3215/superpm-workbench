@@ -165,46 +165,44 @@ a:focus-visible {
 .sidebar {
   background: var(--bg-surface);
   border-right: 1px solid var(--border-base);
-  padding: 30px 16px 20px;
+  padding: 0 16px 20px;
   display: flex;
   flex-direction: column;
   position: sticky;
   top: 0;
   height: 100dvh;
 }
+/* 品牌区与顶栏同高（56px），logo 收到与顶栏控件一致的 30px */
 .brand {
   display: flex;
-  gap: 12px;
+  gap: 10px;
   align-items: center;
+  height: 56px;
+  flex: none;
   padding: 0 10px;
   font-weight: 750;
-  font-size: 22px;
-  letter-spacing: -0.7px;
+  font-size: 18px;
+  letter-spacing: -0.5px;
   color: var(--text-heading);
 }
 .brand-logo {
-  width: 38px;
-  height: 38px;
+  width: 30px;
+  height: 30px;
   flex: none;
   object-fit: contain;
 }
 .brand small {
   display: block;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 500;
   color: var(--text-muted);
-  letter-spacing: 2px;
+  letter-spacing: 1.5px;
   margin-top: 1px;
-}
-.workspace-label {
-  margin: 44px 12px 14px;
-  font-size: 11px;
-  color: var(--text-faint);
-  letter-spacing: 1px;
 }
 .navigation {
   display: grid;
   gap: 6px;
+  margin-top: 18px;
 }
 .nav-item {
   padding: 13px 12px;
@@ -284,14 +282,20 @@ a:focus-visible {
   top: 0;
   z-index: 100;
 }
-/* 顶栏功能页签栏（替代原面包屑）：圆角芯片式页签，进入功能后出现 + 需求详情动态页签，过多时横向滚动 */
+/* 顶栏功能页签栏（替代原面包屑）：一条浅灰轨 + 白色激活片，未选中页签也有可点击的实体感；
+   进入功能后出现 + 需求详情动态页签，过多时轨内横向滚动 */
 .topbar-tabs {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 7px;
-  margin: 0 20px 0 8px;
+  gap: 2px;
+  height: 32px;
+  margin-right: 20px;
+  padding: 2px;
+  border: 1px solid var(--border-base);
+  border-radius: 8px;
+  background: var(--bg-page);
   overflow-x: auto;
   /* 页签栏不显示滚动条，鼠标滚轮/拖动横向滚动即可 */
   scrollbar-width: none;
@@ -305,11 +309,11 @@ a:focus-visible {
   align-items: center;
   gap: 5px;
   max-width: 200px;
-  height: 30px;
-  /* 边框常态透明占位，激活态换品牌色时文字不跳动 */
+  height: 26px;
+  /* 边框常态透明占位，激活态换表面色时文字不跳动 */
   border: 1px solid transparent;
-  border-radius: 999px;
-  padding: 0 6px 0 12px;
+  border-radius: 6px;
+  padding: 0 4px 0 10px;
   background: transparent;
   color: var(--text-secondary);
   font-size: 12px;
@@ -320,15 +324,15 @@ a:focus-visible {
     color 0.15s;
 }
 .topbar-tab:hover {
-  background: var(--bg-hover);
+  background: color-mix(in srgb, var(--bg-surface) 62%, transparent);
   color: var(--text-regular);
 }
 .topbar-tab.active {
   color: var(--brand);
   font-weight: 600;
-  /* 激活芯片：浅品牌底 + 品牌色文字 + 细边框，深浅色跟随语义变量自动适配 */
-  background: var(--bg-brand-soft);
-  border-color: var(--border-brand);
+  /* 激活页签：表面色小片从灰轨中浮出，深浅色跟随语义变量自动适配 */
+  background: var(--bg-surface);
+  border-color: var(--border-base);
 }
 .tab-label {
   overflow: hidden;
@@ -341,7 +345,7 @@ a:focus-visible {
   width: 18px;
   height: 18px;
   flex: none;
-  border-radius: 50%;
+  border-radius: 4px;
   font-size: 11px;
   color: var(--text-faint);
   opacity: 0;
@@ -355,8 +359,8 @@ a:focus-visible {
   opacity: 1;
 }
 .tab-close:hover {
-  /* 悬停时用表面色圆点托起关闭按钮，浅品牌底激活芯片上也清晰可辨 */
-  background: var(--bg-surface);
+  /* 悬停时用页面底色托起关闭按钮，白色激活片上仍清晰可辨 */
+  background: var(--bg-page);
   color: var(--danger-text);
 }
 .topbar-actions {
@@ -364,7 +368,7 @@ a:focus-visible {
   align-items: center;
   gap: 14px;
 }
-.theme-toggle {
+.topbar-icon-button {
   display: grid;
   place-items: center;
   width: 30px;
@@ -377,14 +381,21 @@ a:focus-visible {
   font-size: 15px;
   cursor: pointer;
 }
-.theme-toggle:hover {
+.topbar-icon-button:hover {
   background: var(--bg-hover);
+  color: var(--brand);
+}
+.topbar-icon-button.router-link-active {
+  border-color: var(--border-brand);
+  background: var(--bg-brand-soft);
   color: var(--brand);
 }
 .service-status {
   display: flex;
   gap: 6px;
   align-items: center;
+  flex: none;
+  white-space: nowrap;
   color: var(--success-text);
   font-size: 11px;
 }
@@ -518,19 +529,16 @@ h2 {
     grid-template-columns: 76px minmax(0, 1fr);
   }
   .sidebar {
-    padding: 22px 10px;
+    padding: 0 10px 20px;
   }
   .brand {
-    padding: 0 8px;
+    padding: 0;
+    justify-content: center;
   }
   .brand > span:last-child,
-  .workspace-label,
   .nav-item span,
   .user-trigger strong {
     display: none;
-  }
-  .navigation {
-    margin-top: 38px;
   }
   .nav-item {
     justify-content: center;
@@ -572,7 +580,7 @@ h2 {
     height: 50px;
   }
   .service-status {
-    font-size: 10px;
+    display: none;
   }
   .page-heading {
     align-items: flex-start;

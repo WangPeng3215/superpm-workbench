@@ -1,6 +1,6 @@
 {
   "name": "@superpm/web",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "type": "module",
   "scripts": {
@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.2",
-    "@superpm/shared": "0.3.0",
+    "@superpm/shared": "0.3.1",
     "@tiptap/extension-image": "^3.31.4",
     "@tiptap/extension-table": "^3.31.4",
     "@tiptap/starter-kit": "^3.31.4",

@@ -226,8 +226,8 @@ test("workbench tabs open from menu and close with route fallback", async ({
   // 页签不预置：首次进入仅当前功能页签出现，且可关闭（有关闭按钮）
   await expect(page.locator(".topbar-tab")).toHaveCount(1);
   await expect(page.locator(".topbar-tab").first()).toContainText("需求列表");
-  // 左侧菜单打开功能 → 对应页签依次出现
-  await page.getByRole("link", { name: "每日任务历史" }).click();
+  // 侧栏/顶栏入口打开功能 → 对应页签依次出现
+  await page.getByRole("link", { name: "每日任务" }).click();
   await expect(page).toHaveURL(/\/tasks$/);
   await expect(page.locator(".topbar-tab")).toHaveCount(2);
   await page.getByRole("link", { name: "系统通知" }).click();
@@ -295,7 +295,7 @@ test("workbench tabs open from menu and close with route fallback", async ({
   await expect(page.locator(".topbar-tab")).toHaveCount(2);
   await page
     .locator(".topbar-tab")
-    .filter({ hasText: "每日任务历史" })
+    .filter({ hasText: "每日任务" })
     .locator(".tab-close")
     .click();
   await expect(page).toHaveURL(/\/requirements$/);

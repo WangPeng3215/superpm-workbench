@@ -22,7 +22,7 @@ const route = useRoute();
       type="list"
       :description="
         route.meta.module === 'tasks'
-          ? '任务历史将在后续模块中实现'
+          ? '任务功能将在后续模块中实现'
           : '通知模块将在后续迭代中实现'
       "
     />

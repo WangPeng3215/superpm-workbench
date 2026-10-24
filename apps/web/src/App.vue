@@ -56,8 +56,7 @@ async function onCloseTab(tab: WorkTab) {
 }
 const navigation = [
   { path: "/requirements", label: "需求列表", icon: Grid },
-  { path: "/tasks", label: "每日任务历史", icon: Calendar },
-  { path: "/notifications", label: "系统通知", icon: Bell },
+  { path: "/tasks", label: "每日任务", icon: Calendar },
 ];
 // 头像圆标取显示名首字
 const avatarChar = computed(
@@ -150,7 +149,6 @@ async function submitChangePassword() {
           >superPM<small>workbench</small></span
         ></RouterLink
       >
-      <div class="workspace-label">个人工作空间</div>
       <nav class="navigation" aria-label="主导航">
         <RouterLink
           v-for="item in navigation"
@@ -170,7 +168,11 @@ async function submitChangePassword() {
     <div class="main-layout">
       <header class="topbar">
         <!-- 功能页签栏（替代原面包屑）：页签在功能被打开后出现、均可关闭，需求详情按访问动态开签 -->
-        <nav class="topbar-tabs" aria-label="功能页签">
+        <nav
+          v-if="tabsStore.tabs.length"
+          class="topbar-tabs"
+          aria-label="功能页签"
+        >
           <button
             v-for="tab in tabsStore.tabs"
             :key="tab.key"
@@ -196,8 +198,15 @@ async function submitChangePassword() {
             ><el-icon><Connection /></el-icon
             >{{ connected ? "本地服务已连接" : "本地服务未连接" }}</span
           >
+          <RouterLink
+            to="/notifications"
+            class="topbar-icon-button"
+            aria-label="系统通知"
+            title="系统通知"
+            ><el-icon><Bell /></el-icon
+          ></RouterLink>
           <button
-            class="theme-toggle"
+            class="topbar-icon-button"
             type="button"
             :aria-label="dark ? '切换到浅色模式' : '切换到深色模式'"
             :title="dark ? '切换到浅色模式' : '切换到深色模式'"

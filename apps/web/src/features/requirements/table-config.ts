@@ -44,7 +44,7 @@ export const columnDefaults = (): TableColumn[] => [
   {
     key: "priority",
     label: "优先级",
-    width: 95,
+    width: 112,
     visible: true,
     fixed: "",
     kind: "select",

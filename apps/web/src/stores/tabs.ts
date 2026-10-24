@@ -13,7 +13,7 @@ export interface WorkTab {
 // 菜单功能路由 → 页签文案：首次进入对应功能后开出页签
 const FEATURE_TAB_LABELS: Record<string, string> = {
   "/requirements": "需求列表",
-  "/tasks": "每日任务历史",
+  "/tasks": "每日任务",
   "/notifications": "系统通知",
   "/settings": "系统设置",
 };

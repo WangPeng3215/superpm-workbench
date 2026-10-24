@@ -6,7 +6,7 @@ import fastifyStatic from "@fastify/static";
 import { ZodError, z } from "zod";
 import { timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 import {
   projectRoot,
   allowSystemOpen,
@@ -797,7 +797,20 @@ export async function createApp(
   const webAvailable =
     options.serveWeb && existsSync(join(webRoot, "index.html"));
   try {
-    if (webAvailable) await app.register(fastifyStatic, { root: webRoot });
+    if (webAvailable)
+      await app.register(fastifyStatic, {
+        root: webRoot,
+        // 应用内更新会整体替换 web 产物：入口页每次回源校验，带哈希的静态资源长期缓存
+        setHeaders(reply, filePath) {
+          const relativePath = relative(webRoot, filePath).split(sep).join("/");
+          reply.header(
+            "Cache-Control",
+            relativePath.startsWith("assets/")
+              ? "public, max-age=31536000, immutable"
+              : "no-cache",
+          );
+        },
+      });
     app.setNotFoundHandler((request, reply) => {
       const pathname = request.url.split("?")[0];
       if (pathname === "/api" || pathname.startsWith("/api/"))
