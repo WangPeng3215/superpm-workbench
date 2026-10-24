@@ -1,8 +1,16 @@
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "dotenv";
+import {
+  assertDataRootAvailable,
+  defaultDataHome,
+  isPackagedRoot,
+  resolveDataRoot,
+  type DataRootResolution,
+} from "@superpm/shared/data-root";
+
+export { isPackagedRoot };
 function findProjectRoot() {
   let directory = dirname(fileURLToPath(import.meta.url));
   while (true) {
@@ -19,46 +27,27 @@ function findProjectRoot() {
   }
 }
 export const projectRoot = findProjectRoot();
-function readManifest(directory: string): Record<string, unknown> | null {
-  try {
-    return JSON.parse(
-      readFileSync(join(directory, "package.json"), "utf8"),
-    ) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
-}
-// 发布包的程序目录固定为 <安装目录>/app；打包脚本生成的 app/package.json 只含运行依赖，
-// 开发仓库根清单始终带 workspaces。用清单形状兜底，目录被改名或单独拷贝时也能识别发布模式。
-export function isPackagedRoot(directory: string): boolean {
-  if (basename(directory) === "app") return true;
-  const manifest = readManifest(directory);
-  return (
-    manifest !== null &&
-    manifest.name === "superpm-workbench" &&
-    !("workspaces" in manifest)
-  );
-}
 export const isPackagedInstall = isPackagedRoot(projectRoot);
 export const installRoot = resolve(
   process.env.SUPERPM_INSTALL_ROOT ||
     (isPackagedInstall ? dirname(projectRoot) : projectRoot),
 );
-/** 未显式设置 SUPERPM_HOME 时，发布包默认使用的固定数据根。 */
-export function defaultHomePath(env: NodeJS.ProcessEnv = process.env): string {
-  const platform = process.platform;
-  if (platform === "win32")
-    return join(
-      env.LOCALAPPDATA || join(homedir(), "AppData", "Local"),
-      "superPM",
-    );
-  if (platform === "darwin")
-    return join(homedir(), "Library", "Application Support", "superPM");
-  return join(
-    env.XDG_DATA_HOME || join(homedir(), ".local", "share"),
-    "superpm",
-  );
+export const defaultHomePath = defaultDataHome;
+
+/**
+ * 解析当前进程的数据根。
+ * 优先级：SUPERPM_HOME > 配置指针 > 平台默认目录；开发仓库未显式指定时用仓库根。
+ */
+export function resolveAppDataRoot(
+  env: NodeJS.ProcessEnv = process.env,
+): DataRootResolution {
+  return resolveDataRoot({
+    env,
+    packaged: isPackagedInstall,
+    developmentRoot: projectRoot,
+  });
 }
+
 // 部署包通过 SUPERPM_HOME 固定用户数据根；开发环境不设置，沿用仓库内 data/workspace。
 // 优先级：进程环境变量 > 数据根 .env > 项目根 .env。
 export function loadEnv(
@@ -67,25 +56,27 @@ export function loadEnv(
 ): string | undefined {
   const original = { ...env };
   config({ path: join(root, ".env"), quiet: true, processEnv: env });
-  let configuredHome = env.SUPERPM_HOME?.trim();
-  // 发布包直接运行时也不能把用户数据写进程序目录。
-  if (!configuredHome && basename(root) === "app") {
-    configuredHome = defaultHomePath(env);
-    env.SUPERPM_HOME = configuredHome;
-  }
-  const home = configuredHome ? resolve(configuredHome) : undefined;
-  if (home) {
-    config({
-      path: join(home, ".env"),
-      quiet: true,
-      override: true,
-      processEnv: env,
-    });
-    // override 无法区分进程变量与项目根 .env，这里恢复进程变量原始值。
-    for (const [key, value] of Object.entries(original))
-      if (value !== undefined) env[key] = value;
-  }
-  return home;
+  const resolution = resolveDataRoot({
+    env,
+    packaged: isPackagedRoot(root),
+    developmentRoot: root,
+  });
+  if (resolution.source === "development") return undefined;
+  if (!original.SUPERPM_HOME && resolution.source !== "env")
+    env.SUPERPM_HOME = resolution.home;
+  config({
+    path: join(resolution.home, ".env"),
+    quiet: true,
+    override: true,
+    processEnv: env,
+  });
+  // override 无法区分进程变量与项目根 .env，这里恢复进程变量原始值。
+  for (const [key, value] of Object.entries(original))
+    if (value !== undefined) env[key] = value;
+  env.SUPERPM_HOME = resolution.home;
+  env.SUPERPM_HOME_SOURCE = resolution.source;
+  assertDataRootAvailable(resolution, env);
+  return resolution.home;
 }
 export const appHome = loadEnv(projectRoot);
 export const homePath = appHome ?? projectRoot;

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { DataRootSystemInfo } from "./data-root-contract.js";
 
 export const requirementTypes = [
   "feature",
@@ -578,11 +579,12 @@ export interface StageHistory {
   note: string;
   createdAt: string;
 }
-export interface SystemInfo {
+export interface SystemInfo extends DataRootSystemInfo {
   version: string;
   databasePath: string;
   workspacePath: string;
   schemaVersion: number;
+  systemOpenAvailable?: boolean;
   modules: { key: string; name: string; status: "available" | "planned" }[];
 }
 export interface ApiErrorResponse {

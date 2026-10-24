@@ -322,10 +322,9 @@ test("requirement detail can collapse the property sidebar", async ({
   await expect(page.locator(".detail-save-state")).toHaveText("已同步到本地");
   await page.getByRole("button", { name: "隐藏属性", exact: true }).click();
   await expect(page.locator(".detail-fields")).toBeHidden();
-  await expect(page.getByRole("button", { name: "显示属性", exact: true })).toHaveAttribute(
-    "aria-expanded",
-    "false",
-  );
+  await expect(
+    page.getByRole("button", { name: "显示属性", exact: true }),
+  ).toHaveAttribute("aria-expanded", "false");
   await page.getByRole("button", { name: "显示属性", exact: true }).click();
   await expect(page.locator(".detail-fields")).toBeVisible();
 });
@@ -337,13 +336,14 @@ test("requirements toolbar keeps secondary date filters collapsed", async ({
   await expect(page.locator(".requirements-toolbar")).toBeVisible();
   await expect(page.locator(".filter-panel")).toHaveCount(0);
   await expect(page.locator(".date-filter:visible")).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "查询", exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "查询", exact: true }),
+  ).toBeVisible();
   await page.getByRole("button", { name: "更多时间条件" }).click();
   await expect(page.locator(".date-filter:visible")).toHaveCount(6);
-  await expect(page.locator(".editable-table th.el-table__cell").first()).toHaveCSS(
-    "height",
-    "38px",
-  );
+  await expect(
+    page.locator(".editable-table th.el-table__cell").first(),
+  ).toHaveCSS("height", "38px");
 });
 
 test("workbench shell uses compact native theme and collapsed navigation", async ({
@@ -355,13 +355,18 @@ test("workbench shell uses compact native theme and collapsed navigation", async
     "background-color",
     "rgba(0, 0, 0, 0)",
   );
-  await expect(page.locator(".topbar-tabs")).toHaveCSS("border-top-width", "0px");
+  await expect(page.locator(".topbar-tabs")).toHaveCSS(
+    "border-top-width",
+    "0px",
+  );
   const activeTab = page.locator(".topbar-tab.active");
   await expect(activeTab).toHaveCSS("height", "36px");
   await expect(activeTab).toHaveCSS("border-top-left-radius", "8px");
   await expect(activeTab).toHaveCSS("border-bottom-left-radius", "0px");
   const brand = await page.evaluate(() =>
-    getComputedStyle(document.documentElement).getPropertyValue("--brand").trim(),
+    getComputedStyle(document.documentElement)
+      .getPropertyValue("--brand")
+      .trim(),
   );
   expect(brand).toBe("#3370ff");
   await page.setViewportSize({ width: 900, height: 800 });
@@ -385,12 +390,116 @@ test("settings shows version and update entry without contacting release source"
     .locator("section.update-panel")
     .filter({ hasText: "版本与更新" });
   await expect(panel).toBeHidden();
-  await page
-    .getByRole("button", { name: "版本与更新", exact: true })
-    .click();
+  await page.getByRole("button", { name: "版本与更新", exact: true }).click();
   await expect(panel).toBeVisible();
   await expect(panel.getByText(/当前版本 \d+\.\d+\.\d+/)).toBeVisible();
   await expect(panel.getByRole("button", { name: "检查更新" })).toBeVisible();
   await expect(panel.getByText(/未检测到发布安装布局/)).toBeVisible();
   expect(errors).toEqual([]);
+});
+
+test("settings storage shows current data root and locked reason", async ({
+  page,
+}) => {
+  await page.goto("/settings");
+  const panel = page.locator("section.storage-panel");
+  await expect(panel.getByText("保存位置", { exact: true })).toBeVisible();
+  await expect(panel.getByText("开发环境", { exact: true })).toBeVisible();
+  await expect(panel.getByText("开发环境下数据固定在仓库目录")).toBeVisible();
+  await expect(
+    panel.getByRole("button", { name: "在资源管理器中打开" }),
+  ).toBeEnabled();
+  await expect(
+    panel.getByRole("button", { name: "修改保存位置" }),
+  ).toBeDisabled();
+});
+
+test("storage location dialog picks and validates a target directory", async ({
+  page,
+}) => {
+  await page.route("**/api/system", async (route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    body.dataRootEditable = true;
+    delete body.dataRootLockedReason;
+    await route.fulfill({ response, json: body });
+  });
+  await page.route("**/api/system/home/pick", (route) =>
+    route.fulfill({ json: { path: "D:/superPMData" } }),
+  );
+  await page.route("**/api/system/home/validate", async (route) => {
+    const body = route.request().postDataJSON();
+    await route.fulfill({
+      json: {
+        targetHome: `${body.parent}/superPM`,
+        exists: false,
+        empty: true,
+        writable: true,
+        freeBytes: 107374182400,
+        requiredBytes: 10485760,
+        sourceBytes: 8388608,
+        databaseExists: true,
+        databaseRows: 42,
+        workspaceFiles: 7,
+        warnings: ["将在所选目录中创建 superPM 子目录"],
+        blockedReasons: [],
+      },
+    });
+  });
+
+  await page.goto("/settings");
+  await page.getByRole("button", { name: "修改保存位置" }).click();
+  const dialog = page
+    .locator(".el-dialog")
+    .filter({ hasText: "修改数据保存位置" });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "选择目录…" }).click();
+  await expect(dialog.locator("input").first()).toHaveValue("D:/superPMData");
+  await dialog.getByRole("button", { name: "校验", exact: true }).click();
+  await expect(dialog.getByText("D:/superPMData/superPM")).toBeVisible();
+  await expect(dialog.getByText("42 条记录")).toBeVisible();
+  await expect(
+    dialog.getByText("将在所选目录中创建 superPM 子目录"),
+  ).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "开始迁移" })).toBeEnabled();
+});
+
+test("post-migration cleanup prompt appears once and keeps old data", async ({
+  page,
+}) => {
+  let cleanupBody: Record<string, unknown> | null = null;
+  await page.route("**/api/system", async (route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    body.pendingOldData = {
+      jobId: "job-e2e",
+      oldHome: "D:/old-superpm",
+      movedAt: "2026-10-24T08:00:00.000Z",
+      managedPaths: ["data", "workspace"],
+    };
+    await route.fulfill({ response, json: body });
+  });
+  await page.route("**/api/system/home/cleanup", async (route) => {
+    cleanupBody = route.request().postDataJSON();
+    await route.fulfill({ json: { action: "keep" } });
+  });
+
+  await page.goto("/requirements");
+  const dialog = page
+    .locator(".el-dialog")
+    .filter({ hasText: "旧数据目录处理" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText("D:/old-superpm")).toBeVisible();
+  await dialog.getByRole("button", { name: "保留旧数据" }).click();
+  await expect(dialog).toBeHidden();
+  expect(cleanupBody).toMatchObject({
+    action: "keep",
+    jobId: "job-e2e",
+    oldHome: "D:/old-superpm",
+  });
+
+  await page.getByRole("link", { name: "系统设置", exact: true }).click();
+  await expect(
+    page.locator(".el-dialog").filter({ hasText: "旧数据目录处理" }),
+  ).toBeHidden();
 });

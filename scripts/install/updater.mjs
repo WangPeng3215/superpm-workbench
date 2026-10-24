@@ -18,7 +18,7 @@ import {
 } from "node:fs";
 import { get } from "node:https";
 import { connect } from "node:net";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import {
   basename,
   dirname,
@@ -28,9 +28,14 @@ import {
   resolve,
 } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  activeOperationLock,
+  assertDataRootAvailable,
+  resolveDataRoot,
+} from "@superpm/shared/data-root";
 import yauzl from "yauzl";
 
-const UPDATER_VERSION = "1.0.0";
+const UPDATER_VERSION = "1.1.0";
 const MANIFEST_MAX_BYTES = 1024 * 1024;
 const ARCHIVE_MAX_BYTES = 1024 * 1024 * 1024;
 const ARCHIVE_MAX_ENTRIES = 200000;
@@ -47,7 +52,7 @@ function parseArgs(argv) {
   const options = {
     manifest: undefined,
     installRoot: process.env.SUPERPM_INSTALL_ROOT,
-    home: process.env.SUPERPM_HOME,
+    home: undefined,
     force: false,
     json: false,
     restart: true,
@@ -70,20 +75,6 @@ function parseArgs(argv) {
     else throw new Error(`未知参数：${item}`);
   }
   return options;
-}
-
-function defaultHomePath() {
-  if (process.platform === "win32")
-    return join(
-      process.env.LOCALAPPDATA || join(homedir(), "AppData", "Local"),
-      "superPM",
-    );
-  if (process.platform === "darwin")
-    return join(homedir(), "Library", "Application Support", "superPM");
-  return join(
-    process.env.XDG_DATA_HOME || join(homedir(), ".local", "share"),
-    "superpm",
-  );
 }
 
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
@@ -109,6 +100,10 @@ const isInside = (base, target) => {
     distance === "" || (!distance.startsWith("..") && !isAbsolute(distance))
   );
 };
+const samePath = (left, right) =>
+  process.platform === "win32"
+    ? resolve(left).toLowerCase() === resolve(right).toLowerCase()
+    : resolve(left) === resolve(right);
 
 function envFilePort(path) {
   try {
@@ -746,6 +741,7 @@ async function startServer(context, port) {
     ...context.childEnv,
     PORT: String(port),
     SUPERPM_HOME: context.home,
+    ...(context.homeSource ? { SUPERPM_HOME_SOURCE: context.homeSource } : {}),
     SUPERPM_INSTALL_ROOT: context.installRoot,
     SUPERPM_LEGACY_ROOT: context.installRoot,
   };
@@ -870,6 +866,9 @@ async function relocate(options) {
       SUPERPM_UPDATER_RELOCATED: "1",
       SUPERPM_INSTALL_ROOT: options.installRoot,
       SUPERPM_HOME: options.home,
+      ...(options.homeSource
+        ? { SUPERPM_HOME_SOURCE: options.homeSource }
+        : {}),
     },
     stdio: "inherit",
     windowsHide: true,
@@ -895,7 +894,6 @@ async function main() {
     return;
   }
   if (!options.manifest) throw new Error("缺少 --manifest 参数");
-  const home = resolve(options.home || defaultHomePath());
   let installRoot = options.installRoot
     ? resolve(options.installRoot)
     : resolve(dirname(process.argv[1]), "..");
@@ -903,11 +901,41 @@ async function main() {
     throw new Error(
       `未找到有效的安装目录（${installRoot}），请通过 --install-root 指定`,
     );
+  let resolution;
+  try {
+    const base = resolveDataRoot({
+      env: process.env,
+      packaged: true,
+      developmentRoot: installRoot,
+    });
+    // --home 与应用解析结果一致时沿用配置指针/默认目录来源，避免状态显示漂移。
+    resolution =
+      options.home && !samePath(options.home, base.home)
+        ? resolveDataRoot({
+            env: process.env,
+            packaged: true,
+            developmentRoot: installRoot,
+            overrideHome: options.home,
+          })
+        : base;
+    assertDataRootAvailable(resolution, process.env);
+  } catch (error) {
+    throw new Error(`无法确定数据根：${error.message}`);
+  }
+  const home = resolution.home;
   options.home = home;
+  options.homeSource = resolution.source;
   options.installRoot = installRoot;
 
   const relocated = await relocate(options);
   if (relocated.relocated) process.exit(relocated.code ?? 1);
+
+  const moveLock = activeOperationLock(resolution.configDir);
+  if (moveLock)
+    throw new Error(
+      `正在迁移数据目录（任务 ${moveLock.jobId}，PID ${moveLock.pid}），请等待迁移完成后再更新`,
+    );
+  if (resolution.warning) console.error(`[updater] ${resolution.warning}`);
 
   const logs = [];
   const log = (message) => {
@@ -918,6 +946,7 @@ async function main() {
   const context = {
     options,
     home,
+    homeSource: resolution.source,
     installRoot,
     node: existsSync(
       join(
@@ -936,6 +965,7 @@ async function main() {
     childEnv: {
       ...process.env,
       SUPERPM_HOME: home,
+      ...(resolution.source ? { SUPERPM_HOME_SOURCE: resolution.source } : {}),
       SUPERPM_INSTALL_ROOT: installRoot,
       SUPERPM_LEGACY_ROOT: installRoot,
     },

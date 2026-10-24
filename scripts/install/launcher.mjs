@@ -2,9 +2,13 @@
 // 稳定启动器：安装目录布局变化时保持入口不变，只替换 app/。
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  activeOperationLock,
+  assertDataRootAvailable,
+  resolveDataRoot,
+} from "@superpm/shared/data-root";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const installRoot = resolve(process.env.SUPERPM_INSTALL_ROOT || dirname(here));
@@ -16,22 +20,21 @@ const runtimeNode = join(
 );
 const serverEntry = join(appRoot, "apps", "server", "dist", "index.js");
 
-function defaultHomePath() {
-  if (process.platform === "win32")
-    return join(
-      process.env.LOCALAPPDATA || join(homedir(), "AppData", "Local"),
-      "superPM",
-    );
-  if (process.platform === "darwin")
-    return join(homedir(), "Library", "Application Support", "superPM");
-  return join(
-    process.env.XDG_DATA_HOME || join(homedir(), ".local", "share"),
-    "superpm",
-  );
+let resolution;
+try {
+  resolution = resolveDataRoot({
+    env: process.env,
+    packaged: true,
+    developmentRoot: installRoot,
+  });
+  assertDataRootAvailable(resolution, process.env);
+} catch (error) {
+  console.error(`[superpm] 无法确定数据根：${error.message}`);
+  process.exit(1);
 }
-
-const home = resolve(process.env.SUPERPM_HOME || defaultHomePath());
+const home = resolution.home;
 process.env.SUPERPM_HOME = home;
+process.env.SUPERPM_HOME_SOURCE = resolution.source;
 process.env.SUPERPM_INSTALL_ROOT = installRoot;
 process.env.SUPERPM_LEGACY_ROOT =
   process.env.SUPERPM_LEGACY_ROOT || installRoot;
@@ -97,6 +100,15 @@ if (lock) {
   );
   process.exit(1);
 }
+
+const moveLock = activeOperationLock(resolution.configDir);
+if (moveLock && process.env.SUPERPM_MOVE_RESTART_JOB !== moveLock.jobId) {
+  console.error(
+    `[superpm] 正在迁移数据目录（任务 ${moveLock.jobId}，PID ${moveLock.pid}），请等待迁移完成后再启动。`,
+  );
+  process.exit(1);
+}
+if (resolution.warning) console.warn(`[superpm] ${resolution.warning}`);
 
 if (!existsSync(serverEntry)) {
   console.error(`[superpm] 缺少服务入口：${serverEntry}`);

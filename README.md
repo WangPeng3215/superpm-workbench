@@ -157,7 +157,11 @@ Update.cmd --manifest https://github.com/WangPeng3215/superpm-workbench/releases
 
 开发环境不设置 `SUPERPM_HOME`，数据沿用仓库内 `data/`、`workspace/` 与 `.env`。发布版默认数据根为 `%LOCALAPPDATA%\superPM`，设置 `SUPERPM_HOME` 可覆盖；`data/`、`workspace/`、`.env`、`logs/`、`backups/`、`updates/` 均位于数据根，替换 `app/` 不影响用户数据。
 
-首次使用数据根且安装目录存在旧数据时，会自动执行一次性迁移：SQLite 在线备份、工作区复制，校验完整性、表行数与文件清单后原子落位。旧数据保留不删除，结果写入 `migration-state.json`；迁移失败时服务拒绝启动。数据根 `logs/` 保存 `server-*.log`、`mcp.log`、`migration.log`、`backup.log` 与 `update.log`。
+发布版可在「系统设置 → 本地存储 → 修改保存位置」更换数据根：选择父目录后，应用自动在其下使用或创建 `superPM` 子目录；确认后服务停止、复制数据库、工作区、`.env` 与备份并校验，再切换配置指针并重启。旧数据不会被自动删除，迁移完成后会提示「保留旧数据」或「删除旧数据」，删除需要二次确认。迁移期间不要关闭窗口或断开目标磁盘。
+
+数据根选择记录在 `%APPDATA%\superPM\config.json`（可用 `SUPERPM_CONFIG_DIR` 仅用于测试或演练时覆盖）。该文件损坏或需要回到默认目录时，先停止应用，把 `config.json` 改名（同目录的 `config.json.bak` 是上一次配置）；启动器会改用默认数据根，不会在空挂载目录中静默新建空库。设置 `SUPERPM_HOME` 时以环境变量优先，应用内不允许再修改保存位置。
+
+首次使用数据根且安装目录存在旧数据时，会自动执行一次性迁移：SQLite 在线备份、工作区复制，校验完整性、表行数与文件清单后原子落位。旧数据保留不删除，结果写入 `migration-state.json`；迁移失败时服务拒绝启动。数据根 `logs/` 保存 `server-*.log`、`mcp.log`、`migration.log`、`backup.log`、`move-home-*.log` 与 `update.log`。
 
 备份与恢复（恢复前必须停止 HTTP 服务与所有 MCP 客户端）：
 
@@ -170,11 +174,12 @@ npm run backup -- restore <备份ID>
 
 备份包含 SQLite、工作区与数据根 `.env`，元数据记录 SHA-256、表行数与工作区文件统计。恢复会自动创建 `pre-restore` 备份，原工作区改名保留；服务运行期间备份工具会拒绝恢复。
 
-发布构建、安装包冒烟测试与真实版本升级演练：
+发布构建、安装包冒烟测试、真实版本升级演练与数据根迁移演练：
 
 ```powershell
-node scripts/release/build-release.mjs --version 0.3.0 --notes "更新说明"
+node scripts/release/build-release.mjs --version 0.4.0 --notes "更新说明"
 node scripts/release/rehearse-update.mjs --from release/0.2.0/superpm-workbench-0.2.0-win-x64.zip --manifest release/0.3.0/update-manifest.json
+node scripts/release/rehearse-move-home.mjs
 ```
 
 ## API
@@ -183,6 +188,12 @@ node scripts/release/rehearse-update.mjs --from release/0.2.0/superpm-workbench-
 | ------------------------------------------------- | ------------------------------------------------ |
 | GET `/api/health`                                 | 服务状态、应用版本与 schema 版本                 |
 | GET `/api/system`                                 | 运行路径与模块状态（需登录）                     |
+| GET `/api/system/home/move`                       | 当前迁移任务状态                                 |
+| POST `/api/system/home/validate`                  | 校验目标父目录、空间与数据量                     |
+| POST `/api/system/home/move`                      | 启动数据根迁移（停服、复制、切换并重启）         |
+| POST `/api/system/home/cleanup`                   | 处理旧数据：保留或删除                           |
+| POST `/api/system/home/pick`                      | Windows 原生目录选择                             |
+| POST `/api/system/home/open`                      | 在资源管理器中打开当前数据根                     |
 | GET `/api/update/status`                          | 当前版本、更新锁、MCP 进程与更新进度             |
 | POST `/api/update/check`                          | 读取并缓存发布源版本清单                         |
 | POST `/api/update/install`                        | 下载校验更新包并启动独立更新器                   |

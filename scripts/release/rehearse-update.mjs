@@ -478,7 +478,7 @@ async function runScenario(name, options, context) {
         "更新状态接口未识别安装包环境",
       );
       assert(
-        updateStatus.body.updaterVersion === "1.0.0",
+        updateStatus.body.updaterVersion === "1.1.0",
         "更新状态接口更新器版本不正确",
       );
       if (updaterSupportsProgress) {

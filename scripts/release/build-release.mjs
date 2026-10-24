@@ -305,25 +305,26 @@ async function stageInstall(work, options, appStage, runtime) {
     join(repoRoot, "scripts/install/Update.cmd"),
     join(install, "Update.cmd"),
   );
-  copyFileSync(
-    join(repoRoot, "scripts/install/launcher.mjs"),
-    join(install, "bin", "launcher.mjs"),
-  );
-  await build({
-    absWorkingDir: repoRoot,
-    entryPoints: [join(repoRoot, "scripts/install/updater.mjs")],
-    outfile: join(install, "bin", "updater.mjs"),
-    bundle: true,
-    platform: "node",
-    format: "esm",
-    target: "node22",
-    packages: "bundle",
-    banner: {
-      js: 'import{createRequire as __superpmCreateRequire}from"node:module";const require=__superpmCreateRequire(import.meta.url);',
-    },
-    legalComments: "none",
-    logLevel: "warning",
-  });
+  const bundleEntry = async (entry, target) => {
+    await build({
+      absWorkingDir: repoRoot,
+      entryPoints: [join(repoRoot, "scripts/install", entry)],
+      outfile: join(install, "bin", target),
+      bundle: true,
+      platform: "node",
+      format: "esm",
+      target: "node22",
+      packages: "bundle",
+      banner: {
+        js: 'import{createRequire as __superpmCreateRequire}from"node:module";const require=__superpmCreateRequire(import.meta.url);',
+      },
+      legalComments: "none",
+      logLevel: "warning",
+    });
+  };
+  await bundleEntry("launcher.mjs", "launcher.mjs");
+  await bundleEntry("updater.mjs", "updater.mjs");
+  await bundleEntry("move-home.mjs", "move-home.mjs");
   copyFileSync(runtime.node, join(install, "runtime", "node.exe"));
   copyFileSync(runtime.license, join(install, "runtime", "LICENSE"));
   writeFileSync(
@@ -343,7 +344,7 @@ async function stageInstall(work, options, appStage, runtime) {
         platform: "win32-x64",
         schemaVersion: appStage.schema,
         builtAt: new Date().toISOString(),
-        updaterVersion: "1.0.0",
+        updaterVersion: "1.1.0",
       },
       null,
       2,
@@ -356,6 +357,7 @@ async function stageInstall(work, options, appStage, runtime) {
 启动：双击 SuperPM.cmd
 更新：Update.cmd --manifest <更新清单地址>
 数据根：%LOCALAPPDATA%\\superPM（可用 SUPERPM_HOME 覆盖）
+      可在应用「设置 → 数据存储位置」中修改并迁移现有数据
 日志：数据根 logs\\ 目录
 `,
   );
@@ -430,7 +432,7 @@ function writeManifest(out, options, manifest, full, update) {
     platform: "win32-x64",
     releasedAt: new Date().toISOString(),
     schemaVersion: manifest.schemaVersion,
-    minUpdaterVersion: "1.0.0",
+    minUpdaterVersion: "1.1.0",
     notes: options.notes || `superPM Workbench v${options.version}`,
     full: {
       file: full.file,

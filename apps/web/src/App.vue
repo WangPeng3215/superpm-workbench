@@ -4,22 +4,55 @@ import { useRoute, useRouter } from "vue-router";
 import type { FormInstance, FormRules } from "element-plus";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { Calendar, Grid } from "@element-plus/icons-vue";
+import type { SystemInfo } from "@superpm/shared";
+import type { PendingOldData } from "@superpm/shared/data-root-contract";
 import { request } from "./api/client";
 import { changePassword, logout } from "./api/auth";
 import { clearAuthUser } from "./stores/auth";
 import { clearTabs, syncRoute } from "./stores/tabs";
 import AppSidebar from "./components/layout/AppSidebar.vue";
 import AppTopbar from "./components/layout/AppTopbar.vue";
+import PendingCleanupActions from "./features/settings/PendingCleanupActions.vue";
 
 const route = useRoute();
 const router = useRouter();
 const connected = ref(false);
 const bareLayout = computed(() => Boolean(route.meta.public));
+
+// ===== 迁移后旧数据提示（每次进入应用最多提示一次）=====
+const pendingCleanup = ref<PendingOldData | null>(null);
+const cleanupNewHome = ref("");
+const cleanupDialogVisible = ref(false);
+let cleanupChecked = false;
+
+async function checkPendingCleanup() {
+  if (cleanupChecked || bareLayout.value) return;
+  try {
+    const info = await request<SystemInfo>("/system");
+    cleanupChecked = true;
+    if (info.pendingOldData) {
+      pendingCleanup.value = info.pendingOldData;
+      cleanupNewHome.value = info.homePath;
+      cleanupDialogVisible.value = true;
+    }
+  } catch {
+    // 登录态尚未就绪时保持可重试，下次路由切换再检查
+  }
+}
+
+function onCleanupResolved() {
+  cleanupDialogVisible.value = false;
+  pendingCleanup.value = null;
+}
+
 watch(
   () => route.path,
   (path) => {
     if (route.meta.public) clearTabs();
-    else syncRoute(path);
+    else {
+      syncRoute(path);
+      void checkPendingCleanup();
+    }
   },
   { immediate: true },
 );
@@ -65,7 +98,12 @@ const pwdRules: FormRules = {
   oldPassword: [{ required: true, message: "请输入原密码", trigger: "blur" }],
   newPassword: [
     { required: true, message: "请输入新密码", trigger: "blur" },
-    { min: 6, max: 100, message: "新密码长度需在 6 到 100 位之间", trigger: "blur" },
+    {
+      min: 6,
+      max: 100,
+      message: "新密码长度需在 6 到 100 位之间",
+      trigger: "blur",
+    },
   ],
   confirmPassword: [
     { required: true, message: "请再次输入新密码", trigger: "blur" },
@@ -165,4 +203,38 @@ async function submitChangePassword() {
       >
     </template>
   </el-dialog>
+  <!-- 迁移后旧数据清理提示 -->
+  <el-dialog
+    v-model="cleanupDialogVisible"
+    title="旧数据目录处理"
+    width="min(520px, 92vw)"
+    :close-on-click-modal="false"
+  >
+    <div class="cleanup-dialog">
+      <p>
+        数据已迁移到新的保存位置。请确认新位置可以正常使用，再决定是否删除旧目录中的数据。
+      </p>
+      <PendingCleanupActions
+        v-if="pendingCleanup"
+        :pending="pendingCleanup"
+        :new-home="cleanupNewHome"
+        @resolved="onCleanupResolved"
+      />
+    </div>
+    <template #footer>
+      <el-button @click="cleanupDialogVisible = false">稍后处理</el-button>
+    </template>
+  </el-dialog>
 </template>
+
+<style scoped>
+.cleanup-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.cleanup-dialog p {
+  margin: 0;
+  line-height: 1.7;
+}
+</style>

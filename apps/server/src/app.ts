@@ -8,12 +8,18 @@ import { timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import {
+  homeCleanupRequestSchema,
+  homeMoveRequestSchema,
+  homeValidateRequestSchema,
+} from "@superpm/shared/data-root-contract";
+import {
   projectRoot,
   allowSystemOpen,
   appVersion,
   homePath,
   installRoot,
   isPackagedInstall,
+  resolveAppDataRoot,
 } from "./config/index.js";
 import { SCHEMA_VERSION } from "./db/migrate.js";
 import { DomainError } from "./services/requirements.js";
@@ -25,6 +31,11 @@ import {
   createUpdateService,
   type UpdateServiceOptions,
 } from "./services/updates.js";
+import {
+  createDataRootService,
+  HomeMoveError,
+  type DataRootServiceOptions,
+} from "./services/data-root.js";
 import {
   parseAuthCookie,
   serializeAuthCookie,
@@ -52,6 +63,8 @@ export interface CreateAppOptions extends ServiceContainerOptions {
   onShutdownRequested?: () => void;
   /** 测试或嵌入场景覆盖更新服务配置 */
   update?: Partial<UpdateServiceOptions>;
+  /** 测试或嵌入场景覆盖数据根服务配置 */
+  dataRoot?: Partial<DataRootServiceOptions>;
 }
 // 登录与改密请求体校验
 const loginSchema = z
@@ -106,6 +119,19 @@ export async function createApp(
     manifestUrl: process.env.SUPERPM_UPDATE_MANIFEST_URL,
     ...options.update,
   });
+  const dataRootResolution = resolveAppDataRoot();
+  const dataRoot = createDataRootService({
+    home: dataRootResolution.home,
+    homeSource: dataRootResolution.source,
+    configDir: dataRootResolution.configDir,
+    installRoot,
+    appRoot: projectRoot,
+    isPackaged: isPackagedInstall,
+    databasePath,
+    workspacePath,
+    ...options.dataRoot,
+  });
+  dataRoot.reconcileStartup();
   const app = Fastify({
     logger: options.logger ?? true,
     bodyLimit: 8 * 1024 * 1024,
@@ -127,6 +153,14 @@ export async function createApp(
         },
       });
     }
+    if (error instanceof HomeMoveError)
+      return reply.status(error.status).send({
+        error: {
+          code: error.code,
+          message: error.message,
+          ...(error.details ? { details: error.details } : {}),
+        },
+      });
     if (error instanceof DomainError)
       return reply
         .status(error.status)
@@ -219,28 +253,58 @@ export async function createApp(
       });
     request.authUserId = userId;
   });
-  app.get("/api/system", async () => ({
-    version,
-    ...paths,
-    schemaVersion: SCHEMA_VERSION,
-    systemOpenAvailable: allowSystemOpen,
-    modules: [
-      { key: "requirements", name: "需求管理", status: "available" },
-      {
-        key: "issues",
-        name: roadmap.issues,
-        status: "available",
-      },
-      { key: "updates", name: "版本与更新", status: "available" },
-      ...Object.entries(roadmap)
-        .filter(([key]) => key !== "issues")
-        .map(([key, name]) => ({
-          key,
-          name,
-          status: "planned",
-        })),
-    ],
-  }));
+  app.get("/api/system", async () => {
+    const rootInfo = dataRoot.info();
+    const rootLocation = dataRoot.location();
+    return {
+      version,
+      ...paths,
+      homePath: rootLocation.home,
+      homeSource: rootLocation.source,
+      dataRootEditable: rootInfo.dataRootEditable,
+      ...(rootInfo.dataRootLockedReason
+        ? { dataRootLockedReason: rootInfo.dataRootLockedReason }
+        : {}),
+      moveInProgress: rootInfo.moveInProgress,
+      ...(rootInfo.pendingOldData
+        ? { pendingOldData: rootInfo.pendingOldData }
+        : {}),
+      schemaVersion: SCHEMA_VERSION,
+      systemOpenAvailable: allowSystemOpen,
+      modules: [
+        { key: "requirements", name: "需求管理", status: "available" },
+        {
+          key: "issues",
+          name: roadmap.issues,
+          status: "available",
+        },
+        { key: "updates", name: "版本与更新", status: "available" },
+        ...Object.entries(roadmap)
+          .filter(([key]) => key !== "issues")
+          .map(([key, name]) => ({
+            key,
+            name,
+            status: "planned",
+          })),
+      ],
+    };
+  });
+  app.get("/api/system/home/move", async () => dataRoot.stateView());
+  app.post("/api/system/home/pick", async () => dataRoot.pick());
+  app.post("/api/system/home/open", async () => dataRoot.openHome());
+  app.post("/api/system/home/validate", async (request) => {
+    const body = homeValidateRequestSchema.parse(request.body);
+    return dataRoot.validate(body.parent);
+  });
+  app.post("/api/system/home/move", async (request, reply) => {
+    const body = homeMoveRequestSchema.parse(request.body);
+    return reply
+      .status(202)
+      .send(await dataRoot.startMove(body, request.authUserId ?? 0));
+  });
+  app.post("/api/system/home/cleanup", async (request) =>
+    dataRoot.cleanup(homeCleanupRequestSchema.parse(request.body)),
+  );
   app.get("/api/update/status", async () => updates.status());
   app.post("/api/update/check", async () => updates.check());
   app.post("/api/update/install", async (request, reply) => {

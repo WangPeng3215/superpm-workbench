@@ -86,6 +86,7 @@ async function main() {
     node,
     launcher,
     join(install, "bin", "updater.mjs"),
+    join(install, "bin", "move-home.mjs"),
     join(install, "runtime", "LICENSE"),
     join(install, "SuperPM.cmd"),
     join(install, "Update.cmd"),

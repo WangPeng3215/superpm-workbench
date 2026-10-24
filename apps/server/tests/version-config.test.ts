@@ -9,7 +9,12 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { appVersion, isPackagedRoot, loadEnv, projectRoot } from "../src/config/index.js";
+import {
+  appVersion,
+  isPackagedRoot,
+  loadEnv,
+  projectRoot,
+} from "../src/config/index.js";
 import { SCHEMA_VERSION } from "../src/db/migrate.js";
 
 const directories: string[] = [];
@@ -114,6 +119,45 @@ describe("版本号与环境加载", () => {
     expect(isPackagedRoot(renamed)).toBe(true);
     expect(isPackagedRoot(workspace)).toBe(false);
     expect(isPackagedRoot(join(base, "empty"))).toBe(false);
+  });
+
+  it("发布包数据根读取配置指针并设置来源", () => {
+    const base = tempDir();
+    const configDir = join(base, "config");
+    const home = join(base, "home");
+    const appRoot = join(base, "app");
+    mkdirSync(appRoot, { recursive: true });
+    mkdirSync(join(home, "data"), { recursive: true });
+    writeFileSync(join(home, "data", "superpm.sqlite"), "");
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, "config.json"),
+      JSON.stringify({ schemaVersion: 1, home }),
+      "utf8",
+    );
+    const env: NodeJS.ProcessEnv = {
+      SUPERPM_CONFIG_DIR: configDir,
+      LOCALAPPDATA: join(base, "local"),
+    };
+    expect(loadEnv(appRoot, env)).toBe(home);
+    expect(env.SUPERPM_HOME).toBe(home);
+    expect(env.SUPERPM_HOME_SOURCE).toBe("config");
+  });
+
+  it("配置指针指向不可用目录时拒绝启动", () => {
+    const base = tempDir();
+    const configDir = join(base, "config");
+    const appRoot = join(base, "app");
+    mkdirSync(appRoot, { recursive: true });
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, "config.json"),
+      JSON.stringify({ schemaVersion: 1, home: join(base, "offline") }),
+      "utf8",
+    );
+    expect(() => loadEnv(appRoot, { SUPERPM_CONFIG_DIR: configDir })).toThrow(
+      /数据根不可用/,
+    );
   });
 
   it("defaultPaths 在数据根内解析相对路径", async () => {

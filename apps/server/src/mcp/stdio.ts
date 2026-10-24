@@ -1,4 +1,8 @@
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import {
+  activeOperationLock,
+  resolveConfigDir,
+} from "@superpm/shared/data-root";
 import { appHome, appVersion, homePath } from "../config/index.js";
 import { prepareHomeIfConfigured } from "../config/home-migration.js";
 import { appendFileLog } from "../config/logging.js";
@@ -37,6 +41,13 @@ async function main() {
   if (lock) {
     log(
       `检测到更新锁（PID ${lock.pid}，开始于 ${lock.createdAt}），本次 MCP 连接已拒绝；更新完成后再重试`,
+    );
+    process.exit(0);
+  }
+  const moveLock = activeOperationLock(resolveConfigDir());
+  if (moveLock) {
+    log(
+      `检测到数据目录迁移（任务 ${moveLock.jobId}，PID ${moveLock.pid}），本次 MCP 连接已拒绝；迁移完成后再重试`,
     );
     process.exit(0);
   }
@@ -94,8 +105,16 @@ async function main() {
   // 更新锁出现后必须在 15 秒宽限期内主动退出，避免更新器强制结束进程。
   const heartbeat = setInterval(() => {
     const active = activeUpdateLock(homePath);
-    if (active) void shutdown(`检测到更新锁 PID ${active.pid}`, 0);
-    else registration.touch();
+    if (active) {
+      void shutdown(`检测到更新锁 PID ${active.pid}`, 0);
+      return;
+    }
+    const moving = activeOperationLock(resolveConfigDir());
+    if (moving) {
+      void shutdown(`检测到数据目录迁移（任务 ${moving.jobId}）`, 0);
+      return;
+    }
+    registration.touch();
   }, MCP_HEARTBEAT_MS);
   heartbeat.unref();
   transport.onclose = () => {
