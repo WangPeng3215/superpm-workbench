@@ -13,6 +13,7 @@ import type {
   Requirement,
 } from "@superpm/shared";
 import { mcpToolContracts } from "@superpm/shared";
+import { appVersion } from "../src/config/index.js";
 import { SCHEMA_VERSION } from "../src/db/migrate.js";
 import {
   createMcpServer,
@@ -358,7 +359,7 @@ describe("MCP server（M2 只读）", () => {
       });
       expect(result.structuredContent).toMatchObject({
         name: MCP_SERVER_NAME,
-        version: "0.1.0",
+        version: appVersion,
         schemaVersion: SCHEMA_VERSION,
         transport: "stdio",
       });

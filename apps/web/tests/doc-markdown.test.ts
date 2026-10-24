@@ -3,6 +3,7 @@ import {
   documentToEditorHtml,
   htmlToMarkdown,
   isLegacyHtmlContent,
+  looksLikeMarkdown,
   markdownToHtml,
 } from "../src/features/requirements/doc-markdown";
 
@@ -89,5 +90,30 @@ describe("document markdown serialization", () => {
     expect(documentToEditorHtml("<h1>旧正文</h1>")).toBe("<h1>旧正文</h1>");
     expect(documentToEditorHtml("# 新正文\n")).toContain("<h1>新正文</h1>");
     expect(documentToEditorHtml("   ")).toBe("");
+  });
+});
+
+describe("markdown paste detection", () => {
+  it("detects documents with explicit markdown structure", () => {
+    expect(looksLikeMarkdown("# 标题1\n## 标题2")).toBe(true);
+    expect(looksLikeMarkdown("- 项目一\n- 项目二")).toBe(true);
+    expect(looksLikeMarkdown("1. 第一步\n2. 第二步")).toBe(true);
+    expect(looksLikeMarkdown("> 引用文本")).toBe(true);
+    expect(looksLikeMarkdown("```ts\nconst a = 1;\n```")).toBe(true);
+    expect(looksLikeMarkdown("| a | b |\n| --- | --- |\n| 1 | 2 |")).toBe(true);
+    expect(looksLikeMarkdown("说明见 [文档](https://example.com)。")).toBe(
+      true,
+    );
+    expect(looksLikeMarkdown("这是 **重点** 内容")).toBe(true);
+    expect(looksLikeMarkdown("图片 ![图](../images/a.png)")).toBe(true);
+  });
+
+  it("leaves ordinary prose and technical names alone", () => {
+    expect(looksLikeMarkdown("这是一段普通的中文说明，没有格式。")).toBe(false);
+    expect(looksLikeMarkdown("使用 C# 编写服务，编号为 A#1。")).toBe(false);
+    expect(looksLikeMarkdown("配置项 snake_case_name 保持原样。")).toBe(false);
+    expect(looksLikeMarkdown("my__file__name.ts")).toBe(false);
+    expect(looksLikeMarkdown("数组[0](索引)的写法。")).toBe(false);
+    expect(looksLikeMarkdown("   ")).toBe(false);
   });
 });

@@ -462,7 +462,7 @@ describe("更新接口", () => {
   it("检查更新返回清单摘要", async () => {
     const directory = tempDirectory();
     const value = manifest({
-      version: "0.2.0",
+      version: "99.0.0",
       platform: `${process.platform}-${process.arch}`,
       schemaVersion: SCHEMA_VERSION,
     });
@@ -485,7 +485,7 @@ describe("更新接口", () => {
     });
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({
-      latestVersion: "0.2.0",
+      latestVersion: "99.0.0",
       available: true,
       installable: false,
       blockedReason: expect.stringContaining("开发环境"),

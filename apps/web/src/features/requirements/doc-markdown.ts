@@ -69,6 +69,27 @@ export function markdownToHtml(markdown: string): string {
 }
 
 /**
+ * 纯文本是否带有明确的 Markdown 结构（用于粘贴时决定是否按 Markdown 解析）。
+ * 只认块级标记与成对行内语法，避免把 C#、文件名里的下划线等普通文本误判为 Markdown。
+ */
+export function looksLikeMarkdown(text: string): boolean {
+  if (!text.trim()) return false;
+  const patterns = [
+    /^\s{0,3}#{1,6}\s+\S/m,
+    /^\s{0,3}(?:[-*+]|\d+[.)])\s+\S/m,
+    /^\s{0,3}>\s?\S/m,
+    /^\s{0,3}(?:```|~~~)/m,
+    /^\s{0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/m,
+    /^\s*\|.+\|\s*$/m,
+    /!?\[[^\]\n]+\]\([^)\s]*[:/.#][^)\s]*\)/,
+    /\*\*[^*\n]+\*\*/,
+    /(?<!\w)__[^_\n]+__(?!\w)/,
+    /`[^`\n]+`/,
+  ];
+  return patterns.some((pattern) => pattern.test(text));
+}
+
+/**
  * 磁盘正文 → 编辑器 HTML：旧版以 HTML 保存的正文原样沿用，其余按 Markdown 解析。
  * 旧内容在首次编辑保存后即改写为 Markdown，不做批量迁移。
  */

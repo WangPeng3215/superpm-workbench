@@ -10,7 +10,8 @@ import DOMPurify from "dompurify";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { artifactApi } from "../../api/artifacts";
 import { errorMessage } from "../../api/client";
-import { imageDisplayUrl } from "./doc-images";
+import { imageDisplayUrl, toDisplayHtml } from "./doc-images";
+import { looksLikeMarkdown, markdownToHtml } from "./doc-markdown";
 
 const props = defineProps<{
   html: string;
@@ -87,12 +88,34 @@ const editor = useEditor({
       class: "rich-document",
       "aria-label": props.label ?? "需求描述内容",
     },
-    // 粘贴图片：阻止把本地图片当作 HTML/文件路径插入，统一走 images/ 上传
-    handlePaste: (_view, event) => {
+    // 粘贴：本地图片优先接管；纯文本带 Markdown 结构时按 Markdown 解析后插入
+    handlePaste: (view, event) => {
       const files = imageFilesFrom(event.clipboardData);
-      if (!files.length) return false;
+      if (files.length) {
+        event.preventDefault();
+        void insertImages(files);
+        return true;
+      }
+      // 只按纯文本判断：真正的富文本粘贴，其纯文本里不会出现 ##、- 等 Markdown 标记，
+      // 而原始 Markdown 即使同时带 HTML（如网页 pre 区域）也应当被识别
+      const text = event.clipboardData?.getData("text/plain") ?? "";
+      if (!looksLikeMarkdown(text)) return false;
+      // 代码块与行内代码内保留原文，避免把代码里的 #、* 当成 Markdown 语法
+      const { $from } = view.state.selection;
+      if (
+        $from.parent.type.name === "codeBlock" ||
+        $from.marks().some((mark) => mark.type.name === "code")
+      )
+        return false;
+      const instance = editor.value;
+      if (!instance) return false;
       event.preventDefault();
-      void insertImages(files);
+      const html = DOMPurify.sanitize(markdownToHtml(text), SANITIZE);
+      // 文档内图片按当前文档目录转成可访问地址，保存时再还原相对路径
+      const display = props.requirementId
+        ? toDisplayHtml(html, props.requirementId, props.nodeId)
+        : html;
+      instance.chain().focus().insertContent(display).run();
       return true;
     },
     // 拖拽图片：按落点插入，多图一次上传后整体插入
