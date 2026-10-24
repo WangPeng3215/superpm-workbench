@@ -118,6 +118,10 @@ test("stage workspace persists analysis docs and issue resolution", async ({
   await page.locator('.doc-card[data-name="需求记忆.md"]').click();
   const recordEditor = page.getByLabel("文档内容");
   await expect(recordEditor).toBeVisible();
+  await expect(
+    page.locator(".inline-rich .rich-toolbar button").first(),
+  ).toHaveCSS("height", "28px");
+  await expect(recordEditor).toHaveCSS("line-height", "22.1px");
   await recordEditor.fill("# 阶段验收内容");
   await expect(page.getByText("已自动保存到本地文件")).toBeVisible();
   // 切到 UI 设计阶段：详情表单保存当前阶段，问题页签可记录全部阶段问题，新建问题
@@ -308,18 +312,85 @@ test("workbench tabs open from menu and close with route fallback", async ({
   expect(errors).toEqual([]);
 });
 
+test("requirement detail can collapse the property sidebar", async ({
+  page,
+}) => {
+  await page.goto("/requirements");
+  const row = await addRequirement(page, `属性侧栏-${Date.now()}`);
+  await row.locator(".requirement-no").click();
+  await expect(page.getByRole("tab", { name: "需求详情" })).toBeVisible();
+  await expect(page.locator(".detail-save-state")).toHaveText("已同步到本地");
+  await page.getByRole("button", { name: "隐藏属性", exact: true }).click();
+  await expect(page.locator(".detail-fields")).toBeHidden();
+  await expect(page.getByRole("button", { name: "显示属性", exact: true })).toHaveAttribute(
+    "aria-expanded",
+    "false",
+  );
+  await page.getByRole("button", { name: "显示属性", exact: true }).click();
+  await expect(page.locator(".detail-fields")).toBeVisible();
+});
+
+test("requirements toolbar keeps secondary date filters collapsed", async ({
+  page,
+}) => {
+  await page.goto("/requirements");
+  await expect(page.locator(".requirements-toolbar")).toBeVisible();
+  await expect(page.locator(".filter-panel")).toHaveCount(0);
+  await expect(page.locator(".date-filter:visible")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "查询", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "更多时间条件" }).click();
+  await expect(page.locator(".date-filter:visible")).toHaveCount(6);
+  await expect(page.locator(".editable-table th.el-table__cell").first()).toHaveCSS(
+    "height",
+    "38px",
+  );
+});
+
+test("workbench shell uses compact native theme and collapsed navigation", async ({
+  page,
+}) => {
+  await page.goto("/requirements");
+  await expect(page.locator(".topbar")).toHaveCSS("height", "52px");
+  await expect(page.locator(".topbar-tabs")).toHaveCSS(
+    "background-color",
+    "rgba(0, 0, 0, 0)",
+  );
+  await expect(page.locator(".topbar-tabs")).toHaveCSS("border-top-width", "0px");
+  const activeTab = page.locator(".topbar-tab.active");
+  await expect(activeTab).toHaveCSS("height", "36px");
+  await expect(activeTab).toHaveCSS("border-top-left-radius", "8px");
+  await expect(activeTab).toHaveCSS("border-bottom-left-radius", "0px");
+  const brand = await page.evaluate(() =>
+    getComputedStyle(document.documentElement).getPropertyValue("--brand").trim(),
+  );
+  expect(brand).toBe("#3370ff");
+  await page.setViewportSize({ width: 900, height: 800 });
+  await expect(page.locator(".sidebar")).toHaveCSS("width", "64px");
+  const settings = page.getByRole("link", { name: "系统设置", exact: true });
+  await expect(settings).toHaveAttribute("title", "系统设置");
+  await expect(settings.locator(".el-icon")).toHaveCSS("font-size", "20px");
+});
+
 test("settings shows version and update entry without contacting release source", async ({
   page,
 }) => {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto("/settings");
+  await expect(page.locator(".settings-nav button")).toHaveCount(3);
+  await expect(
+    page.getByRole("button", { name: "本地存储", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
   const panel = page
     .locator("section.update-panel")
     .filter({ hasText: "版本与更新" });
+  await expect(panel).toBeHidden();
+  await page
+    .getByRole("button", { name: "版本与更新", exact: true })
+    .click();
   await expect(panel).toBeVisible();
   await expect(panel.getByText(/当前版本 \d+\.\d+\.\d+/)).toBeVisible();
   await expect(panel.getByRole("button", { name: "检查更新" })).toBeVisible();
-  await expect(panel.getByText(/开发环境/)).toBeVisible();
+  await expect(panel.getByText(/未检测到发布安装布局/)).toBeVisible();
   expect(errors).toEqual([]);
 });

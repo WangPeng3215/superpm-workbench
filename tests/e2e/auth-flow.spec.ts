@@ -29,6 +29,34 @@ async function loginViaUi(page: Page, username: string, password: string) {
   await submitButton(page).click();
 }
 
+test("短视口下登录卡片与页脚不重叠", async ({ page }) => {
+  await page.setViewportSize({ width: 531, height: 553 });
+  for (const colorScheme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme });
+    await page.goto("/login");
+    if (colorScheme === "dark") {
+      await page
+        .getByRole("button", { name: "切换到深色模式", exact: true })
+        .click();
+    }
+    const card = page.locator(
+      colorScheme === "dark" ? ".t-dark__card" : ".t-classic__card",
+    );
+    const footer = page.locator(
+      colorScheme === "dark" ? ".dark-page-footer" : ".classic-page-footer",
+    );
+    await expect(card).toBeVisible();
+    await expect(card).toHaveCSS("transform", "none");
+    const cardBox = await card.boundingBox();
+    const footerBox = await footer.boundingBox();
+    expect(cardBox).not.toBeNull();
+    expect(footerBox).not.toBeNull();
+    expect(footerBox!.y).toBeGreaterThanOrEqual(
+      cardBox!.y + cardBox!.height,
+    );
+  }
+});
+
 test("错误密码登录失败并提示", async ({ page }) => {
   await loginViaUi(page, "admin", "wrong-password");
   await expect(page.locator(".cf-error, .df-error")).toContainText(

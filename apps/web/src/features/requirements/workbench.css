@@ -1,63 +1,81 @@
-.filter-panel {
-  padding: 14px 16px 2px;
+.requirements-toolbar {
   margin-bottom: 12px;
 }
-.filter-form {
+.toolbar-main {
   display: flex;
   align-items: flex-end;
-  gap: 16px;
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-base);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
 }
 .filter-fields {
   flex: 1 1 auto;
   min-width: 0;
   display: flex;
-  flex-wrap: wrap;
   align-items: flex-end;
-  gap: 12px;
+  gap: 8px;
 }
 .filter-fields > .el-form-item {
-  width: 138px;
-  margin-bottom: 14px;
+  flex: 0 1 132px;
+  min-width: 112px;
+  margin: 0;
 }
 .filter-fields > .el-form-item:first-child {
-  width: 220px;
+  flex: 1 1 220px;
+  min-width: 180px;
+  max-width: 280px;
 }
-.filter-fields > .date-filter {
-  width: 270px;
-}
-.filter-fields :deep(.el-form-item__label) {
-  font-size: 11px;
+.filter-fields :deep(.el-form-item__label),
+.filter-drawer :deep(.el-form-item__label) {
+  height: 18px;
+  margin-bottom: 4px;
+  padding: 0;
   color: var(--text-muted);
-  margin-bottom: 6px;
+  font-size: 11px;
   line-height: 18px;
 }
 .filter-fields :deep(.el-select),
-.filter-fields :deep(.el-date-editor) {
+.filter-drawer :deep(.el-date-editor) {
   width: 100%;
 }
-.filter-fields > .date-toggle {
-  margin-bottom: 14px;
-  font-size: 12px;
-}
-.filter-fields > .date-toggle :deep(span) {
-  display: block;
-  height: 24px;
-}
-.extra-date {
-  flex: 0 0 270px;
+.filter-fields :deep(.el-input__wrapper),
+.filter-fields :deep(.el-select__wrapper),
+.filter-drawer :deep(.el-input__wrapper) {
+  min-height: 32px;
+  box-shadow: 0 0 0 1px var(--border-strong) inset;
 }
 .filter-actions {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 14px;
+  gap: 6px;
 }
-.action-divider {
-  width: 1px;
-  height: 20px;
-  background: var(--border-base);
-  margin: 0 4px;
+.filter-actions .el-button {
+  height: 32px;
+  margin: 0;
+  padding-inline: 12px;
+}
+.filter-actions .date-toggle {
+  color: var(--text-secondary);
+}
+.filter-drawer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 8px;
+  padding: 12px 12px 0;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-base);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+.filter-drawer > .el-form-item {
+  flex: 0 1 270px;
+  min-width: 230px;
+  margin-bottom: 12px;
 }
 .requirement-surface {
   overflow: hidden;
@@ -68,16 +86,25 @@
   --el-table-border-color: var(--border-base);
 }
 .editable-table :deep(th.el-table__cell) {
-  height: 43px;
+  height: 38px;
+  padding: 0;
   color: var(--text-muted);
   font-size: 11px;
   font-weight: 600;
+  white-space: nowrap;
 }
 .editable-table :deep(td.el-table__cell) {
-  height: 52px;
-  padding: 6px 0;
+  height: 46px;
+  padding: 4px 0;
   color: var(--text-regular);
   font-size: 12px;
+}
+.editable-table :deep(.el-table__cell) {
+  border-right: 0;
+}
+.editable-table :deep(.el-table__inner-wrapper::before),
+.editable-table :deep(.el-table__border-left-patch) {
+  display: none;
 }
 .editable-table :deep(.editing-row) {
   --el-table-tr-bg-color: var(--bg-selected);
@@ -296,19 +323,39 @@
 .error-alert {
   margin: 12px 20px;
 }
-@media (max-width: 1000px) {
-  .filter-fields > .el-form-item {
-    flex: 1 1 140px;
+@media (max-width: 1280px) {
+  .toolbar-main {
+    flex-direction: column;
+    align-items: stretch;
   }
-  .filter-fields > .date-filter {
-    flex: 1 1 270px;
+  .filter-fields > .el-form-item:first-child {
+    max-width: none;
+  }
+  .filter-actions {
+    justify-content: flex-end;
   }
 }
 @media (max-width: 700px) {
-  .filter-form {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 0;
+  .filter-fields {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .filter-fields > .el-form-item,
+  .filter-fields > .el-form-item:first-child {
+    width: auto;
+    min-width: 0;
+    max-width: none;
+  }
+  .filter-fields > .el-form-item:first-child {
+    grid-column: 1 / -1;
+  }
+  .filter-actions {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+  .filter-drawer > .el-form-item {
+    flex: 1 1 230px;
+    min-width: 0;
   }
   .table-footer {
     align-items: flex-start;
@@ -317,5 +364,13 @@
   }
   .add-row-button span {
     display: none;
+  }
+}
+@media (max-width: 420px) {
+  .filter-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .filter-fields > .el-form-item:first-child {
+    grid-column: auto;
   }
 }

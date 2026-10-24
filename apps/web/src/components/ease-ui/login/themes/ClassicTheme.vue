@@ -126,14 +126,14 @@
         </form>
       </div>
     </div>
-  </div>
 
-  <!-- 全局底部版权 -->
-  <footer class="classic-page-footer">
-    <span>© 2026 superPM workbench</span>
-    <span class="footer-dot">·</span>
-    <span>数据保存在这台电脑</span>
-  </footer>
+    <!-- 全局底部版权 -->
+    <footer class="classic-page-footer">
+      <span>© 2026 superPM workbench</span>
+      <span class="footer-dot">·</span>
+      <span>数据保存在这台电脑</span>
+    </footer>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -159,14 +159,17 @@ function handleSubmit() {
 
 <style scoped lang="scss">
 .t-classic {
-  min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  background: #f0f2f8;
-  padding: 20px;
+  background: var(--bg-page);
+  padding: 52px 20px 0;
   position: relative;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  font-family: var(--font-sans);
 }
 
 /* 背景 */
@@ -203,13 +206,16 @@ function handleSubmit() {
 /* 主卡片 */
 .t-classic__card {
   display: flex;
+  flex-shrink: 0;
   width: 100%; max-width: 920px; min-height: 540px;
-  background: #fff;
-  border-radius: 20px;
+  margin: auto;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-base);
+  border-radius: 16px;
   overflow: hidden;
-  box-shadow: 0 30px 60px -12px rgba(0,0,0,0.1), 0 0 0 1px rgba(0,0,0,0.03);
+  box-shadow: 0 20px 50px -24px rgb(31 35 41 / 0.22);
   position: relative; z-index: 1;
-  animation: rise 0.65s cubic-bezier(0.16,1,0.3,1);
+  animation: rise 0.35s var(--ease-standard);
 }
 
 @keyframes rise {
@@ -220,7 +226,7 @@ function handleSubmit() {
 /* 左侧品牌 */
 .t-classic__brand {
   width: 380px; flex-shrink: 0;
-  background: linear-gradient(155deg, #4e6ef2 0%, #3c66dd 55%, #6d28d9 100%);
+  background: linear-gradient(155deg, var(--brand) 0%, var(--brand-strong) 100%);
   display: flex; flex-direction: column;
   padding: 48px 36px 32px;
   position: relative; overflow: hidden;
@@ -282,8 +288,8 @@ function handleSubmit() {
 }
 
 .form-header { margin-bottom: 32px; }
-.form-title  { font-size: 26px; font-weight: 700; color: #1a1a2e; margin: 0 0 7px; }
-.form-sub    { font-size: 13px; color: #9ca3af; margin: 0; }
+.form-title  { font-size: 26px; font-weight: 700; color: var(--text-heading); margin: 0 0 7px; }
+.form-sub    { font-size: 13px; color: var(--text-muted); margin: 0; }
 
 /* ========== 内联表单样式 ========== */
 .classic-form { display: flex; flex-direction: column; gap: 0; }
@@ -314,22 +320,22 @@ function handleSubmit() {
 
 .cf-input {
   width: 100%;
-  height: 48px;
-  background: #f9fafb;
-  border: 1px solid #e5e7eb;
-  border-radius: 10px;
+  height: 44px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-base);
+  border-radius: var(--radius-md);
   padding: 0 14px 0 42px;
   font-size: 14px;
-  color: #1a1a2e;
+  color: var(--text-heading);
   outline: none;
-  transition: border-color 0.25s, box-shadow 0.25s, background 0.25s;
+  transition: border-color var(--duration-fast), box-shadow var(--duration-fast), background var(--duration-fast);
 
-  &::placeholder { color: #d1d5db; }
+  &::placeholder { color: var(--text-faint); }
 
   &:focus {
-    border-color: #4e6ef2;
-    background: #fff;
-    box-shadow: 0 0 0 3px rgba(78,110,242,0.1);
+    border-color: var(--brand);
+    background: var(--bg-surface);
+    box-shadow: 0 0 0 3px var(--bg-brand-soft);
   }
 }
 
@@ -377,22 +383,22 @@ function handleSubmit() {
   justify-content: center;
   gap: 8px;
   width: 100%;
-  height: 50px;
+  height: 44px;
   margin-top: 12px;
   border: none;
-  border-radius: 12px;
-  font-size: 15px;
-  font-weight: 700;
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  font-weight: 600;
   cursor: pointer;
-  letter-spacing: 3px;
+  letter-spacing: 1px;
   position: relative;
   overflow: hidden;
   color: #fff;
-  background: linear-gradient(135deg, #4e6ef2, #6d28d9);
-  transition: transform 0.25s cubic-bezier(0.34,1.56,0.64,1),
-              box-shadow 0.3s ease,
-              opacity 0.2s ease;
-  box-shadow: 0 4px 20px rgba(78,110,242,0.3);
+  background: var(--brand);
+  transition: transform var(--duration-fast) var(--ease-standard),
+              background-color var(--duration-fast),
+              opacity var(--duration-fast);
+  box-shadow: none;
 
   .cf-btn-shimmer {
     position: absolute;
@@ -424,15 +430,14 @@ function handleSubmit() {
   }
 
   &:hover:not(:disabled) {
-    transform: translateY(-2px) scale(1.012);
-    box-shadow: 0 8px 30px rgba(78,110,242,0.4);
+    background: var(--brand-strong);
+    transform: translateY(-1px);
 
-    .cf-btn-shimmer { transform: translateX(100%); transition: transform 0.55s ease; }
     .cf-btn-arrow  { opacity: 1; transform: translateX(0); }
-    .cf-btn-text    { letter-spacing: 4px; }
   }
 
-  &:active:not(:disabled) { transform: translateY(0) scale(0.975); }
+  &:focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; }
+  &:active:not(:disabled) { transform: translateY(0); }
   &:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -450,13 +455,14 @@ function handleSubmit() {
 
 /* 全局底部版权 */
 .classic-page-footer {
-  position: fixed;
-  bottom: 16px;
-  left: 0; right: 0;
+  position: relative;
   display: flex;
+  flex-shrink: 0;
   align-items: center;
   justify-content: center;
   gap: 10px;
+  width: 100%;
+  padding: 12px;
   font-size: 11px;
   color: #9ca3af;
   z-index: 10;

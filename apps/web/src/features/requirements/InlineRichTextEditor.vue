@@ -663,11 +663,18 @@ onBeforeUnmount(() => editor.value?.destroy());
 <style scoped>
 .inline-rich {
   border: 1px solid var(--border-strong);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   overflow: hidden;
   background: var(--bg-surface);
+  transition:
+    border-color var(--duration-fast) var(--ease-standard),
+    box-shadow var(--duration-fast) var(--ease-standard);
   /* 容器查询锚点：空间不足时自动隐藏正文/标题组 */
   container-type: inline-size;
+}
+.inline-rich:focus-within {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px var(--bg-brand-soft);
 }
 .inline-rich .rich-toolbar {
   display: flex;
@@ -675,7 +682,9 @@ onBeforeUnmount(() => editor.value?.destroy());
   gap: 3px;
   row-gap: 6px;
   flex-wrap: wrap;
-  padding: 7px 10px;
+  min-height: 42px;
+  box-sizing: border-box;
+  padding: 6px 10px;
   max-height: 84px;
   overflow: auto;
   background: var(--bg-subtle);
@@ -687,10 +696,11 @@ onBeforeUnmount(() => editor.value?.destroy());
   gap: 2px;
 }
 .inline-rich .rich-toolbar button {
+  height: 28px;
   border: 0;
   background: transparent;
-  padding: 5px 6px;
-  border-radius: 4px;
+  padding: 0 7px;
+  border-radius: var(--radius-sm);
   font-size: 12px;
   line-height: 1.2;
   color: var(--text-secondary);
@@ -699,6 +709,13 @@ onBeforeUnmount(() => editor.value?.destroy());
   display: flex;
   align-items: center;
   justify-content: center;
+  transition:
+    color var(--duration-fast) var(--ease-standard),
+    background-color var(--duration-fast) var(--ease-standard);
+}
+.inline-rich .rich-toolbar button:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 1px;
 }
 .inline-rich .rich-toolbar button svg {
   width: 15px;
@@ -736,7 +753,7 @@ onBeforeUnmount(() => editor.value?.destroy());
   overflow: auto;
   outline: 0;
   font-size: 13px;
-  line-height: 1.8;
+  line-height: 1.7;
   color: var(--text-body);
 }
 /* 撑满外层容器模式：工具栏固定，正文区域占满剩余高度并自行滚动。

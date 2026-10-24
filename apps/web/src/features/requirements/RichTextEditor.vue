@@ -186,25 +186,44 @@ onBeforeUnmount(() => editor.value?.destroy());
 <style>
 .rich-shell {
   border: 1px solid var(--border-strong);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   overflow: hidden;
+  background: var(--bg-surface);
+  transition:
+    border-color var(--duration-fast) var(--ease-standard),
+    box-shadow var(--duration-fast) var(--ease-standard);
+}
+.rich-shell:focus-within {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px var(--bg-brand-soft);
 }
 .rich-toolbar {
   display: flex;
   align-items: center;
   gap: 4px;
   flex-wrap: wrap;
-  padding: 10px;
+  min-height: 42px;
+  box-sizing: border-box;
+  padding: 6px 10px;
   background: var(--bg-subtle);
   border-bottom: 1px solid var(--border-base);
 }
 .rich-toolbar button {
+  height: 28px;
   border: 0;
   background: transparent;
-  padding: 6px 10px;
-  border-radius: 4px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
   color: var(--text-secondary);
+  font-size: 12px;
   cursor: pointer;
+  transition:
+    color var(--duration-fast) var(--ease-standard),
+    background-color var(--duration-fast) var(--ease-standard);
+}
+.rich-toolbar button:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 1px;
 }
 .rich-toolbar button:hover,
 .rich-toolbar button.active {
@@ -222,13 +241,13 @@ onBeforeUnmount(() => editor.value?.destroy());
   margin: 0 4px;
 }
 .rich-document {
-  padding: 22px;
+  padding: 20px 22px;
   min-height: 320px;
   max-height: 55vh;
   overflow: auto;
   outline: 0;
   font-size: 14px;
-  line-height: 1.8;
+  line-height: 1.7;
   color: var(--text-body);
 }
 .rich-document p {

@@ -197,16 +197,14 @@ onBeforeUnmount(() => {
   flex-direction: column;
   min-height: 0;
   flex: 1;
-  border: 1px solid var(--border-base);
-  border-radius: 8px;
-  padding: 12px 14px;
-  background: var(--bg-surface);
+  background: transparent;
 }
 .md-footer {
   display: flex;
   align-items: center;
   gap: 8px;
   margin-top: 8px;
+  padding: 0 2px;
   font-size: 11px;
   color: var(--text-faint);
   flex: none;

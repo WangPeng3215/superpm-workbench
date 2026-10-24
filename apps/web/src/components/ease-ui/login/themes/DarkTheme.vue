@@ -237,6 +237,7 @@ function initCanvas() {
   }))
 
   cancelAnimationFrame(animId)
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
   const draw = () => {
     ctx.clearRect(0, 0, c.width, c.height)
@@ -265,7 +266,7 @@ function initCanvas() {
         }
       }
     }
-    animId = requestAnimationFrame(draw)
+    if (!reduceMotion) animId = requestAnimationFrame(draw)
   }
   draw()
 }
@@ -285,13 +286,17 @@ function handleSubmit() {
 
 <style scoped lang="scss">
 .t-dark {
-  min-height: 100vh;
-  background: #060a14;
+  min-height: 100dvh;
+  background: var(--bg-page);
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   position: relative;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 52px 20px 0;
+  font-family: var(--font-sans);
 }
 
 .t-dark__canvas {
@@ -306,26 +311,23 @@ function handleSubmit() {
   position: relative;
   z-index: 1;
   display: flex;
+  flex-shrink: 0;
   align-items: center;
   gap: 28px;
+  margin: auto;
 }
 
 /* 主卡片 */
 .t-dark__card {
   width: 420px;
-  background: rgba(10, 16, 30, 0.9);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
-  border: 1px solid rgba(107, 134, 255, 0.22);
-  border-radius: 20px;
-  padding: 44px 40px 40px;
+  background: var(--bg-overlay);
+  border: 1px solid var(--border-base);
+  border-radius: 16px;
+  padding: 40px;
   position: relative;
   overflow: hidden;
-  box-shadow:
-    0 0 60px rgba(107, 134, 255, 0.1),
-    0 40px 80px rgba(0, 0, 0, 0.5),
-    inset 0 1px 0 rgba(255, 255, 255, 0.05);
-  animation: rise-up 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: 0 24px 60px -24px rgb(0 0 0 / 0.55);
+  animation: rise-up 0.35s var(--ease-standard);
 }
 @keyframes rise-up {
   from {
@@ -422,7 +424,7 @@ function handleSubmit() {
 .t-dark__title {
   font-size: 19px;
   font-weight: 700;
-  color: #e0eaff;
+  color: var(--text-heading);
   text-align: center;
   margin: 0 0 6px;
   letter-spacing: 2px;
@@ -512,27 +514,27 @@ function handleSubmit() {
 
 .df-input {
   width: 100%;
-  height: 46px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(107, 134, 255, 0.2);
-  border-radius: 10px;
+  height: 44px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-base);
+  border-radius: var(--radius-md);
   padding: 0 14px 0 42px;
   font-size: 14px;
-  color: #e0eaff;
+  color: var(--text-heading);
   outline: none;
   transition:
-    border-color 0.25s,
-    background 0.25s,
-    box-shadow 0.25s;
+    border-color var(--duration-fast),
+    background var(--duration-fast),
+    box-shadow var(--duration-fast);
 
   &::placeholder {
-    color: rgba(255, 255, 255, 0.25);
+    color: var(--text-faint);
   }
 
   &:focus {
-    border-color: rgba(107, 134, 255, 0.6);
-    background: rgba(107, 134, 255, 0.06);
-    box-shadow: 0 0 0 3px rgba(107, 134, 255, 0.12);
+    border-color: var(--brand);
+    background: var(--bg-surface);
+    box-shadow: 0 0 0 3px var(--bg-brand-soft);
   }
 }
 
@@ -594,23 +596,23 @@ function handleSubmit() {
   justify-content: center;
   gap: 8px;
   width: 100%;
-  height: 50px;
+  height: 44px;
   margin-top: 8px;
   border: none;
-  border-radius: 12px;
-  font-size: 15px;
-  font-weight: 700;
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  font-weight: 600;
   cursor: pointer;
-  letter-spacing: 3px;
+  letter-spacing: 1px;
   position: relative;
   overflow: hidden;
-  color: #fff;
-  background: linear-gradient(135deg, #1a3a8f, #6b86ff, #6d28d9);
+  color: #0f131b;
+  background: var(--brand);
   transition:
-    transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1),
-    box-shadow 0.3s ease,
-    opacity 0.2s ease;
-  box-shadow: 0 4px 20px rgba(107, 134, 255, 0.35);
+    transform var(--duration-fast) var(--ease-standard),
+    background-color var(--duration-fast),
+    opacity var(--duration-fast);
+  box-shadow: none;
 
   .df-btn-shimmer {
     position: absolute;
@@ -656,24 +658,21 @@ function handleSubmit() {
   }
 
   &:hover:not(:disabled) {
-    transform: translateY(-2px) scale(1.012);
-    box-shadow: 0 8px 30px rgba(107, 134, 255, 0.45);
+    background: var(--brand-strong);
+    transform: translateY(-1px);
 
-    .df-btn-shimmer {
-      transform: translateX(100%);
-      transition: transform 0.55s ease;
-    }
     .df-btn-arrow {
       opacity: 1;
       transform: translateX(0);
     }
-    .df-btn-text {
-      letter-spacing: 4px;
-    }
   }
 
+  &:focus-visible {
+    outline: 2px solid var(--brand);
+    outline-offset: 3px;
+  }
   &:active:not(:disabled) {
-    transform: translateY(0) scale(0.975);
+    transform: translateY(0);
   }
   &:disabled {
     opacity: 0.38;
@@ -728,14 +727,13 @@ function handleSubmit() {
 
 /* 全局底部版权 */
 .dark-page-footer {
-  position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
+  position: relative;
   display: flex;
+  flex-shrink: 0;
   align-items: center;
   justify-content: center;
   gap: 10px;
+  width: 100%;
   padding: 12px;
   font-size: 11px;
   color: rgba(107, 134, 255, 0.28);

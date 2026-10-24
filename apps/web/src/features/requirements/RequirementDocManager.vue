@@ -1259,7 +1259,7 @@ function onLinkCommand(command: string | number | object, link: ArtifactLink) {
   min-height: 0;
   height: 100%;
   border: 1px solid var(--border-base);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--bg-surface);
   overflow: hidden;
 }
@@ -1267,9 +1267,9 @@ function onLinkCommand(command: string | number | object, link: ArtifactLink) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 8px 12px;
   flex-wrap: wrap;
-  padding: 10px 14px;
+  padding: 8px 12px;
   border-bottom: 1px solid var(--border-soft);
   background: var(--bg-subtle);
 }
@@ -1397,14 +1397,14 @@ function onLinkCommand(command: string | number | object, link: ArtifactLink) {
   background: var(--bg-surface);
   cursor: pointer;
   transition:
-    border-color 0.15s ease,
-    box-shadow 0.15s ease,
-    transform 0.15s ease;
+    border-color var(--duration-fast) var(--ease-standard),
+    box-shadow var(--duration-fast) var(--ease-standard),
+    transform var(--duration-fast) var(--ease-standard);
 }
 .doc-card:hover,
 .doc-card:focus-visible {
   border-color: var(--brand);
-  box-shadow: 0 2px 10px rgb(0 0 0 / 0.08);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 0.07);
   transform: translateY(-1px);
   outline: none;
 }

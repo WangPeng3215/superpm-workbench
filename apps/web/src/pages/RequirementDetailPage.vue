@@ -59,6 +59,7 @@ const loading = ref(false),
   error = ref("");
 // 顶层页签：固定「需求详情」「文档管理」「问题记录」+ 动态文档页签（doc-<nodeId>）
 const activeTab = ref("detail");
+const propertiesOpen = ref(true);
 // 动态文档页签：点击「文档管理」中的 md 文件（含需求记忆）时打开，可关闭
 const docTabs = ref<{ node: ArtifactNode }[]>([]);
 const docEditors = new Map<number, InstanceType<typeof DocTabEditor>>();
@@ -254,19 +255,47 @@ function go(target: Requirement) {
             <span class="hero-no">{{ item.requirementNo }}</span>
             <h1 class="head-title">{{ item.name }}</h1>
           </div>
-          <!-- 当前阶段 tag：随详情表单保存的 currentStage 刷新 -->
           <el-tag
             size="small"
             class="enum-tag head-stage"
             :class="tagTone('currentStage', item.currentStage)"
-            >{{ stageLabels[item.currentStage] }}</el-tag
           >
+            {{ stageLabels[item.currentStage] }}
+          </el-tag>
+          <div class="head-actions">
+            <span class="detail-save-state" :class="{ dirty }">
+              {{ dirty ? "有未保存的修改" : "已同步到本地" }}
+            </span>
+            <el-button size="small" :disabled="!dirty || saving" @click="revert">
+              重置
+            </el-button>
+            <el-button
+              size="small"
+              type="primary"
+              :loading="saving"
+              :disabled="!dirty"
+              @click="save"
+            >
+              保存修改
+            </el-button>
+            <el-button
+              size="small"
+              class="properties-toggle"
+              :aria-expanded="propertiesOpen"
+              @click="propertiesOpen = !propertiesOpen"
+            >
+              {{ propertiesOpen ? "隐藏属性" : "显示属性" }}
+            </el-button>
+          </div>
         </div>
       </section>
       <section class="surface detail-body">
         <el-tabs v-model="activeTab" @tab-remove="onTabRemove">
           <el-tab-pane label="需求详情" name="detail">
-            <div class="detail-grid">
+            <div
+              class="detail-grid"
+              :class="{ 'properties-collapsed': !propertiesOpen }"
+            >
               <article class="detail-desc">
                 <InlineRichTextEditor
                   v-if="draft"
@@ -278,7 +307,7 @@ function go(target: Requirement) {
                   @update:text="onDescriptionText"
                 />
               </article>
-              <div class="detail-fields">
+              <div v-show="propertiesOpen" class="detail-fields">
                 <form v-if="draft" class="field-form" @submit.prevent="save">
                   <label class="field">
                     <span>需求名称</span>
@@ -464,19 +493,6 @@ function go(target: Requirement) {
                       暂无关联的父需求或子需求。
                     </p>
                   </div>
-                  <div class="field-actions">
-                    <span>{{ dirty ? "有未保存的修改" : "已同步到本地" }}</span>
-                    <el-button :disabled="!dirty || saving" @click="revert"
-                      >重置</el-button
-                    >
-                    <el-button
-                      type="primary"
-                      :loading="saving"
-                      :disabled="!dirty"
-                      @click="save"
-                      >保存修改</el-button
-                    >
-                  </div>
                 </form>
               </div>
             </div>
@@ -572,6 +588,24 @@ function go(target: Requirement) {
 .head-stage {
   flex: none;
 }
+.head-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+}
+.head-actions .el-button {
+  margin: 0;
+}
+.detail-save-state {
+  margin-right: 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.detail-save-state.dirty {
+  color: var(--warning-text);
+}
 .detail-body {
   padding: 12px 22px 22px;
   /* 占满限高剩余空间，页签头固定、页签内容区独立消化高度 */
@@ -600,11 +634,13 @@ function go(target: Requirement) {
 }
 .detail-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
-  gap: 26px;
-  padding-top: 6px;
-  /* 单行铺满页签内容区：左编辑器、右表单各自滚动 */
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+  gap: 20px;
   height: 100%;
+  padding-top: 8px;
+}
+.detail-grid.properties-collapsed {
+  grid-template-columns: minmax(0, 1fr);
 }
 .detail-desc {
   /* 高度由外层 grid 行决定：编辑器绝对定位铺满本格，内容超出时内部滚动 */
@@ -679,23 +715,19 @@ function go(target: Requirement) {
 .link-button:hover {
   color: var(--brand);
 }
-.field-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  border-top: 1px solid var(--border-soft);
-  padding-top: 14px;
-  margin-top: 4px;
-}
-.field-actions > span {
-  margin-right: auto;
-  font-size: 11px;
-  color: var(--text-faint);
-}
 @media (max-width: 1100px) {
+  .head-row {
+    flex-wrap: wrap;
+  }
+  .head-identity {
+    flex-basis: 55%;
+  }
+  .head-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
   .detail-grid {
     grid-template-columns: minmax(0, 1fr);
-    /* 单列堆叠时退化为跟随内容高度，由页签内容区整体兜底滚动 */
     height: auto;
   }
   .detail-desc {
@@ -706,6 +738,25 @@ function go(target: Requirement) {
   }
 }
 @media (max-width: 700px) {
+  .detail-head {
+    padding: 10px 12px;
+  }
+  .detail-body {
+    padding-inline: 12px;
+  }
+  .head-identity {
+    flex-basis: 100%;
+  }
+  .head-stage {
+    order: 2;
+  }
+  .detail-save-state {
+    margin-right: auto;
+  }
+  .head-actions {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
   .field-row {
     grid-template-columns: minmax(0, 1fr);
   }

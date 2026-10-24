@@ -1477,7 +1477,7 @@ onBeforeUnmount(() => {
   min-height: 0;
   overflow: hidden;
   border: 1px solid var(--border-base);
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   background: var(--bg-surface);
 }
 .issue-rail {
@@ -1492,7 +1492,8 @@ onBeforeUnmount(() => {
   display: grid;
   flex: none;
   gap: 8px;
-  padding: 13px 15px 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-soft);
 }
 .issue-primary {
   display: inline-flex;
@@ -1971,10 +1972,10 @@ onBeforeUnmount(() => {
   display: grid;
   flex: 1 1 auto;
   align-content: start;
-  gap: 21px;
+  gap: 18px;
   min-height: 0;
   overflow-y: auto;
-  padding: 18px 24px 24px;
+  padding: 16px 20px 22px;
 }
 .detail-section {
   display: grid;
