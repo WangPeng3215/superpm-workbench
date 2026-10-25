@@ -32,10 +32,12 @@ jobs:
         shell: bash
         run: |
           version="${GITHUB_REF_NAME#v}"
+          # 清单说明取标签注信息的首行，取不到时回退到通用文案
+          notes="$(git tag -l --format='%(contents:subject)' "$GITHUB_REF_NAME" 2>/dev/null)"
           node scripts/release/build-release.mjs \
             --version "$version" \
             --tag "$GITHUB_REF_NAME" \
-            --notes "$GITHUB_REF_NAME 正式发布，详见 GitHub Release。"
+            --notes "${notes:-$GITHUB_REF_NAME 正式发布，详见 GitHub Release。}"
       - name: 创建 GitHub Release
         shell: bash
         env:
