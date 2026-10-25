@@ -3,7 +3,11 @@ import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import type { FormInstance, FormRules } from "element-plus";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { CalendarOutlined, ProjectOutlined } from "@ant-design/icons-vue";
+import {
+  CalendarOutlined,
+  ProjectOutlined,
+  ToolOutlined,
+} from "@ant-design/icons-vue";
 import type { SystemInfo } from "@superpm/shared";
 import type { PendingOldData } from "@superpm/shared/data-root-contract";
 import { request } from "./api/client";
@@ -12,6 +16,7 @@ import { clearAuthUser } from "./stores/auth";
 import { clearTabs, syncRoute } from "./stores/tabs";
 import AppSidebar from "./components/layout/AppSidebar.vue";
 import AppTopbar from "./components/layout/AppTopbar.vue";
+import GlobalToolbox from "./features/online-tools/GlobalToolbox.vue";
 import PendingCleanupActions from "./features/settings/PendingCleanupActions.vue";
 
 const route = useRoute();
@@ -60,6 +65,7 @@ watch(
 const navigation = [
   { path: "/requirements", label: "需求列表", icon: ProjectOutlined },
   { path: "/tasks", label: "每日任务", icon: CalendarOutlined },
+  { path: "/online-tools", label: "在线工具", icon: ToolOutlined },
 ];
 onMounted(async () => {
   try {
@@ -150,6 +156,7 @@ async function submitChangePassword() {
       />
       <main class="page-content"><RouterView /></main>
     </div>
+    <GlobalToolbox />
   </div>
   <!-- 修改密码弹窗 -->
   <el-dialog

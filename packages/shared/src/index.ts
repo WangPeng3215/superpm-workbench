@@ -955,3 +955,4 @@ export * from "./mcp-contract.js";
 export * from "./update-contract.js";
 // 每日任务与工时记录契约
 export * from "./daily-tasks.js";
+export * from "./online-tools.js";

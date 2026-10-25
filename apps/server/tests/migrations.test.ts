@@ -453,7 +453,7 @@ describe("migrations 0005（资产与问题管理）", () => {
   });
   it("SCHEMA_VERSION 与已应用迁移数一致", () => {
     migrate(db);
-    expect(SCHEMA_VERSION).toBe(14);
+    expect(SCHEMA_VERSION).toBe(15);
     expect(appliedVersions(db)).toHaveLength(SCHEMA_VERSION);
   });
 });
@@ -915,5 +915,57 @@ describe("migrations 0014（每日任务与工时）", () => {
     );
     insertEntry.run(timestamp, timestamp, timestamp);
     expect(() => insertEntry.run(timestamp, timestamp, timestamp)).toThrow();
+  });
+});
+
+describe("migrations 0015（在线工具箱）", () => {
+  it("创建工具表并约束名称唯一与启停/收藏默认值", () => {
+    migrate(db);
+    expect(tableColumns(db, "online_tools")).toEqual(
+      expect.arrayContaining([
+        "name",
+        "url",
+        "icon",
+        "category",
+        "description",
+        "enabled",
+        "is_favorite",
+        "sort_order",
+        "created_at",
+        "updated_at",
+      ]),
+    );
+    const indexes = (
+      db
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='online_tools'",
+        )
+        .all() as { name: string }[]
+    ).map((row) => row.name);
+    expect(indexes).toEqual(
+      expect.arrayContaining([
+        "idx_online_tools_name",
+        "idx_online_tools_favorite",
+      ]),
+    );
+    const timestamp = "2026-10-25T01:00:00.000Z";
+    const insert = db.prepare(
+      `INSERT INTO online_tools (name, url, category, created_at, updated_at)
+       VALUES (?, ?, 'other', ?, ?)`,
+    );
+    insert.run("示例工具", "https://example.com", timestamp, timestamp);
+    const row = db
+      .prepare(
+        "SELECT enabled, is_favorite, sort_order FROM online_tools WHERE name = '示例工具'",
+      )
+      .get() as {
+      enabled: number;
+      is_favorite: number;
+      sort_order: number;
+    };
+    expect(row).toEqual({ enabled: 1, is_favorite: 0, sort_order: 0 });
+    expect(() =>
+      insert.run("示例工具", "https://example.org", timestamp, timestamp),
+    ).toThrow();
   });
 });

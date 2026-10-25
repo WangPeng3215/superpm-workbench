@@ -11,6 +11,7 @@ import { IssueService } from "./issues.js";
 import { ArtifactService } from "./artifacts.js";
 import { RequirementProgressService } from "./requirement-progress.js";
 import { DailyTaskService } from "./daily-tasks.js";
+import { OnlineToolService } from "./online-tools.js";
 
 export interface ServiceContainerOptions {
   databasePath?: string;
@@ -30,6 +31,7 @@ export interface ServiceContainer {
   artifacts: ArtifactService;
   progress: RequirementProgressService;
   dailyTasks: DailyTaskService;
+  onlineTools: OnlineToolService;
   close(): void;
 }
 
@@ -92,6 +94,7 @@ export function createServiceContainer(
       directories,
     ),
     dailyTasks: new DailyTaskService(db),
+    onlineTools: new OnlineToolService(db),
     close() {
       if (closed) return;
       closed = true;

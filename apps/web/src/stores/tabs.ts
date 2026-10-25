@@ -14,6 +14,7 @@ export interface WorkTab {
 const FEATURE_TAB_LABELS: Record<string, string> = {
   "/requirements": "需求列表",
   "/tasks": "每日任务",
+  "/online-tools": "在线工具",
   "/notifications": "系统通知",
   "/settings": "系统设置",
 };

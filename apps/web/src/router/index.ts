@@ -26,6 +26,11 @@ export const router = createRouter({
       meta: { title: "每日任务", module: "tasks" },
     },
     {
+      path: "/online-tools",
+      component: () => import("../pages/OnlineToolsPage.vue"),
+      meta: { title: "在线工具" },
+    },
+    {
       path: "/notifications",
       component: () => import("../pages/PlannedPage.vue"),
       meta: { title: "系统通知", module: "notifications" },

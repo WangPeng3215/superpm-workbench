@@ -110,6 +110,7 @@ export async function createApp(
     issues: issueService,
     artifacts: artifactService,
     dailyTasks,
+    onlineTools,
   } = container;
   const paths = { databasePath, workspacePath };
   const updates = createUpdateService({
@@ -297,6 +298,7 @@ export async function createApp(
           status: "available",
         },
         { key: "tasks", name: roadmap.tasks, status: "available" },
+        { key: "online-tools", name: "在线工具", status: "available" },
         { key: "updates", name: "版本与更新", status: "available" },
         ...Object.entries(roadmap)
           .filter(([key]) => key !== "issues" && key !== "tasks")
@@ -654,6 +656,36 @@ export async function createApp(
         parseScopedId(request.params.id, "工时记录"),
         request.body,
       ),
+  );
+  // ===== 在线工具箱 =====
+  app.get("/api/online-tools", async () => onlineTools.list());
+  app.get("/api/online-tools/favorites", async () => onlineTools.favorites());
+  app.post("/api/online-tools", async (request, reply) =>
+    reply.status(201).send(onlineTools.create(request.body)),
+  );
+  // 静态路径先于 /:id 注册，避免排序路由被当作工具 ID
+  app.patch("/api/online-tools/order", async (request) =>
+    onlineTools.reorder(request.body),
+  );
+  app.get<{ Params: { id: string } }>(
+    "/api/online-tools/:id",
+    async (request) =>
+      onlineTools.get(parseScopedId(request.params.id, "在线工具")),
+  );
+  app.patch<{ Params: { id: string } }>(
+    "/api/online-tools/:id",
+    async (request) =>
+      onlineTools.update(
+        parseScopedId(request.params.id, "在线工具"),
+        request.body,
+      ),
+  );
+  app.delete<{ Params: { id: string } }>(
+    "/api/online-tools/:id",
+    async (request, reply) => {
+      onlineTools.remove(parseScopedId(request.params.id, "在线工具"));
+      return reply.status(204).send();
+    },
   );
   const webRoot = join(projectRoot, "apps", "web", "dist");
   // legacy：阶段工作区 JSON 接口，Web 已不再调用；进度以需求字段、阶段历史与问题/产出物统计为准。
