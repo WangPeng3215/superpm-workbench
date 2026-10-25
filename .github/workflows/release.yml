@@ -10,6 +10,9 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # 需要标签注对象才能把注记首行写进更新清单说明
+          fetch-tags: true
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
