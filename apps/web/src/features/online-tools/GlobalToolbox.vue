@@ -197,6 +197,18 @@ let dragOrigin: {
 let moved = false;
 let ignoreClick = false;
 
+function startDragListeners() {
+  window.addEventListener("pointermove", onFabPointerMove, true);
+  window.addEventListener("pointerup", onFabPointerUp, true);
+  window.addEventListener("pointercancel", onFabPointerUp, true);
+}
+
+function stopDragListeners() {
+  window.removeEventListener("pointermove", onFabPointerMove, true);
+  window.removeEventListener("pointerup", onFabPointerUp, true);
+  window.removeEventListener("pointercancel", onFabPointerUp, true);
+}
+
 function onFabPointerDown(event: PointerEvent) {
   if (event.button !== 0) return;
   dragPointer = event.pointerId;
@@ -207,7 +219,12 @@ function onFabPointerDown(event: PointerEvent) {
     y: position.value.y,
   };
   moved = false;
-  (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+  startDragListeners();
+  try {
+    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+  } catch {
+    // 指针捕获不可用时由 window 监听兜底，不影响拖动与位置保存
+  }
 }
 
 function onFabPointerMove(event: PointerEvent) {
@@ -229,9 +246,14 @@ function onFabPointerMove(event: PointerEvent) {
 
 function onFabPointerUp(event: PointerEvent) {
   if (dragPointer !== event.pointerId) return;
-  const target = event.currentTarget as HTMLElement;
-  if (target.hasPointerCapture(event.pointerId))
-    target.releasePointerCapture(event.pointerId);
+  stopDragListeners();
+  const target = buttonRef.value;
+  try {
+    if (target?.hasPointerCapture(event.pointerId))
+      target.releasePointerCapture(event.pointerId);
+  } catch {
+    // 捕获已随指针释放时忽略
+  }
   const dragged = moved;
   dragPointer = null;
   dragOrigin = null;
@@ -291,6 +313,7 @@ onUnmounted(() => {
   window.removeEventListener("resize", onWindowResize);
   document.removeEventListener("keydown", onEscape);
   document.removeEventListener("pointerdown", onOutsidePointer, true);
+  stopDragListeners();
   panelObserver?.disconnect();
 });
 </script>
@@ -309,9 +332,6 @@ onUnmounted(() => {
       aria-controls="toolbox-panel"
       :aria-expanded="open"
       @pointerdown="onFabPointerDown"
-      @pointermove="onFabPointerMove"
-      @pointerup="onFabPointerUp"
-      @pointercancel="onFabPointerUp"
       @click="onFabClick"
       @keydown="onFabKeydown"
     >

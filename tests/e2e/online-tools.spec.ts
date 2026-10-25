@@ -260,10 +260,13 @@ test("快捷悬浮按钮：拖拽、位置持久化与路由关闭", async ({ pa
   const box = await fab.boundingBox();
   expect(box).not.toBeNull();
   if (!box) return;
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await fab.hover();
   await page.mouse.down();
   await page.mouse.move(box.x - 220, box.y - 160, { steps: 12 });
   await page.mouse.up();
+  await expect
+    .poll(async () => (await fab.boundingBox())?.x ?? 9999)
+    .toBeLessThan(1234);
 
   const stored = await page.evaluate(() => {
     const raw = localStorage.getItem("superpm.toolbox.position.v1");
