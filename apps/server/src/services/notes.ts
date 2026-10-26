@@ -2,11 +2,15 @@ import type Database from "better-sqlite3";
 import {
   noteCreateSchema,
   noteListSchema,
+  noteQuerySchema,
+  noteSearchSchema,
   noteUpdateSchema,
   type Note,
   type NoteColor,
   type NoteConvertedTask,
   type NoteConvertResult,
+  type NoteQueryResult,
+  type NoteSummary,
   type NoteType,
 } from "@superpm/shared";
 import { DomainError } from "./requirements.js";
@@ -51,30 +55,47 @@ function taskTitleFallback(title: string, content: string) {
   return firstLine?.slice(0, 200) || "便签任务";
 }
 
-function toNote(row: NoteRow): Note {
-  const convertedTask: NoteConvertedTask | null =
-    row.converted_task_id !== null && row.task_title !== null
-      ? {
-          id: row.converted_task_id,
-          title: row.task_title,
-          planDate: row.task_plan_date ?? "",
-          exists: row.task_deleted_at === null,
-        }
-      : null;
+const NOTE_PREVIEW_CHARS = 120;
+
+function notePreview(content: string): string {
+  const text = content.replace(/\s+/g, " ").trim();
+  return text.length > NOTE_PREVIEW_CHARS
+    ? `${text.slice(0, NOTE_PREVIEW_CHARS)}…`
+    : text;
+}
+
+function convertedTaskOf(row: NoteRow): NoteConvertedTask | null {
+  return row.converted_task_id !== null && row.task_title !== null
+    ? {
+        id: row.converted_task_id,
+        title: row.task_title,
+        planDate: row.task_plan_date ?? "",
+        exists: row.task_deleted_at === null,
+      }
+    : null;
+}
+
+function toNoteSummary(row: NoteRow): NoteSummary {
   return {
     id: row.id,
     title: row.title,
-    content: row.content,
+    preview: notePreview(row.content),
+    contentLength: row.content.length,
     type: row.type,
     color: row.color,
     isPinned: row.is_pinned === 1,
     isArchived: row.is_archived === 1,
     convertedTaskId: row.converted_task_id,
-    convertedTask,
+    convertedTask: convertedTaskOf(row),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     archivedAt: row.archived_at,
   };
+}
+
+function toNote(row: NoteRow): Note {
+  const { preview, contentLength, ...summary } = toNoteSummary(row);
+  return { ...summary, content: row.content };
 }
 
 export class NoteService {
@@ -98,6 +119,76 @@ export class NoteService {
       )
       .all(query.archived ? 1 : 0) as NoteRow[];
     return rows.map(toNote);
+  }
+
+  /** MCP 分页列表：关键词只匹配标题，默认排除归档，返回不含正文的摘要投影。 */
+  query(input: unknown): NoteQueryResult {
+    return this.paginate(noteQuerySchema.parse(input), false);
+  }
+
+  /** MCP 全文检索：关键词同时匹配标题与正文，默认排除归档。 */
+  search(input: unknown): NoteQueryResult {
+    return this.paginate(noteSearchSchema.parse(input), true);
+  }
+
+  private paginate(
+    query: {
+      q: string;
+      type?: NoteType;
+      isPinned?: boolean;
+      isArchived: boolean | "all";
+      page: number;
+      pageSize: number;
+    },
+    searchContent: boolean,
+  ): NoteQueryResult {
+    const clauses: string[] = [];
+    const params: (string | number)[] = [];
+    if (query.q) {
+      const pattern = `%${query.q.replace(/[\\%_]/g, "\\$&")}%`;
+      if (searchContent) {
+        clauses.push(
+          "(n.title LIKE ? ESCAPE '\\' OR n.content LIKE ? ESCAPE '\\')",
+        );
+        params.push(pattern, pattern);
+      } else {
+        clauses.push("n.title LIKE ? ESCAPE '\\'");
+        params.push(pattern);
+      }
+    }
+    if (query.type) {
+      clauses.push("n.type = ?");
+      params.push(query.type);
+    }
+    if (query.isPinned !== undefined) {
+      clauses.push("n.is_pinned = ?");
+      params.push(query.isPinned ? 1 : 0);
+    }
+    if (query.isArchived !== "all") {
+      clauses.push("n.is_archived = ?");
+      params.push(query.isArchived ? 1 : 0);
+    }
+    const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+    const total = (
+      this.db
+        .prepare(`SELECT COUNT(*) AS count FROM notes n ${where}`)
+        .get(...params) as { count: number }
+    ).count;
+    const offset = (query.page - 1) * query.pageSize;
+    const rows = this.db
+      .prepare(
+        `SELECT ${selectColumns} ${fromClause} ${where}
+         ORDER BY n.is_pinned DESC, n.created_at DESC, n.id DESC
+         LIMIT ? OFFSET ?`,
+      )
+      .all(...params, query.pageSize, offset) as NoteRow[];
+    return {
+      items: rows.map(toNoteSummary),
+      total,
+      page: query.page,
+      pageSize: query.pageSize,
+      hasMore: offset + rows.length < total,
+    };
   }
 
   get(id: number): Note {

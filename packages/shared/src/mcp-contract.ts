@@ -1,5 +1,17 @@
 import { z } from "zod";
 import { stages } from "./stages.js";
+import {
+  meetingCreateFields,
+  meetingQuerySchema,
+  meetingSearchSchema,
+  meetingUpdateFields,
+} from "./meetings.js";
+import {
+  noteCreateFields,
+  noteQuerySchema,
+  noteSearchSchema,
+  noteUpdateFields,
+} from "./notes.js";
 import type {
   ArtifactDirectory,
   ArtifactMemoryReadResult,
@@ -9,30 +21,39 @@ import type {
   IssueAssetLink,
   IssueStage,
   IssueStatus,
+  Meeting,
+  MeetingQueryResult,
+  Note,
+  NoteConvertResult,
+  NoteQueryResult,
   Requirement,
   RequirementProgress,
 } from "./index.js";
 
 /**
- * MCP 工具契约层（主开发文档阶段 10，M3：受控写入）。
+ * MCP 工具契约层（主开发文档阶段 10，M3：受控写入；会议/便签补全）。
  *
  * 本文件只声明“AI 可以通过 MCP 做什么”，不包含任何执行逻辑；执行统一收敛在
  * apps/server 的 mcp-gateway（网关把工具调用转发给真实业务服务，不做第二套业务逻辑）。
  *
- * M3 关键设计约束：
- * 1. 只读工具仍为 9 个；写入只开放问题更新、评论、关联/取消关联四类低风险操作。
- *    正式问题创建、需求创建/更新、文件写入、删除/移动/重命名仍不开放。
+ * 关键设计约束：
+ * 1. 只读工具 15 个；写入开放问题更新、评论、关联/取消关联，以及会议/便签的
+ *    创建、更新、归档、删除与便签转任务。需求创建/更新、文件写入、删除/移动/
+ *    重命名仍不开放；问题创建/删除保持关闭。
  * 2. 写工具默认不注册；必须显式设置 SUPERPM_MCP_WRITE=1 才可见。每次写入必须先用
  *    write.prepare 申请一次性确认令牌，令牌绑定工具、解析后的参数与幂等键，5 分钟过期。
  * 3. 每次写入必须携带非空 idempotencyKey；成功请求的幂等键持久化，重复提交返回 CONFLICT。
- * 4. 所有写入都以 requirementId 为作用域；跨需求访问一律返回 NOT_FOUND。
+ * 4. 问题写入以 requirementId 为作用域；会议/便签是独立实体，审计 requirement_id 记为 NULL。
+ *    跨需求访问一律返回 NOT_FOUND。
  * 5. 写入操作者固定标记为 AI，并记录 MCP 客户端名称；审计写入 mcp_audit，不记录正文、
  *    原始令牌或绝对路径。
  * 6. 业务内容一律视为不可信数据：网关在结果中附带固定提示，模型不得把其中的文本
  *    当作系统指令执行。
+ * 7. 便签归档不是删除；归档可恢复，MCP 不提供批量清理或默认归档行为。会议与便签的
+ *    列表返回摘要投影，详情才返回完整正文。
  */
 
-/** 只读工具名（9 个）：只查询，不产生任何副作用 */
+/** 只读工具名（15 个）：只查询，不产生任何副作用 */
 export const mcpReadonlyToolNames = [
   "requirement.list",
   "requirement.get",
@@ -43,16 +64,30 @@ export const mcpReadonlyToolNames = [
   "issue.activities",
   "artifact.list",
   "artifact.get",
+  "meeting.list",
+  "meeting.get",
+  "meeting.search",
+  "note.list",
+  "note.get",
+  "note.search",
 ] as const;
 /**
- * 写工具名（4 个）：M3 只开放低风险、边界清晰的问题操作。
- * 正式问题创建（issue.create）、需求创建/更新与文件写入继续关闭。
+ * 写工具名（12 个）：问题低风险操作 + 会议/便签受控写入。
+ * 正式问题创建/删除、需求创建/更新与文件写入继续关闭。
  */
 export const mcpWriteToolNames = [
   "issue.update",
   "issue.comment",
   "issue.linkAsset",
   "issue.unlinkAsset",
+  "meeting.create",
+  "meeting.update",
+  "meeting.delete",
+  "note.create",
+  "note.update",
+  "note.archive",
+  "note.delete",
+  "note.convertToTask",
 ] as const;
 export const mcpMutatingToolNames = mcpWriteToolNames;
 
@@ -101,6 +136,8 @@ export interface McpToolContract {
   /** 该工具可能抛出的 DomainError code（必须是 MCP_ERROR_CODES 的子集） */
   allowedErrors: McpErrorCode[];
   idempotency: McpIdempotency;
+  /** 物理删除等不可恢复操作标记为 destructive，供 MCP 客户端提示 */
+  destructiveHint?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -237,6 +274,38 @@ export interface McpArtifactDirectoryData extends ArtifactDirectory {
 export type McpArtifactDetailData = ArtifactReadResult;
 export type McpMemoryData = ArtifactMemoryReadResult;
 
+export type McpMeetingListData = MeetingQueryResult;
+export type McpMeetingDetailData = Meeting;
+export type McpNoteListData = NoteQueryResult;
+export type McpNoteDetailData = Note;
+
+export interface McpMeetingWriteData {
+  meeting: Meeting;
+  changedFields: string[];
+}
+
+export interface McpMeetingDeleteData {
+  meetingId: number;
+  deleted: true;
+}
+
+export interface McpNoteWriteData {
+  note: Note;
+  changedFields: string[];
+}
+
+export interface McpNoteArchiveData {
+  note: Note;
+  archived: boolean;
+}
+
+export interface McpNoteDeleteData {
+  noteId: number;
+  deleted: true;
+}
+
+export type McpNoteConvertData = NoteConvertResult;
+
 // ---------------------------------------------------------------------------
 // 入参 schema（与业务服务签名一一镜像）
 // ---------------------------------------------------------------------------
@@ -369,6 +438,21 @@ export const mcpArtifactGetInput = z
   .strict();
 export type McpArtifactGetInput = z.output<typeof mcpArtifactGetInput>;
 
+// 会议/便签只读输入：列表与检索均分页，列表只返回摘要投影，详情返回完整正文。
+export const mcpMeetingListInput = meetingQuerySchema;
+export type McpMeetingListInput = z.output<typeof mcpMeetingListInput>;
+export const mcpMeetingSearchInput = meetingSearchSchema;
+export type McpMeetingSearchInput = z.output<typeof mcpMeetingSearchInput>;
+export const mcpMeetingGetInput = z.object({ id }).strict();
+export type McpMeetingGetInput = z.output<typeof mcpMeetingGetInput>;
+
+export const mcpNoteListInput = noteQuerySchema;
+export type McpNoteListInput = z.output<typeof mcpNoteListInput>;
+export const mcpNoteSearchInput = noteSearchSchema;
+export type McpNoteSearchInput = z.output<typeof mcpNoteSearchInput>;
+export const mcpNoteGetInput = z.object({ id }).strict();
+export type McpNoteGetInput = z.output<typeof mcpNoteGetInput>;
+
 // ---------------------------------------------------------------------------
 // M3 写入入参：payload 先经 write.prepare 固化，确认令牌绑定参数哈希
 // ---------------------------------------------------------------------------
@@ -473,12 +557,117 @@ export type McpIssueUnlinkAssetInput = z.output<
   typeof mcpIssueUnlinkAssetInput
 >;
 
+// ---------------------------------------------------------------------------
+// 会议/便签写入入参：同样先经 write.prepare 固化，再携带令牌执行
+// ---------------------------------------------------------------------------
+
+/** 会议创建：标题、类型与会议时间必填；正文为 Tiptap 富文本 HTML。 */
+export const mcpMeetingCreatePayload = z.object(meetingCreateFields).strict();
+export type McpMeetingCreatePayload = z.output<typeof mcpMeetingCreatePayload>;
+export const mcpMeetingCreateInput = z
+  .object({ ...meetingCreateFields, ...writeEnvelope })
+  .strict();
+export type McpMeetingCreateInput = z.output<typeof mcpMeetingCreateInput>;
+
+const meetingUpdateMcpFields = {
+  meetingId: id,
+  ...meetingUpdateFields,
+};
+function hasAnyMeetingUpdateField(value: Record<string, unknown>) {
+  return ["title", "type", "meetingTime", "requirementIds", "contentHtml"].some(
+    (key) => value[key] !== undefined,
+  );
+}
+export const mcpMeetingUpdatePayload = z
+  .object(meetingUpdateMcpFields)
+  .strict()
+  .refine(hasAnyMeetingUpdateField, "请提交需要更新的字段");
+export type McpMeetingUpdatePayload = z.output<typeof mcpMeetingUpdatePayload>;
+export const mcpMeetingUpdateInput = z
+  .object({ ...meetingUpdateMcpFields, ...writeEnvelope })
+  .strict()
+  .refine(hasAnyMeetingUpdateField, "请提交需要更新的字段");
+export type McpMeetingUpdateInput = z.output<typeof mcpMeetingUpdateInput>;
+
+const meetingDeleteFields = { meetingId: id };
+export const mcpMeetingDeletePayload = z.object(meetingDeleteFields).strict();
+export type McpMeetingDeletePayload = z.output<typeof mcpMeetingDeletePayload>;
+export const mcpMeetingDeleteInput = z
+  .object({ ...meetingDeleteFields, ...writeEnvelope })
+  .strict();
+export type McpMeetingDeleteInput = z.output<typeof mcpMeetingDeleteInput>;
+
+/** 便签创建：字段均可省略，省略时沿用界面默认值。 */
+export const mcpNoteCreatePayload = z.object(noteCreateFields).strict();
+export type McpNoteCreatePayload = z.output<typeof mcpNoteCreatePayload>;
+export const mcpNoteCreateInput = z
+  .object({ ...noteCreateFields, ...writeEnvelope })
+  .strict();
+export type McpNoteCreateInput = z.output<typeof mcpNoteCreateInput>;
+
+/** 便签更新不包含归档字段：归档/恢复统一走 note.archive。 */
+const noteUpdateMcpFields = {
+  noteId: id,
+  title: noteUpdateFields.title,
+  content: noteUpdateFields.content,
+  type: noteUpdateFields.type,
+  color: noteUpdateFields.color,
+  isPinned: noteUpdateFields.isPinned,
+};
+function hasAnyNoteUpdateField(value: Record<string, unknown>) {
+  return ["title", "content", "type", "color", "isPinned"].some(
+    (key) => value[key] !== undefined,
+  );
+}
+export const mcpNoteUpdatePayload = z
+  .object(noteUpdateMcpFields)
+  .strict()
+  .refine(hasAnyNoteUpdateField, "请提交需要更新的字段");
+export type McpNoteUpdatePayload = z.output<typeof mcpNoteUpdatePayload>;
+export const mcpNoteUpdateInput = z
+  .object({ ...noteUpdateMcpFields, ...writeEnvelope })
+  .strict()
+  .refine(hasAnyNoteUpdateField, "请提交需要更新的字段");
+export type McpNoteUpdateInput = z.output<typeof mcpNoteUpdateInput>;
+
+const noteArchiveFields = { noteId: id, archived: z.boolean() };
+export const mcpNoteArchivePayload = z.object(noteArchiveFields).strict();
+export type McpNoteArchivePayload = z.output<typeof mcpNoteArchivePayload>;
+export const mcpNoteArchiveInput = z
+  .object({ ...noteArchiveFields, ...writeEnvelope })
+  .strict();
+export type McpNoteArchiveInput = z.output<typeof mcpNoteArchiveInput>;
+
+const noteDeleteFields = { noteId: id };
+export const mcpNoteDeletePayload = z.object(noteDeleteFields).strict();
+export type McpNoteDeletePayload = z.output<typeof mcpNoteDeletePayload>;
+export const mcpNoteDeleteInput = z
+  .object({ ...noteDeleteFields, ...writeEnvelope })
+  .strict();
+export type McpNoteDeleteInput = z.output<typeof mcpNoteDeleteInput>;
+
+const noteConvertFields = { noteId: id };
+export const mcpNoteConvertPayload = z.object(noteConvertFields).strict();
+export type McpNoteConvertPayload = z.output<typeof mcpNoteConvertPayload>;
+export const mcpNoteConvertInput = z
+  .object({ ...noteConvertFields, ...writeEnvelope })
+  .strict();
+export type McpNoteConvertInput = z.output<typeof mcpNoteConvertInput>;
+
 /** 按工具名选择 prepare 阶段使用的 payload schema */
 export const mcpWritePayloadSchemas = {
   "issue.update": mcpIssueUpdatePayload,
   "issue.comment": mcpIssueCommentPayload,
   "issue.linkAsset": mcpIssueLinkAssetPayload,
   "issue.unlinkAsset": mcpIssueUnlinkAssetPayload,
+  "meeting.create": mcpMeetingCreatePayload,
+  "meeting.update": mcpMeetingUpdatePayload,
+  "meeting.delete": mcpMeetingDeletePayload,
+  "note.create": mcpNoteCreatePayload,
+  "note.update": mcpNoteUpdatePayload,
+  "note.archive": mcpNoteArchivePayload,
+  "note.delete": mcpNoteDeletePayload,
+  "note.convertToTask": mcpNoteConvertPayload,
 } as const;
 
 /** write.prepare 入参：payload 以原始对象提交，由网关按工具 schema 校验 */
@@ -495,7 +684,7 @@ export type McpWritePrepareInput = z.output<typeof mcpWritePrepareInput>;
 // 契约清单
 // ---------------------------------------------------------------------------
 
-/** 9 个只读 MCP 工具的完整契约，网关按此一一建立执行器 */
+/** 15 个只读 + 12 个写工具的完整契约，网关按此一一建立执行器 */
 export const mcpToolContracts: McpToolContract[] = [
   {
     name: "requirement.list",
@@ -579,6 +768,60 @@ export const mcpToolContracts: McpToolContract[] = [
     idempotency: "none",
   },
   {
+    name: "meeting.list",
+    description:
+      "分页查询会议记录摘要（标题、类型、会议时间、正文纯文本摘要、关联需求），支持 q（仅匹配标题）、type、startTime/endTime（ISO 8601）筛选；page 从 1 开始，pageSize 默认 20、最大 100。列表不返回完整正文，完整内容请调用 meeting.get。",
+    kind: "readonly",
+    input: mcpMeetingListInput,
+    allowedErrors: ["VALIDATION_ERROR"],
+    idempotency: "none",
+  },
+  {
+    name: "meeting.get",
+    description:
+      "按 ID 读取会议详情：完整富文本正文 contentHtml、类型、会议时间与关联需求。会议正文存储为 Tiptap 富文本 HTML（不是 Markdown），不做截断。",
+    kind: "readonly",
+    input: mcpMeetingGetInput,
+    allowedErrors: ["NOT_FOUND", "VALIDATION_ERROR"],
+    idempotency: "none",
+  },
+  {
+    name: "meeting.search",
+    description:
+      "按关键词检索会议标题与正文（HTML 原文），可叠加 type 与 startTime/endTime 时间范围筛选并分页。返回摘要投影，不返回完整正文；需要正文时再用 meeting.get 读取。",
+    kind: "readonly",
+    input: mcpMeetingSearchInput,
+    allowedErrors: ["VALIDATION_ERROR"],
+    idempotency: "none",
+  },
+  {
+    name: "note.list",
+    description:
+      '分页查询便签摘要（标题、120 字预览、正文长度、类型、颜色、置顶/归档状态、转任务状态），默认排除已归档；isArchived=true 只查归档，isArchived="all" 查询全部。列表不返回完整正文，完整内容请调用 note.get。',
+    kind: "readonly",
+    input: mcpNoteListInput,
+    allowedErrors: ["VALIDATION_ERROR"],
+    idempotency: "none",
+  },
+  {
+    name: "note.get",
+    description:
+      "按 ID 读取便签详情，包含完整纯文本正文、颜色、置顶/归档状态与已转换的每日任务信息。",
+    kind: "readonly",
+    input: mcpNoteGetInput,
+    allowedErrors: ["NOT_FOUND", "VALIDATION_ERROR"],
+    idempotency: "none",
+  },
+  {
+    name: "note.search",
+    description:
+      '按关键词检索便签标题与正文，默认排除已归档；可用 isArchived=true 只查归档、isArchived="all" 查询全部，并支持 type/isPinned 筛选与分页。返回摘要投影，完整正文请调用 note.get。',
+    kind: "readonly",
+    input: mcpNoteSearchInput,
+    allowedErrors: ["VALIDATION_ERROR"],
+    idempotency: "none",
+  },
+  {
     name: "issue.update",
     description:
       "受控更新问题字段（标题、描述、阶段、类型、状态、解决方案）。必须先调用 write.prepare 获取确认令牌，并携带唯一 idempotencyKey。不允许一次调用同时提交 solution 并置为 resolved；将问题置为 resolved 前必须已有非空解决方案。",
@@ -612,6 +855,80 @@ export const mcpToolContracts: McpToolContract[] = [
     kind: "mutating",
     input: mcpIssueUnlinkAssetInput,
     allowedErrors: ["NOT_FOUND", "VALIDATION_ERROR", "FORBIDDEN"],
+    idempotency: "key-required",
+  },
+  {
+    name: "meeting.create",
+    description:
+      "创建会议记录。必须先调用 write.prepare 获取确认令牌，并携带唯一 idempotencyKey。title、type、meetingTime 必填；contentHtml 为 Tiptap 富文本 HTML；requirementIds 只能关联未删除的需求，重复 ID 自动去重。",
+    kind: "mutating",
+    input: mcpMeetingCreateInput,
+    allowedErrors: ["VALIDATION_ERROR", "FORBIDDEN", "CONFLICT"],
+    idempotency: "key-required",
+  },
+  {
+    name: "meeting.update",
+    description:
+      "受控更新会议记录。必须先调用 write.prepare 获取确认令牌，并携带唯一 idempotencyKey。只修改显式提供的字段，未提供的字段保持不变；requirementIds 传入时整体替换关联，传空数组表示清空关联。",
+    kind: "mutating",
+    input: mcpMeetingUpdateInput,
+    allowedErrors: ["NOT_FOUND", "VALIDATION_ERROR", "FORBIDDEN", "CONFLICT"],
+    idempotency: "key-required",
+  },
+  {
+    name: "meeting.delete",
+    description:
+      "物理删除会议记录及其需求关联，删除后不可恢复。必须先调用 write.prepare 获取确认令牌，并携带唯一 idempotencyKey；本操作具有破坏性，仅在用户明确要求时调用。",
+    kind: "mutating",
+    input: mcpMeetingDeleteInput,
+    allowedErrors: ["NOT_FOUND", "VALIDATION_ERROR", "FORBIDDEN", "CONFLICT"],
+    idempotency: "key-required",
+    destructiveHint: true,
+  },
+  {
+    name: "note.create",
+    description:
+      "创建便签。必须先调用 write.prepare 获取确认令牌，并携带唯一 idempotencyKey。title/content/type/color/isPinned 均可省略，省略时使用默认值（灵感、暖黄、不置顶）。",
+    kind: "mutating",
+    input: mcpNoteCreateInput,
+    allowedErrors: ["VALIDATION_ERROR", "FORBIDDEN", "CONFLICT"],
+    idempotency: "key-required",
+  },
+  {
+    name: "note.update",
+    description:
+      "受控更新便签。必须先调用 write.prepare 获取确认令牌，并携带唯一 idempotencyKey。只修改显式提供的字段，未提供的字段保持不变；title/content 传空字符串表示主动清空。归档或恢复请使用 note.archive。",
+    kind: "mutating",
+    input: mcpNoteUpdateInput,
+    allowedErrors: ["NOT_FOUND", "VALIDATION_ERROR", "FORBIDDEN", "CONFLICT"],
+    idempotency: "key-required",
+  },
+  {
+    name: "note.archive",
+    description:
+      "归档或恢复便签：archived=true 归档，archived=false 恢复。必须先调用 write.prepare 获取确认令牌，并携带唯一 idempotencyKey。归档不是删除，数据完整保留且可通过 note.list/note.search 的归档筛选查询；不得把归档当作默认清理手段。",
+    kind: "mutating",
+    input: mcpNoteArchiveInput,
+    allowedErrors: ["NOT_FOUND", "VALIDATION_ERROR", "FORBIDDEN", "CONFLICT"],
+    idempotency: "key-required",
+  },
+  {
+    name: "note.delete",
+    description:
+      "物理删除便签，删除后不可恢复；若便签已转换为每日任务，任务本身不会被删除。必须先调用 write.prepare 获取确认令牌，并携带唯一 idempotencyKey；本操作具有破坏性，仅在用户明确要求时调用。",
+    kind: "mutating",
+    input: mcpNoteDeleteInput,
+    allowedErrors: ["NOT_FOUND", "VALIDATION_ERROR", "FORBIDDEN", "CONFLICT"],
+    idempotency: "key-required",
+    destructiveHint: true,
+  },
+  {
+    name: "note.convertToTask",
+    description:
+      "把便签转换为每日任务，复用现有转换服务：标题为空时取正文首行，正文前 4000 字作为任务描述，计划日期为今天，预计 30 分钟。必须先调用 write.prepare 获取确认令牌，并携带唯一 idempotencyKey；重复调用且目标任务仍存在时返回原任务且 created=false，不重复创建；转换失败不会标记便签。",
+    kind: "mutating",
+    input: mcpNoteConvertInput,
+    allowedErrors: ["NOT_FOUND", "VALIDATION_ERROR", "FORBIDDEN", "CONFLICT"],
     idempotency: "key-required",
   },
 ];

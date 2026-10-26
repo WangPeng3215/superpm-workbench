@@ -12,7 +12,8 @@ export interface McpWriteServiceOptions {
 }
 
 export interface McpWriteTarget {
-  requirementId: number;
+  /** 问题写入关联的需求；会议/便签为独立实体，记为 null */
+  requirementId: number | null;
   targetType: string;
   targetId: string;
 }
@@ -139,7 +140,8 @@ export class McpWriteService {
           .run(
             sha256(token),
             request.tool,
-            request.target.requirementId,
+            // 确认表 requirement_id 为历史非空列：独立实体写入用哨兵 0，审计表仍记 NULL
+            request.target.requirementId ?? 0,
             request.target.targetType,
             request.target.targetId,
             hash,
@@ -217,7 +219,7 @@ export class McpWriteService {
     if (
       row.tool !== request.tool ||
       row.params_hash !== hash ||
-      row.requirement_id !== request.target.requirementId ||
+      row.requirement_id !== (request.target.requirementId ?? 0) ||
       row.target_type !== request.target.targetType ||
       row.target_id !== request.target.targetId
     )

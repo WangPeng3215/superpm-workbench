@@ -118,7 +118,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
         inputSchema: contract.input,
         annotations: {
           readOnlyHint: contract.kind === "readonly",
-          destructiveHint: false,
+          destructiveHint: contract.destructiveHint ?? false,
           idempotentHint: contract.kind === "readonly",
           openWorldHint: false,
         },

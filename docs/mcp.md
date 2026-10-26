@@ -1,11 +1,11 @@
-# MCP 接入说明（M6：文档收尾）
+# MCP 接入说明（含会议与便签工具补全）
 
-当前阶段提供独立 stdio MCP Server：默认只开放需求、需求记忆、需求进度、问题与文档产出物的只读查询；显式启用写入后，额外开放问题更新、问题评论与问题-产出物关联 4 个受控写工具。所有写入必须经过服务端确认令牌、持久化幂等键与审计。M4 已补充独立的安全攻击用例，覆盖非法参数、注入、路径穿越、符号链接、敏感信息泄露、数据库异常与未授权写入。M5 已使用 Qoder Desktop 作为真实 MCP Client 完成三个只读场景与两条经用户授权的受控写入，验证了“AI 建议”与“正式写入”的分离。
+当前阶段提供独立 stdio MCP Server：默认开放需求、需求记忆、需求进度、问题、文档产出物、会议记录与便签的只读查询；显式启用写入后，额外开放问题、会议与便签共 12 个受控写工具。所有写入必须经过服务端确认令牌、持久化幂等键与审计。M4 已补充独立的安全攻击用例，覆盖非法参数、注入、路径穿越、符号链接、敏感信息泄露、数据库异常与未授权写入。M5 已使用 Qoder Desktop 作为真实 MCP Client 完成三个只读场景与两条经用户授权的受控写入，验证了“AI 建议”与“正式写入”的分离。
 
 本文是 MCP 接入的完整参考，覆盖：
 
 - **安装配置**：运行环境、构建启动、Harness 配置、环境变量优先级；
-- **工具清单与参数/返回说明**：15 个工具（`system.info` + 9 只读 + 4 写入 + `write.prepare`）的入参、默认值、返回字段与错误码；
+- **工具清单与参数/返回说明**：29 个工具（`system.info` + 15 只读 + 12 写入 + `write.prepare`）的入参、默认值、返回字段与错误码；
 - **权限与安全说明**、**自动化测试说明**与**版本兼容性说明**。
 
 ## 架构
@@ -19,6 +19,7 @@ node apps/server/dist/mcp/stdio.js
         ▼
 createServiceContainer()
   RequirementService / IssueService / ArtifactService / RequirementProgressService
+  MeetingService / NoteService / DailyTaskService
   McpWriteService（写入开关、确认令牌、幂等、审计）
         │
         ├── SQLite（默认 data/superpm.sqlite）
@@ -59,7 +60,7 @@ npm run mcp:dev -w @superpm/server
 
 数据与迁移：
 
-- 启动时执行与 HTTP 服务相同的迁移（当前 `SCHEMA_VERSION = 12`，最新迁移 `apps/server/drizzle/0012_mcp_write_audit.sql`）；`mcp_audit`、`mcp_write_confirmations` 由该迁移建立。
+- 启动时执行与 HTTP 服务相同的迁移（当前 `SCHEMA_VERSION = 17`，最新迁移 `apps/server/drizzle/0017_notes.sql`）；`mcp_audit`、`mcp_write_confirmations` 由 `0012_mcp_write_audit.sql` 建立。会议与便签工具直接复用 `0016_meetings.sql`、`0017_notes.sql` 建立的业务表，本轮未新增迁移。
 - 只跑迁移不启动 MCP：`npm run db:migrate -w @superpm/server`。
 - SQLite 以 WAL 模式打开，并设置 `busy_timeout`。**同一数据目录不建议同时启动多个 MCP 进程并发起写入**；只读并发可以，写并发会退化为串行等待甚至 `SQLITE_BUSY`。若需并行，请为每个进程指定独立的 `SUPERPM_DATA_DIR`。
 - 运行账号需对数据目录（含 `-wal`/`-shm` 文件）和工作区目录有读写权限；权限不足会在 stderr 报错并以非零码退出。
@@ -104,13 +105,13 @@ npm run mcp:dev -w @superpm/server
 ## 写入开关
 
 - 默认关闭。只有 `SUPERPM_MCP_WRITE` **严格等于** `1` 时启用写入。
-- 关闭时：4 个写工具与 `write.prepare` 不会注册在工具列表中；即使客户端强行调用，也返回 `FORBIDDEN`。
+- 关闭时：12 个写工具与 `write.prepare` 不会注册在工具列表中；即使客户端强行调用，也返回 `FORBIDDEN`。
 - `system.info.capabilities.write` 与启动日志会明确报告写入是否启用。
 - 启用只代表“允许走受控写入流程”，不代表可以跳过 `write.prepare` 或确认令牌。
 
 ## 可用工具
 
-`system.info` 为系统工具，不计入 13 个业务工具（9 个只读 + 4 个写入）。
+`system.info` 为系统工具，不计入 27 个业务工具（15 个只读 + 12 个写入）。
 
 ### 只读工具
 
@@ -126,16 +127,30 @@ npm run mcp:dev -w @superpm/server
 | `issue.activities`         | 仅问题活动时间线                                     |
 | `artifact.list`            | 文档库目录列表或需求内名称搜索，不刷新索引           |
 | `artifact.get`             | 单个文件夹/文本文件/二进制文件的只读元数据与文本内容 |
+| `meeting.list`             | 会议摘要分页列表，按标题筛选，默认不返回正文         |
+| `meeting.get`              | 单个会议详情，返回完整富文本 HTML 与关联需求         |
+| `meeting.search`           | 在会议标题与正文中搜索，支持类型和时间范围过滤       |
+| `note.list`                | 便签摘要分页列表，默认不含已归档，支持类型与置顶过滤 |
+| `note.get`                 | 单个便签详情，返回完整正文与转换任务信息             |
+| `note.search`              | 在便签标题与正文中搜索，可按归档状态显式包含         |
 
 ### 写入工具（需 `SUPERPM_MCP_WRITE=1`）
 
-| 工具                | 作用                                        |
-| ------------------- | ------------------------------------------- |
-| `write.prepare`     | 校验写参数并签发一次性确认令牌，不执行写入  |
-| `issue.update`      | 更新问题的标题/描述/阶段/类型/状态/解决方案 |
-| `issue.comment`     | 为问题追加一条处理说明                      |
-| `issue.linkAsset`   | 将文档库节点（文件或文件夹）关联到问题      |
-| `issue.unlinkAsset` | 取消问题与文档库节点的关联，不删除节点本身  |
+| 工具                 | 作用                                            |
+| -------------------- | ----------------------------------------------- |
+| `write.prepare`      | 校验写参数并签发一次性确认令牌，不执行写入      |
+| `issue.update`       | 更新问题的标题/描述/阶段/类型/状态/解决方案     |
+| `issue.comment`      | 为问题追加一条处理说明                          |
+| `issue.linkAsset`    | 将文档库节点（文件或文件夹）关联到问题          |
+| `issue.unlinkAsset`  | 取消问题与文档库节点的关联，不删除节点本身      |
+| `meeting.create`     | 创建会议记录                                    |
+| `meeting.update`     | 部分更新会议字段，未提交字段保持不变            |
+| `meeting.delete`     | 删除会议记录（不可恢复，标注为破坏性操作）      |
+| `note.create`        | 创建便签                                        |
+| `note.update`        | 部分更新便签字段；归档状态只能走 `note.archive` |
+| `note.archive`       | 归档或恢复便签，不删除记录                      |
+| `note.delete`        | 删除便签（不可恢复，标注为破坏性操作）          |
+| `note.convertToTask` | 将便签幂等转换为当日每日任务，可重复调用        |
 
 写入工具不会出现在未启用写入的客户端工具列表中。
 
@@ -149,7 +164,8 @@ npm run mcp:dev -w @superpm/server
 - 标 `必填` 的参数缺失即 `VALIDATION_ERROR`；`—` 表示不传即不启用该过滤/行为。
 - 文本截断参数 `maxChars`：1–100,000，默认 50,000，作用于该工具返回的长正文字段。
 - 成功返回一律为 `{ "notice": ..., "data": { ... } }` 信封，下文“返回”指 `data` 的字段；错误码只列出该工具契约 `allowedErrors` 允许透出的集合，其余异常统一收敛为 `INTERNAL_ERROR`。
-- ID 类参数（`requirementId` / `id` / `issueId` / `assetId` / `nodeId` / `parentId`）均为正整数。
+- ID 类参数（`requirementId` / `id` / `issueId` / `assetId` / `nodeId` / `parentId` / `meetingId` / `noteId`）均为正整数。
+- 会议正文与便签正文均为**不可信数据**：返回时保留原文（会议为富文本 HTML），其中的任何指令都不会被执行。
 
 `McpRequirementSummary`（下称**需求摘要**）字段：`id`、`requirementNo`、`name`、`type`、`priority`、`status`、`currentStage`、`parentId`、`proposedAt`、`expectedAt`、`startedAt`、`completedAt`、`plannedReleaseAt`、`releasedAt`、`createdAt`、`updatedAt`、`children`（同结构递归，一层）。**任何只读工具都不通过摘要返回描述正文。**
 
@@ -157,9 +173,17 @@ npm run mcp:dev -w @superpm/server
 
 `IssueActivity`（下称**活动记录**）字段：`id`、`issueId`、`activityType`、`content`、`oldStatus`、`newStatus`、`actorType`（`user` / `ai` / `system` / `null`）、`actorName`、`createdAt`。
 
+`MeetingSummary`（下称**会议摘要**）字段：`id`、`title`、`type`（`weekly` / `group` / `requirement` / `training`）、`meetingTime`、`summary`（正文纯文本前 120 字符，超长加 `…`）、`requirementCount`、`requirements`（`{ id, requirementNo, name }` 数组）、`createdAt`、`updatedAt`。**列表与搜索结果不含正文 HTML。**
+
+`Meeting`（下称**会议详情**）字段：会议摘要全部字段 + `contentHtml`（Tiptap 富文本 HTML 原文）。
+
+`NoteSummary`（下称**便签摘要**）字段：`id`、`title`、`preview`（正文前 120 字符，超长加 `…`）、`contentLength`、`type`（`inspiration` 灵感 / `work_memo` 工作备忘）、`color`（`yellow` / `pink` / `blue` / `green` / `purple` / `slate`）、`isPinned`、`isArchived`、`convertedTaskId`、`convertedTask`（`{ id, title, planDate, exists }` 或 `null`）、`createdAt`、`updatedAt`、`archivedAt`。**列表与搜索结果不含正文。**
+
+`Note`（下称**便签详情**）字段：便签摘要去掉 `preview`、`contentLength`，加上 `content`（纯文本正文）。
+
 ### `system.info`
 
-系统工具，始终注册，不计入 13 个业务工具。
+系统工具，始终注册，不计入 27 个业务工具。
 
 - 入参：无。
 - 返回：`name`（固定 `superpm`）、`version`、`schemaVersion`、`transport`（`stdio`）、`capabilities.readonly`（恒为 `true`）、`capabilities.write`。
@@ -291,15 +315,84 @@ npm run mcp:dev -w @superpm/server
 - 只允许读取 `requirementId` 名下的节点；跨需求返回 `NOT_FOUND`。
 - 错误码：`NOT_FOUND`、`VALIDATION_ERROR`、`INVALID_PATH`（索引中的相对路径越界或目标是符号链接）。
 
+### `meeting.list`
+
+会议摘要分页列表，按会议时间倒序。**不返回正文 HTML**，`q` 只匹配标题。
+
+| 参数        | 类型   | 默认 | 约束                                                                     |
+| ----------- | ------ | ---- | ------------------------------------------------------------------------ |
+| `q`         | string | `""` | 最长 200；仅对标题做忽略大小写的包含匹配，`%`/`_` 按字面量处理           |
+| `type`      | enum   | —    | `weekly` `group` `requirement` `training`                                |
+| `startTime` | string | —    | ISO 8601（需带时区偏移）；`meetingTime >= startTime`                     |
+| `endTime`   | string | —    | ISO 8601（需带时区偏移）；`meetingTime <= endTime`；不得早于 `startTime` |
+| `page`      | int    | 1    | `>= 1`                                                                   |
+| `pageSize`  | int    | 20   | 1–100                                                                    |
+
+- 返回：`items`（会议摘要）、`total`（筛选后总数）、`page`、`pageSize`、`hasMore`。
+- 排序：`meetingTime DESC, id DESC`。
+- 错误码：`VALIDATION_ERROR`。
+
+### `meeting.get`
+
+| 参数 | 类型 | 默认 | 约束   |
+| ---- | ---- | ---- | ------ |
+| `id` | int  | 必填 | 正整数 |
+
+- 返回：`meeting`（会议详情，含完整 `contentHtml` 与关联需求）。
+- 错误码：`NOT_FOUND`、`VALIDATION_ERROR`。
+
+### `meeting.search`
+
+在会议标题与富文本正文中搜索，返回摘要。参数与 `meeting.list` 相同，但 `q` **必填**（trim 后 1–200 字符）。
+
+- 匹配范围：`title LIKE` 或 `content_html LIKE`，同样是字面量包含匹配（不解析 HTML）。
+- 返回、排序与错误码同 `meeting.list`；空关键词返回 `VALIDATION_ERROR`。
+
+> **文档差异**：开发文档把会议正文描述为 Markdown；实际实现与 Web 端一致，保存的是 Tiptap 富文本 HTML（`meetings.content_html`）。MCP 创建/更新时必须提交 HTML，不会做 Markdown 转换。
+
+### `note.list`
+
+便签摘要分页列表，按置顶、创建时间倒序。**默认排除已归档**，不返回正文。
+
+| 参数         | 类型            | 默认  | 约束                                                    |
+| ------------ | --------------- | ----- | ------------------------------------------------------- |
+| `q`          | string          | `""`  | 最长 200；仅对标题做忽略大小写的包含匹配                |
+| `type`       | enum            | —     | `inspiration` `work_memo`                               |
+| `isPinned`   | boolean         | —     | 是否置顶                                                |
+| `isArchived` | boolean / `all` | false | `false` 仅未归档；`true` 仅已归档；`all` 不限制归档状态 |
+| `page`       | int             | 1     | `>= 1`                                                  |
+| `pageSize`   | int             | 20    | 1–100                                                   |
+
+- 返回：`items`（便签摘要）、`total`、`page`、`pageSize`、`hasMore`。
+- 排序：`isPinned DESC, createdAt DESC, id DESC`。
+- 错误码：`VALIDATION_ERROR`。
+
+### `note.get`
+
+| 参数 | 类型 | 默认 | 约束   |
+| ---- | ---- | ---- | ------ |
+| `id` | int  | 必填 | 正整数 |
+
+- 返回：`note`（便签详情，含完整纯文本 `content` 与 `convertedTask`）。
+- 错误码：`NOT_FOUND`、`VALIDATION_ERROR`。
+
+### `note.search`
+
+在便签标题与正文中搜索，返回摘要。参数与 `note.list` 相同，但 `q` **必填**（trim 后 1–200 字符）。
+
+- 匹配范围：`title LIKE` 或 `content LIKE`，字面量包含匹配。
+- **默认仍排除已归档**；需要搜索归档便签时必须显式传 `isArchived: true` 或 `"all"`。
+- 返回、排序与错误码同 `note.list`。
+
 ### `write.prepare`
 
 校验写参数并签发一次性确认令牌，**本身不执行任何写入**。仅在 `SUPERPM_MCP_WRITE=1` 时注册。
 
-| 参数             | 类型   | 默认 | 约束                                                                 |
-| ---------------- | ------ | ---- | -------------------------------------------------------------------- |
-| `tool`           | enum   | 必填 | `issue.update` `issue.comment` `issue.linkAsset` `issue.unlinkAsset` |
-| `input`          | object | 必填 | 目标工具的**业务参数**（不含令牌与幂等键），按该工具 schema 校验     |
-| `idempotencyKey` | string | 必填 | 8–200 字符，持久化唯一                                               |
+| 参数             | 类型   | 默认 | 约束                                                             |
+| ---------------- | ------ | ---- | ---------------------------------------------------------------- |
+| `tool`           | enum   | 必填 | 12 个写工具之一（`issue.*`、`meeting.*`、`note.*`，见下表）      |
+| `input`          | object | 必填 | 目标工具的**业务参数**（不含令牌与幂等键），按该工具 schema 校验 |
+| `idempotencyKey` | string | 必填 | 8–200 字符，持久化唯一                                           |
 
 - 返回：`tool`、`confirmationToken`（一次性，仅此次响应中出现）、`expiresAt`（ISO 时间，5 分钟）、`summary`（人类可读的写入摘要，用于人工确认）。
 - 错误码：`VALIDATION_ERROR`、`FORBIDDEN`（写入未启用）、`CONFLICT`（幂等键已用过）。
@@ -366,6 +459,125 @@ npm run mcp:dev -w @superpm/server
 - 返回：`issueId`、`assetId`、`unlinked: true`。
 - 错误码：`NOT_FOUND`、`VALIDATION_ERROR`、`FORBIDDEN`（该契约不返回 `CONFLICT`）。
 
+### 会议写入（`meeting.*`）
+
+会议不属于任何需求，审计行 `requirement_id` 为 `NULL`，目标类型为 `meeting`。所有会议写工具都需要 `confirmationToken` 与 `idempotencyKey`；常见错误码为 `NOT_FOUND`、`VALIDATION_ERROR`、`FORBIDDEN`、`CONFLICT`（`meeting.create` 不返回 `NOT_FOUND`，无效关联需求按 `VALIDATION_ERROR` 处理）。
+
+#### `meeting.create`
+
+| 参数             | 类型   | 默认 | 约束                                                                   |
+| ---------------- | ------ | ---- | ---------------------------------------------------------------------- |
+| `title`          | string | 必填 | trim 后 1–200 字符                                                     |
+| `type`           | enum   | 必填 | `weekly` `group` `requirement` `training`                              |
+| `meetingTime`    | string | 必填 | ISO 8601 且带时区偏移；统一截断到分钟并转 UTC 存储                     |
+| `requirementIds` | int[]  | `[]` | 最多 100 个，正整数组内自动去重；任一需求不存在返回 `VALIDATION_ERROR` |
+| `contentHtml`    | string | `""` | 最长 500,000 字符，按 HTML 原样保存，不做 Markdown 转换                |
+
+- 返回：`meeting`（会议详情）、`changedFields`（恒为五个可写字段名）。
+- 创建与关联需求在同一事务内完成；任一需求无效时整体回滚。
+
+#### `meeting.update`
+
+| 参数             | 类型   | 默认 | 约束                                   |
+| ---------------- | ------ | ---- | -------------------------------------- |
+| `meetingId`      | int    | 必填 | 正整数                                 |
+| `title`          | string | —    | trim 后 1–200 字符                     |
+| `type`           | enum   | —    | 同上                                   |
+| `meetingTime`    | string | —    | ISO 8601 且带时区偏移                  |
+| `requirementIds` | int[]  | —    | **整体替换**关联需求；传 `[]` 表示清空 |
+| `contentHtml`    | string | —    | 最长 500,000 字符                      |
+
+- **部分更新**：只修改请求中出现的字段，未出现的字段保持不变。`contentHtml: ""` 表示主动清空正文，与“不传”语义不同。
+- 返回：`meeting`（更新后详情）、`changedFields`（本次实际提交的字段名）。
+- 错误码：`NOT_FOUND`（会议不存在）、`VALIDATION_ERROR`（参数或关联需求无效）、`FORBIDDEN`、`CONFLICT`。
+
+#### `meeting.delete`
+
+| 参数                | 类型   | 默认 | 约束       |
+| ------------------- | ------ | ---- | ---------- |
+| `meetingId`         | int    | 必填 | 正整数     |
+| `idempotencyKey`    | string | 必填 | 8–200 字符 |
+| `confirmationToken` | string | 必填 | 见令牌规则 |
+
+- 返回：`meetingId`、`deleted: true`。
+- **不可恢复**：会议行与关联需求关系一并删除；工具标注 `destructiveHint: true`。删除前应在 `write.prepare` 的 `summary` 中向用户确认。
+- 错误码：`NOT_FOUND`、`VALIDATION_ERROR`、`FORBIDDEN`、`CONFLICT`。
+
+### 便签写入（`note.*`）
+
+便签不属于任何需求，审计行 `requirement_id` 为 `NULL`，目标类型为 `note`。所有便签写工具都需要 `confirmationToken` 与 `idempotencyKey`；常见错误码为 `NOT_FOUND`、`VALIDATION_ERROR`、`FORBIDDEN`、`CONFLICT`（`note.create` 不返回 `NOT_FOUND`）。
+
+#### `note.create`
+
+| 参数       | 类型    | 默认          | 约束                                            |
+| ---------- | ------- | ------------- | ----------------------------------------------- |
+| `title`    | string  | `""`          | 最长 120 字符，不做 trim                        |
+| `content`  | string  | `""`          | 最长 20,000 字符，纯文本                        |
+| `type`     | enum    | `inspiration` | `inspiration` `work_memo`                       |
+| `color`    | enum    | `yellow`      | `yellow` `pink` `blue` `green` `purple` `slate` |
+| `isPinned` | boolean | `false`       | 是否置顶                                        |
+
+- 新建便签一律 `isArchived=false`。
+- 返回：`note`（便签详情）、`changedFields`（恒为五个可写字段名）。
+
+#### `note.update`
+
+| 参数       | 类型    | 默认 | 约束                      |
+| ---------- | ------- | ---- | ------------------------- |
+| `noteId`   | int     | 必填 | 正整数                    |
+| `title`    | string  | —    | 最长 120 字符             |
+| `content`  | string  | —    | 最长 20,000 字符          |
+| `type`     | enum    | —    | `inspiration` `work_memo` |
+| `color`    | enum    | —    | 同上                      |
+| `isPinned` | boolean | —    | 是否置顶                  |
+
+- **部分更新**：只修改出现的字段；`content: ""` 表示主动清空正文。
+- **不接受 `isArchived`**：契约会直接返回 `VALIDATION_ERROR`；归档/恢复必须使用 `note.archive`，避免误把归档当作普通字段修改。
+- 返回：`note`（更新后详情）、`changedFields`。
+
+#### `note.archive`
+
+| 参数       | 类型    | 默认 | 约束                      |
+| ---------- | ------- | ---- | ------------------------- |
+| `noteId`   | int     | 必填 | 正整数                    |
+| `archived` | boolean | 必填 | `true` 归档，`false` 恢复 |
+
+- 归档只设置 `isArchived` 与 `archivedAt`，**不删除记录和正文**；恢复时清空 `archivedAt`。
+- 归档不是 AI 的默认清理手段：仅在用户明确要求“归档/收起”时调用，不得用归档代替删除或批量清理。
+- 返回：`note`（更新后详情）、`archived`。
+- 重复归档或重复恢复是幂等的（不报错，只刷新 `updatedAt`）。
+
+#### `note.delete`
+
+| 参数                | 类型   | 默认 | 约束       |
+| ------------------- | ------ | ---- | ---------- |
+| `noteId`            | int    | 必填 | 正整数     |
+| `idempotencyKey`    | string | 必填 | 8–200 字符 |
+| `confirmationToken` | string | 必填 | 见令牌规则 |
+
+- 返回：`noteId`、`deleted: true`。
+- **不可恢复**，标注 `destructiveHint: true`；若便签已转任务，目标任务不受影响（`notes.converted_task_id` 为 `ON DELETE SET NULL` 的外键）。
+- 错误码：`NOT_FOUND`、`VALIDATION_ERROR`、`FORBIDDEN`、`CONFLICT`。
+
+#### `note.convertToTask`
+
+| 参数                | 类型   | 默认 | 约束       |
+| ------------------- | ------ | ---- | ---------- |
+| `noteId`            | int    | 必填 | 正整数     |
+| `idempotencyKey`    | string | 必填 | 8–200 字符 |
+| `confirmationToken` | string | 必填 | 见令牌规则 |
+
+- 复用 Web 端同一套 `DailyTaskService.create()` 逻辑，不另建任务结构：
+  - 标题取便签标题（trim 后截断 200 字符）；标题为空时取正文首个非空行，仍为空则用 `便签任务`；
+  - 描述取正文前 4,000 字符；
+  - 计划日期为**本地业务日**（今天），预估 30 分钟。
+- **幂等**：便签已关联且任务仍存在时，直接返回原任务，`created=false`，不会创建第二个任务；目标任务被删除后（`convertedTaskId` 被外键置空）可再次转换，`created=true`。
+- **失败不标记**：任务创建抛错时不写入 `converted_task_id`，便签保持未转换，可安全重试。
+- 返回：`note`（转换后的便签详情）、`task`（`{ id, title, planDate }`）、`created`（本次是否新建）。
+- 错误码：`NOT_FOUND`、`VALIDATION_ERROR`、`FORBIDDEN`、`CONFLICT`。
+
+> **每日任务边界**：本轮审计确认每日任务已有完整 HTTP 服务（创建、更新、删除、按日查询），但**没有开放通用 MCP 任务工具**。任务转换是便签模块的既有业务能力，通过 `note.convertToTask` 暴露；直接增删改每日任务暂不开放，避免 AI 在未确认的情况下改动用户日程。`issue.create` / `issue.delete` 同样保持关闭，正式问题仍只能由用户创建。
+
 ## 两步确认流程
 
 每次写入必须调用两次：
@@ -415,7 +627,9 @@ npm run mcp:dev -w @superpm/server
 - `issue.update`：至少提交一个可更新字段。不允许在同一调用中同时提交 `solution` 并将 `status` 设为 `resolved`；标记为已解决前必须已有非空解决方案。失败时不产生部分写入（标题、状态、解决时间、活动记录保持一致）。
 - `issue.comment`：追加一条 `comment` 活动并刷新问题更新时间，返回新活动 `activityId`。
 - `issue.linkAsset`：同一问题与同一文档节点只能建立一条关联，重复关联返回 `CONFLICT`；取消关联只删除关联行，绝不删除节点或物理文件。
-- 所有写入都以需求为作用域；跨需求访问返回 `NOT_FOUND`，不会修改任何记录。
+- `meeting.*` / `note.*`：不挂靠需求，均通过 `McpWriteService.execute()` 执行；会议与关联需求、便签与任务转换均在单事务内完成。部分更新只写显式提交的字段。
+- `note.archive` 只切换归档标记，不删除数据；`note.delete` / `meeting.delete` 才真正删除且不可恢复。
+- 问题写入以需求为作用域；跨需求访问返回 `NOT_FOUND`，不会修改任何记录。会议与便签按主键访问，使用无效 ID 返回 `NOT_FOUND`。
 - 操作者固定记录为 AI：活动表写入 `actor_type="ai"`、`actor_name="mcp:<客户端名>"`；客户端名来自 MCP 握手，缺失时使用 `mcp:unknown`。
 - 问题详情页在更新时间旁展示最近一次 AI 写入来源（如 `AI · mcp:codex`），悬停可看操作时间；不恢复完整处理时间线。
 
@@ -433,14 +647,18 @@ npm run mcp:dev -w @superpm/server
 | `actor_name`                                               | `mcp:<客户端名>`                 |
 | `outcome` / `error_code` / `result_summary` / `created_at` | 结果、错误码、短摘要与时间       |
 
-`mcp_write_confirmations` 保存令牌哈希、绑定参数哈希、过期时间与使用时间。审计与确认表**不保存**原始令牌、问题正文、解决方案全文或绝对路径。
+`mcp_write_confirmations` 保存令牌哈希、绑定参数哈希、过期时间与使用时间。审计与确认表**不保存**原始令牌、问题正文、解决方案全文、会议/便签正文或绝对路径。
+
+会议与便签不挂靠需求：`mcp_audit.requirement_id` 记为 `NULL`，`target_type` 分别为 `meeting` / `note`，`target_id` 为会议/便签 ID（新建时为 `new`）。`mcp_write_confirmations` 的 `requirement_id` 是历史非空列，对非需求写入以哨兵值 `0` 存储，查询审计时以 `mcp_audit` 为准。
 
 ## 只读与截断语义
 
 - 只读工具**不产生副作用**：不补建需求目录映射、不初始化工作区、不创建模板文件、不刷新或写入文档索引、不拾取磁盘新增文件。
 - 需求未初始化时，`requirement.memory.get` 返回 `exists=false`、`status="not_initialized"`；工作区存在但文件缺失时返回 `status="missing"`。
 - `requirement.progress.get` 是纯组合查询，不读取正文，不触发任何索引刷新。
-- `issue.list` 返回 `total`、`limit`、`offset`、`hasMore`，翻页由调用方负责。
+- `issue.list` 返回 `total`、`limit`、`offset`、`hasMore`，翻页由调用方负责；`meeting.list` / `note.list` 使用 `page` / `pageSize` 翻页并返回 `hasMore`。
+- 会议与便签列表只返回摘要：会议为 `summary`（正文纯文本前 120 字符），便签为 `preview`（前 120 字符）与 `contentLength`；完整正文只由 `meeting.get` / `note.get` 返回。
+- 便签列表与搜索**默认排除已归档**；仅当显式传 `isArchived: true` 或 `"all"` 时才返回归档便签。
 - 文本超长时按 `maxChars` 截断，并在结果中标记 `truncated`；字段级截断通过 `truncatedFields` 标明。
 - 二进制文件只返回元数据（`kind="binary"`、`content=null`），不返回 base64 或原始字节。
 - 所有跨需求访问返回 `NOT_FOUND`，不泄漏其他需求是否存在。
@@ -490,22 +708,23 @@ npm run mcp:dev -w @superpm/server
 MCP 相关的全部断言都在真实 SQLite + 真实工作区目录上运行，不使用 mock 业务服务；`mcp-server.test.ts` 另有一路真实 stdio 子进程。
 
 ```powershell
-# 只跑 MCP / 安全相关（约 2s，65 个用例）
-npx vitest run apps/server/tests/mcp-gateway.test.ts apps/server/tests/mcp-server.test.ts apps/server/tests/mcp-writes.test.ts apps/server/tests/mcp-security.test.ts apps/server/tests/http-security.test.ts apps/server/tests/migrations.test.ts
+# 只跑 MCP / 安全相关（约 3s，80 个用例）
+npx vitest run apps/server/tests/mcp-gateway.test.ts apps/server/tests/mcp-server.test.ts apps/server/tests/mcp-writes.test.ts apps/server/tests/mcp-security.test.ts apps/server/tests/mcp-meetings-notes.test.ts apps/server/tests/http-security.test.ts apps/server/tests/migrations.test.ts
 
 # 全量单测（server + web）与类型检查
 npm test
 npm run typecheck
 ```
 
-| 测试文件                | 用例 | 覆盖范围                                                                                                                                                                                                    |
-| ----------------------- | ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `mcp-gateway.test.ts`   | 15   | 契约完整性（9 只读 + 4 写、写工具要求幂等键、错误码白名单）、工具集快照不含 SQL/路径/文件/任意写工具、每个只读工具的投影与分页/截断、跨需求 `NOT_FOUND`、全量只读调用后数据库与需求记忆零变化               |
-| `mcp-writes.test.ts`    | 11   | 四类写入经令牌成功落库、AI 来源与审计不落正文；缺令牌/过期/参数不一致/复用令牌/重放幂等键被拒；参数不一致不消耗令牌而业务失败消耗令牌且无部分写入；跨需求零写入；WAL、`busy_timeout` 与跨连接幂等键唯一约束 |
-| `mcp-server.test.ts`    | 7    | 注册 `system.info` + 9 只读并标注 `readOnlyHint`、写入开启后注册写工具与 `write.prepare`、业务与 `system.info` 异常兜底不泄露堆栈和绝对路径、真实 stdio 不污染 stdout 且关闭数据库、服务容器幂等关闭        |
-| `mcp-security.test.ts`  | 13   | M4 攻击用例（见下）                                                                                                                                                                                         |
-| `http-security.test.ts` | 2    | `/api/health` 公开、`/api/system` 需登录且不泄露数据库与工作区路径                                                                                                                                          |
-| `migrations.test.ts`    | 17   | 迁移链 0005–0012 可重复执行、`mcp_audit` / `mcp_write_confirmations` 表结构与唯一约束/结果枚举、`SCHEMA_VERSION` 与已应用迁移数一致                                                                         |
+| 测试文件                     | 用例 | 覆盖范围                                                                                                                                                                                                                                                                                                                                   |
+| ---------------------------- | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `mcp-gateway.test.ts`        | 15   | 契约完整性（27 业务工具 = 15 只读 + 12 写、写工具要求幂等键、错误码白名单）、工具集快照不含 SQL/路径/文件/任意写工具、每个只读工具的投影与分页/截断、跨需求 `NOT_FOUND`、全量只读调用后数据库与需求记忆零变化                                                                                                                              |
+| `mcp-writes.test.ts`         | 11   | 四类问题写入经令牌成功落库、AI 来源与审计不落正文；缺令牌/过期/参数不一致/复用令牌/重放幂等键被拒；参数不一致不消耗令牌而业务失败消耗令牌且无部分写入；跨需求零写入；WAL、`busy_timeout` 与跨连接幂等键唯一约束                                                                                                                            |
+| `mcp-server.test.ts`         | 7    | 注册 `system.info` + 15 只读并标注 `readOnlyHint`、写入开启后注册 12 个写工具与 `write.prepare`（共 29 个）、业务与 `system.info` 异常兜底不泄露堆栈和绝对路径、真实 stdio 不污染 stdout 且关闭数据库、服务容器幂等关闭                                                                                                                    |
+| `mcp-security.test.ts`       | 13   | M4 攻击用例（见下），含 12 个写工具在写入关闭时全部 `FORBIDDEN`                                                                                                                                                                                                                                                                            |
+| `mcp-meetings-notes.test.ts` | 10   | 真实文件 SQLite + 真实服务 + 真实 MCP Client：29 工具发现与破坏性标注；会议/便签分页、过滤、时间范围、正文搜索、摘要不含正文、详情完整 HTML/纯文本；会议创建/部分更新/关联替换/删除；便签创建/部分更新/归档恢复/转换幂等/失败不标记/重试；无效 ID 与参数；审计 `requirement_id NULL`、目标类型、摘要不泄露正文；既有需求/文档/问题工具回归 |
+| `http-security.test.ts`      | 2    | `/api/health` 公开、`/api/system` 需登录且不泄露数据库与工作区路径                                                                                                                                                                                                                                                                         |
+| `migrations.test.ts`         | 22   | 迁移链 0005–0017 可重复执行、`mcp_audit` / `mcp_write_confirmations` 表结构与唯一约束/结果枚举、会议与便签表约束、`SCHEMA_VERSION` 与已应用迁移数一致                                                                                                                                                                                      |
 
 CI 流水线位于 `.github/workflows/ci.yml`（与模板 `docs/ci/ci.yml` 一致，Node 22 + `npm ci` + `typecheck` + `npm test` + `build` + Playwright E2E，Windows runner），已随 `main` 推送并在 GitHub Actions 上实际运行。推送含 workflows 目录改动的提交需要凭证具备 `workflow` scope，否则远端会拒收整个提交；本机用 `gh auth refresh --hostname github.com -s workflow` 补齐。Playwright 的 `tests/e2e` 覆盖 Web 端功能，不驱动 MCP；MCP 的行为验证以上述单测与 stdio 子进程用例为准。
 
@@ -523,7 +742,7 @@ CI 流水线位于 `.github/workflows/ci.yml`（与模板 `docs/ci/ci.yml` 一�
 - 数据库表缺失等未预期异常在 MCP 层收敛为 `INTERNAL_ERROR`，不透出表名与 SQL；
 - 文件缺失或被替换为目录时返回 `NOT_FOUND`，不会把目录内容当作正文读取；
 - 写入过程中数据库异常会回滚业务事务，仅保留脱敏错误审计；
-- 写入关闭时 4 个写工具与 `write.prepare` 全部 `FORBIDDEN`；伪造、跨工具复用与重复提交令牌均被拒绝。
+- 写入关闭时 12 个写工具与 `write.prepare` 全部 `FORBIDDEN`；伪造、跨工具复用与重复提交令牌均被拒绝；会议/便签的越界分页、非法枚举、未知字段、空搜索词与过短幂等键均被严格拒绝。
 
 `http-security.test.ts` 同时验证 `/api/health` 保持公开，而未认证访问 `/api/system` 返回 `401` 且不泄露数据库或工作区路径。
 
@@ -579,14 +798,14 @@ CI 流水线位于 `.github/workflows/ci.yml`（与模板 `docs/ci/ci.yml` 一�
 
 ## 版本兼容性
 
-| 组件        | 当前值                                                   | 说明                                                                          |
-| ----------- | -------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| Node.js     | `>=22.12.0 <25`                                          | `better-sqlite3` 为原生模块，跨主版本需重装/重建                              |
-| MCP SDK     | `@modelcontextprotocol/sdk ^1.32.1`                      | 使用 `McpServer.registerTool` + `StdioServerTransport`，协议版本由 SDK 协商   |
-| Server 标识 | name `superpm`，version `0.1.0`                          | version 读取 `apps/server/package.json`，缺失时回退 `0.0.0`                   |
-| 数据库      | `SCHEMA_VERSION = 12`，迁移至 `0012_mcp_write_audit.sql` | 只向前、按 `schema_migrations` 幂等；MCP 与 HTTP 共用同一迁移                 |
-| 校验库      | `zod ^3.25.76`                                           | 工具入参 schema 与 HTTP 层同源；SDK 依赖 zod v3 shape，升级 zod v4 需同步适配 |
-| 传输        | 仅 `stdio`                                               | 不提供 HTTP/SSE，因此没有跨机器版本协商问题                                   |
+| 组件        | 当前值                                         | 说明                                                                          |
+| ----------- | ---------------------------------------------- | ----------------------------------------------------------------------------- |
+| Node.js     | `>=22.12.0 <25`                                | `better-sqlite3` 为原生模块，跨主版本需重装/重建                              |
+| MCP SDK     | `@modelcontextprotocol/sdk ^1.32.1`            | 使用 `McpServer.registerTool` + `StdioServerTransport`，协议版本由 SDK 协商   |
+| Server 标识 | name `superpm`，version `0.9.0`                | version 读取 `apps/server/package.json`，缺失时回退 `0.0.0`                   |
+| 数据库      | `SCHEMA_VERSION = 17`，迁移至 `0017_notes.sql` | 只向前、按 `schema_migrations` 幂等；MCP 与 HTTP 共用同一迁移                 |
+| 校验库      | `zod ^3.25.76`                                 | 工具入参 schema 与 HTTP 层同源；SDK 依赖 zod v3 shape，升级 zod v4 需同步适配 |
+| 传输        | 仅 `stdio`                                     | 不提供 HTTP/SSE，因此没有跨机器版本协商问题                                   |
 
 兼容策略：
 
@@ -603,10 +822,13 @@ CI 流水线位于 `.github/workflows/ci.yml`（与模板 `docs/ci/ci.yml` 一�
 
 | 能力                                            | 是否开放 | 前置条件                                              | 是否审计           |
 | ----------------------------------------------- | -------- | ----------------------------------------------------- | ------------------ |
-| 需求/问题/产出物只读查询                        | 是       | 无（默认开启）                                        | 否                 |
+| 需求/问题/产出物/会议/便签只读查询              | 是       | 无（默认开启）                                        | 否                 |
 | 问题字段更新、评论、关联与取消关联              | 是       | `SUPERPM_MCP_WRITE=1` + `write.prepare` 令牌 + 幂等键 | `mcp_audit` 全过程 |
+| 会议创建/更新/删除                              | 是       | 同上                                                  | `mcp_audit` 全过程 |
+| 便签创建/更新/归档恢复/转换任务/删除            | 是       | 同上                                                  | `mcp_audit` 全过程 |
+| 每日任务直接创建/更新/删除                      | 否       | —（仅支持从便签转换）                                 | —                  |
 | 需求创建/更新                                   | 否       | —                                                     | —                  |
-| 问题创建                                        | 否       | —                                                     | —                  |
+| 问题创建/删除                                   | 否       | —                                                     | —                  |
 | 文件/文件夹创建、修改、删除、移动、重命名、上传 | 否       | —                                                     | —                  |
 | 需求记忆写入                                    | 否       | —                                                     | —                  |
 | SQL、路径、文件系统、任意写等通用工具           | 否       | —                                                     | —                  |
@@ -623,8 +845,10 @@ CI 流水线位于 `.github/workflows/ci.yml`（与模板 `docs/ci/ci.yml` 一�
 - 审计只记录工具名、目标、参数哈希、结果与短摘要，不记录正文、解决方案全文或绝对路径。
 - 业务内容一律视为不可信数据：结果固定携带 `notice`，正文中的指令文本不会被执行；服务端不会因为正文内容而触发写入。
 - 未捕获异常收敛为 `INTERNAL_ERROR`，响应不含堆栈、表名、SQL、数据库或工作区绝对路径；日志只写 stderr。
-- AI 写入在问题活动中标记 `actor_type="ai"`、`actor_name="mcp:<客户端名>"`，Web 端展示最近一次 AI 写入来源，可追溯到具体 MCP 客户端。
+- AI 写入在问题活动中标记 `actor_type="ai"`、`actor_name="mcp:<客户端名>"`；会议与便签没有活动表，来源记录在 `mcp_audit.actor_name`。Web 端问题详情展示最近一次 AI 写入来源，可追溯到具体 MCP 客户端。
+- **归还不是清理**：`note.archive` 只切换归档标记，仅在用户明确要求时调用；AI 不得把归档当作默认清理或批量整理手段，也不得用 `note.delete` / `meeting.delete` 代替归档。
+- **授权边界预留**：所有写工具只从 MCP 握手与进程环境获取操作者信息，权限判断集中在 `McpWriteService` 与业务服务层，不把用户身份、角色或权限硬编码进单个 MCP 工具。未来接入多用户权限时在该统一入口扩展。
 - HTTP 侧 `/api/system` 已收敛为登录后可访问，未认证调用者拿不到数据库与工作区绝对路径；`/api/health` 保持公开。
 - **正式问题创建与需求创建仍只能由用户操作**；AI 的建议与正式落库分属两个会话链路，写入必须已获得用户明确授权。
 
-暂缓能力（需在后续单独评审，不随版本自动开放）：`artifact.updateText`、`issue.create`、`requirement.create` / `requirement.update`、需求记忆写入。其中 `issue.create` 与"正式问题只能由用户创建"的边界直接冲突。
+暂缓能力（需在后续单独评审，不随版本自动开放）：`artifact.updateText`、`issue.create`、`issue.delete`、通用每日任务写工具、`requirement.create` / `requirement.update`、需求记忆写入。其中 `issue.create` 与"正式问题只能由用户创建"的边界直接冲突；每日任务涉及用户日程，暂只允许经由 `note.convertToTask` 这一条经过确认的路径创建。

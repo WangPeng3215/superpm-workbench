@@ -35,6 +35,11 @@ const contentSchema = z
   .string()
   .max(noteContentMaxLength, "便签内容过长，最多 20000 字");
 
+export const noteTitleSchema = titleSchema;
+export const noteContentSchema = contentSchema;
+export const noteTypeSchema = z.enum(noteTypes);
+export const noteColorSchema = z.enum(noteColors);
+
 const queryBoolean = z
   .union([
     z.boolean(),
@@ -44,32 +49,59 @@ const queryBoolean = z
 
 export const noteListSchema = z.object({ archived: queryBoolean }).strict();
 
-export const noteCreateSchema = z
+export const noteCreateFields = {
+  title: titleSchema.default(""),
+  content: contentSchema.default(""),
+  type: noteTypeSchema.default("inspiration"),
+  color: noteColorSchema.default("yellow"),
+  isPinned: z.boolean().default(false),
+};
+export const noteUpdateFields = {
+  title: titleSchema.optional(),
+  content: contentSchema.optional(),
+  type: noteTypeSchema.optional(),
+  color: noteColorSchema.optional(),
+  isPinned: z.boolean().optional(),
+  isArchived: z.boolean().optional(),
+};
+
+export const noteCreateSchema = z.object(noteCreateFields).strict();
+
+export const noteUpdateSchema = z
+  .object(noteUpdateFields)
+  .strict()
+  .refine((value) => Object.keys(value).length > 0, "请提交需要更新的字段");
+
+export const noteArchivedFilterSchema = z
+  .union([z.boolean(), z.literal("all")], {
+    errorMap: () => ({ message: "归档筛选只能是 true、false 或 all" }),
+  })
+  .default(false);
+
+export const noteQuerySchema = z
   .object({
-    title: titleSchema.default(""),
-    content: contentSchema.default(""),
-    type: z.enum(noteTypes).default("inspiration"),
-    color: z.enum(noteColors).default("yellow"),
-    isPinned: z.boolean().default(false),
+    q: z.string().trim().max(200).default(""),
+    type: noteTypeSchema.optional(),
+    isPinned: z.boolean().optional(),
+    isArchived: noteArchivedFilterSchema,
+    page: z.number().int().min(1).default(1),
+    pageSize: z.number().int().min(1).max(100).default(20),
   })
   .strict();
 
-export const noteUpdateSchema = z
-  .object({
-    title: titleSchema.optional(),
-    content: contentSchema.optional(),
-    type: z.enum(noteTypes).optional(),
-    color: z.enum(noteColors).optional(),
-    isPinned: z.boolean().optional(),
-    isArchived: z.boolean().optional(),
-  })
-  .strict()
-  .refine((value) => Object.keys(value).length > 0, "请提交需要更新的字段");
+export const noteSearchSchema = noteQuerySchema.extend({
+  q: z.string().trim().min(1, "请输入搜索关键词").max(200),
+});
 
 export type NoteCreate = z.input<typeof noteCreateSchema>;
 export type NoteCreateParsed = z.output<typeof noteCreateSchema>;
 export type NoteUpdate = z.input<typeof noteUpdateSchema>;
 export type NoteUpdateParsed = z.output<typeof noteUpdateSchema>;
+export type NoteQuery = z.input<typeof noteQuerySchema>;
+export type NoteQueryParsed = z.output<typeof noteQuerySchema>;
+export type NoteSearch = z.input<typeof noteSearchSchema>;
+export type NoteSearchParsed = z.output<typeof noteSearchSchema>;
+export type NoteArchivedFilter = z.output<typeof noteArchivedFilterSchema>;
 
 /** 转任务后回填的目标任务；exists=false 表示任务已被删除，可再次转换。 */
 export interface NoteConvertedTask {
@@ -94,8 +126,33 @@ export interface Note {
   archivedAt: string | null;
 }
 
+/** 列表投影：不返回完整正文，只带截断预览与正文长度。 */
+export interface NoteSummary {
+  id: number;
+  title: string;
+  preview: string;
+  contentLength: number;
+  type: NoteType;
+  color: NoteColor;
+  isPinned: boolean;
+  isArchived: boolean;
+  convertedTaskId: number | null;
+  convertedTask: NoteConvertedTask | null;
+  createdAt: string;
+  updatedAt: string;
+  archivedAt: string | null;
+}
+
 export interface NoteConvertResult {
   note: Note;
   task: { id: number; title: string; planDate: string };
   created: boolean;
+}
+
+export interface NoteQueryResult {
+  items: NoteSummary[];
+  total: number;
+  page: number;
+  pageSize: number;
+  hasMore: boolean;
 }

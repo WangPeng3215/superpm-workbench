@@ -1,6 +1,6 @@
 {
   "name": "@superpm/server",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -16,7 +16,7 @@
   "dependencies": {
     "@fastify/static": "^10.1.6",
     "@modelcontextprotocol/sdk": "^1.32.1",
-    "@superpm/shared": "0.8.0",
+    "@superpm/shared": "0.9.0",
     "better-sqlite3": "^12.4.1",
     "dotenv": "^17.2.0",
     "drizzle-orm": "^0.45.4",

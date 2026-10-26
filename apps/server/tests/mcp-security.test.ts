@@ -21,6 +21,7 @@ import { MCP_UNTRUSTED_CONTENT_NOTICE } from "@superpm/shared";
 import { migrate, SCHEMA_VERSION } from "../src/db/migrate.js";
 import { createMcpServer, MCP_SERVER_NAME } from "../src/mcp/server.js";
 import { ArtifactService } from "../src/services/artifacts.js";
+import { DailyTaskService } from "../src/services/daily-tasks.js";
 import { IssueService } from "../src/services/issues.js";
 import {
   buildMcpTools,
@@ -28,6 +29,8 @@ import {
   type McpToolCallOptions,
 } from "../src/services/mcp-gateway.js";
 import { McpWriteService } from "../src/services/mcp-writes.js";
+import { MeetingService } from "../src/services/meetings.js";
+import { NoteService } from "../src/services/notes.js";
 import { RequirementDirectoryResolver } from "../src/services/requirement-directory.js";
 import { RequirementProgressService } from "../src/services/requirement-progress.js";
 import { RequirementService } from "../src/services/requirements.js";
@@ -58,6 +61,8 @@ describe("MCP 安全边界（M4）", () => {
   let artifacts: ArtifactService;
   let issues: IssueService;
   let progress: RequirementProgressService;
+  let meetings: MeetingService;
+  let notes: NoteService;
   let writes: McpWriteService;
   let gateway: McpGateway;
   let clock: Date;
@@ -79,6 +84,8 @@ describe("MCP 安全边界（M4）", () => {
       artifacts,
       directories,
     );
+    meetings = new MeetingService(db);
+    notes = new NoteService(db, new DailyTaskService(db));
     clock = new Date("2026-10-20T00:00:00.000Z");
     writes = new McpWriteService(db, {
       enabled: true,
@@ -90,6 +97,8 @@ describe("MCP 安全边界（M4）", () => {
       issues,
       artifacts,
       progress,
+      meetings,
+      notes,
       writes,
     });
   });
@@ -234,6 +243,38 @@ describe("MCP 安全边界（M4）", () => {
         ["artifact.list", { requirementId: 1, q: "x".repeat(201) }],
         ["artifact.list", { requirementId: 1, limit: 501 }],
         ["artifact.get", { requirementId: 1, nodeId: 1, maxChars: 100001 }],
+        ["meeting.list", { page: 0 }],
+        ["meeting.list", { pageSize: 101 }],
+        [
+          "meeting.list",
+          {
+            startTime: "2026-10-20T00:00:00.000Z",
+            endTime: "2026-10-10T00:00:00.000Z",
+          },
+        ],
+        ["meeting.get", { id: 0 }],
+        ["meeting.get", { id: 1, extra: true }],
+        ["meeting.search", { q: "   " }],
+        ["note.list", { isArchived: "yes" }],
+        ["note.list", { pageSize: 0 }],
+        ["note.get", { id: 0 }],
+        ["note.search", { q: "" }],
+        [
+          "meeting.create",
+          { type: "weekly", meetingTime: "2026-11-01T02:00:00.000Z" },
+        ],
+        [
+          "meeting.create",
+          { title: "x", type: "invalid", meetingTime: "not-a-date" },
+        ],
+        ["meeting.update", { meetingId: 1 }],
+        ["meeting.delete", { meetingId: 1, extra: true }],
+        ["note.create", { extra: true }],
+        ["note.update", { noteId: 1 }],
+        ["note.update", { noteId: 1, isArchived: true }],
+        ["note.archive", { noteId: 1, archived: "yes" }],
+        ["note.delete", { noteId: 1, extra: true }],
+        ["note.convertToTask", { noteId: 1, extra: true }],
         ["issue.update", { requirementId: 1, issueId: 1 }],
         [
           "issue.update",
@@ -695,6 +736,8 @@ describe("MCP 安全边界（M4）", () => {
         issues,
         artifacts,
         progress,
+        meetings,
+        notes,
         writes: new McpWriteService(db),
       });
       const envelope = {
@@ -730,6 +773,21 @@ describe("MCP 安全边界（M4）", () => {
             assetId: 1,
           },
         ],
+        [
+          "meeting.create",
+          {
+            title: "越权会议",
+            type: "weekly",
+            meetingTime: "2026-11-01T02:00:00.000Z",
+          },
+        ],
+        ["meeting.update", { meetingId: 1, title: "越权" }],
+        ["meeting.delete", { meetingId: 1 }],
+        ["note.create", { title: "越权便签" }],
+        ["note.update", { noteId: 1, title: "越权" }],
+        ["note.archive", { noteId: 1, archived: true }],
+        ["note.delete", { noteId: 1 }],
+        ["note.convertToTask", { noteId: 1 }],
       ];
       for (const [name, input] of calls) {
         const result = disabled.call(name, { ...input, ...envelope });

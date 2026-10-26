@@ -14,6 +14,7 @@ import type {
 } from "@superpm/shared";
 import { migrate } from "../src/db/migrate.js";
 import { ArtifactService } from "../src/services/artifacts.js";
+import { DailyTaskService } from "../src/services/daily-tasks.js";
 import { IssueService } from "../src/services/issues.js";
 import {
   buildMcpTools,
@@ -21,6 +22,8 @@ import {
   type McpToolCallOptions,
 } from "../src/services/mcp-gateway.js";
 import { McpWriteService } from "../src/services/mcp-writes.js";
+import { MeetingService } from "../src/services/meetings.js";
+import { NoteService } from "../src/services/notes.js";
 import { RequirementDirectoryResolver } from "../src/services/requirement-directory.js";
 import { RequirementProgressService } from "../src/services/requirement-progress.js";
 import { RequirementService } from "../src/services/requirements.js";
@@ -53,6 +56,8 @@ describe("MCP 受控写入（M3）", () => {
   let artifacts: ArtifactService;
   let issues: IssueService;
   let progress: RequirementProgressService;
+  let meetings: MeetingService;
+  let notes: NoteService;
   let writes: McpWriteService;
   let gateway: McpGateway;
   let clock: Date;
@@ -74,6 +79,8 @@ describe("MCP 受控写入（M3）", () => {
       artifacts,
       directories,
     );
+    meetings = new MeetingService(db);
+    notes = new NoteService(db, new DailyTaskService(db));
     clock = new Date("2026-10-20T00:00:00.000Z");
     writes = new McpWriteService(db, {
       enabled: true,
@@ -85,6 +92,8 @@ describe("MCP 受控写入（M3）", () => {
       issues,
       artifacts,
       progress,
+      meetings,
+      notes,
       writes,
     });
   });

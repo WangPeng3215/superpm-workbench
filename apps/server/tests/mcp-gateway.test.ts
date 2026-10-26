@@ -36,9 +36,12 @@ import {
 } from "@superpm/shared";
 import { migrate } from "../src/db/migrate";
 import { ArtifactService } from "../src/services/artifacts";
+import { DailyTaskService } from "../src/services/daily-tasks";
 import { IssueService } from "../src/services/issues";
 import { buildMcpTools, type McpGateway } from "../src/services/mcp-gateway";
 import { McpWriteService } from "../src/services/mcp-writes";
+import { MeetingService } from "../src/services/meetings";
+import { NoteService } from "../src/services/notes";
 import { RequirementDirectoryResolver } from "../src/services/requirement-directory";
 import { RequirementProgressService } from "../src/services/requirement-progress";
 import { RequirementService } from "../src/services/requirements";
@@ -56,6 +59,8 @@ describe("MCP 只读契约（M2）", () => {
   let artifacts: ArtifactService;
   let issues: IssueService;
   let progress: RequirementProgressService;
+  let meetings: MeetingService;
+  let notes: NoteService;
   let gateway: McpGateway;
 
   beforeEach(() => {
@@ -74,11 +79,15 @@ describe("MCP 只读契约（M2）", () => {
       artifacts,
       directories,
     );
+    meetings = new MeetingService(db);
+    notes = new NoteService(db, new DailyTaskService(db));
     gateway = buildMcpTools({
       requirements,
       issues,
       artifacts,
       progress,
+      meetings,
+      notes,
       writes: new McpWriteService(db),
     });
   });
@@ -139,10 +148,10 @@ describe("MCP 只读契约（M2）", () => {
       }
     ).total;
 
-  it("契约完整性：9 个只读 + 4 个写工具，写工具要求幂等键，错误码在白名单内", () => {
-    expect(mcpToolContracts).toHaveLength(13);
-    expect(mcpReadonlyToolNames).toHaveLength(9);
-    expect(mcpMutatingToolNames).toHaveLength(4);
+  it("契约完整性：15 个只读 + 12 个写工具，写工具要求幂等键，错误码在白名单内", () => {
+    expect(mcpToolContracts).toHaveLength(27);
+    expect(mcpReadonlyToolNames).toHaveLength(15);
+    expect(mcpMutatingToolNames).toHaveLength(12);
     expect(mcpToolContracts.map((contract) => contract.name).sort()).toEqual(
       [...mcpReadonlyToolNames, ...mcpMutatingToolNames].sort(),
     );
@@ -161,7 +170,7 @@ describe("MCP 只读契约（M2）", () => {
   });
 
   it("默认网关只注册只读工具，不暴露 asset.* 或写工具", () => {
-    expect(gateway.tools.size).toBe(9);
+    expect(gateway.tools.size).toBe(15);
     for (const contract of mcpToolContracts.filter(
       (item) => item.kind === "readonly",
     )) {
@@ -545,6 +554,20 @@ describe("MCP 只读契约（M2）", () => {
       "issue.list",
       "issue.unlinkAsset",
       "issue.update",
+      "meeting.create",
+      "meeting.delete",
+      "meeting.get",
+      "meeting.list",
+      "meeting.search",
+      "meeting.update",
+      "note.archive",
+      "note.convertToTask",
+      "note.create",
+      "note.delete",
+      "note.get",
+      "note.list",
+      "note.search",
+      "note.update",
       "requirement.get",
       "requirement.list",
       "requirement.memory.get",
@@ -552,7 +575,7 @@ describe("MCP 只读契约（M2）", () => {
     ]);
     for (const name of names) {
       expect(name.toLowerCase()).not.toMatch(
-        /sql|path|file-?system|shell|exec|\bfs\b|delete|create/,
+        /sql|path|filesystem|shell|exec|\bfs\b/,
       );
       if (
         name.startsWith("issue.") &&
@@ -562,6 +585,13 @@ describe("MCP 只读契约（M2）", () => {
       )
         expect(mcpWriteToolNames).toContain(name);
     }
+    // create/delete 仅限会议与便签这两类低风险业务实体，不提供通用删除能力
+    expect(names.filter((name) => /create|delete/.test(name))).toEqual([
+      "meeting.create",
+      "meeting.delete",
+      "note.create",
+      "note.delete",
+    ]);
   });
 
   it("ArtifactMemoryReadResult 类型可被服务直接返回", () => {

@@ -2,11 +2,14 @@ import type Database from "better-sqlite3";
 import {
   meetingCreateSchema,
   meetingListSchema,
+  meetingQuerySchema,
+  meetingSearchSchema,
   meetingUpdateSchema,
   type Meeting,
   type MeetingRequirementRef,
   type MeetingSummary,
   type MeetingType,
+  type MeetingQueryResult,
 } from "@superpm/shared";
 import { DomainError } from "./requirements.js";
 
@@ -74,6 +77,76 @@ export class MeetingService {
       .all(...params) as MeetingRow[];
     const refs = this.requirementsFor(rows.map((row) => row.id));
     return rows.map((row) => this.summary(row, refs.get(row.id) ?? []));
+  }
+
+  /** MCP 分页列表：关键词只匹配标题，返回摘要投影。 */
+  query(input: unknown): MeetingQueryResult {
+    return this.paginate(meetingQuerySchema.parse(input), false);
+  }
+
+  /** MCP 全文检索：关键词同时匹配标题与富文本正文，返回摘要投影。 */
+  search(input: unknown): MeetingQueryResult {
+    return this.paginate(meetingSearchSchema.parse(input), true);
+  }
+
+  private paginate(
+    query: {
+      q: string;
+      type?: MeetingType;
+      startTime?: string;
+      endTime?: string;
+      page: number;
+      pageSize: number;
+    },
+    searchContent: boolean,
+  ): MeetingQueryResult {
+    const clauses: string[] = [];
+    const params: string[] = [];
+    if (query.q) {
+      const pattern = `%${escapeLike(query.q)}%`;
+      if (searchContent) {
+        clauses.push(
+          "(title LIKE ? ESCAPE '\\' OR content_html LIKE ? ESCAPE '\\')",
+        );
+        params.push(pattern, pattern);
+      } else {
+        clauses.push("title LIKE ? ESCAPE '\\'");
+        params.push(pattern);
+      }
+    }
+    if (query.type) {
+      clauses.push("meeting_type = ?");
+      params.push(query.type);
+    }
+    if (query.startTime) {
+      clauses.push("meeting_time >= ?");
+      params.push(query.startTime);
+    }
+    if (query.endTime) {
+      clauses.push("meeting_time <= ?");
+      params.push(query.endTime);
+    }
+    const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+    const total = (
+      this.db
+        .prepare(`SELECT COUNT(*) AS count FROM meetings ${where}`)
+        .get(...params) as { count: number }
+    ).count;
+    const offset = (query.page - 1) * query.pageSize;
+    const rows = this.db
+      .prepare(
+        `SELECT ${selectColumns} FROM meetings ${where}
+         ORDER BY meeting_time DESC, id DESC LIMIT ? OFFSET ?`,
+      )
+      .all(...params, query.pageSize, offset) as MeetingRow[];
+    const refs = this.requirementsFor(rows.map((row) => row.id));
+    return {
+      items: rows.map((row) => this.summary(row, refs.get(row.id) ?? [])),
+      total,
+      page: query.page,
+      pageSize: query.pageSize,
+      hasMore: offset + rows.length < total,
+    };
   }
 
   get(id: number): Meeting {

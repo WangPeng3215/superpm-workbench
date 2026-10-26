@@ -76,6 +76,8 @@ async function main() {
       issues: container.issues,
       artifacts: container.artifacts,
       progress: container.progress,
+      meetings: container.meetings,
+      notes: container.notes,
       writes,
     }),
     logError: log,

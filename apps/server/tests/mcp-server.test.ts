@@ -55,6 +55,8 @@ function containerGateway(
     issues: container.issues,
     artifacts: container.artifacts,
     progress: container.progress,
+    meetings: container.meetings,
+    notes: container.notes,
     writes: new McpWriteService(container.db, { enabled }),
   });
 }
@@ -116,11 +118,11 @@ afterEach(() => {
 });
 
 describe("MCP server（M2 只读）", () => {
-  it("注册 system.info 与 9 个只读业务工具，全部标注 readOnlyHint", async () => {
+  it("注册 system.info 与 15 个只读业务工具，全部标注 readOnlyHint", async () => {
     const { client, close } = await connectedServer();
     try {
       const listed = await client.listTools();
-      expect(listed.tools).toHaveLength(10);
+      expect(listed.tools).toHaveLength(16);
       const names = listed.tools.map((tool) => tool.name).sort();
       expect(names).toEqual(
         [
@@ -201,7 +203,7 @@ describe("MCP server（M2 只读）", () => {
     });
     try {
       const listed = await client.listTools();
-      expect(listed.tools).toHaveLength(15);
+      expect(listed.tools).toHaveLength(29);
       expect(
         listed.tools.find((tool) => tool.name === "issue.comment")?.annotations,
       ).toMatchObject({ readOnlyHint: false });
@@ -352,7 +354,7 @@ describe("MCP server（M2 只读）", () => {
     try {
       await client.connect(transport);
       const listed = await client.listTools();
-      expect(listed.tools).toHaveLength(10);
+      expect(listed.tools).toHaveLength(16);
       const result = await client.callTool({
         name: "system.info",
         arguments: {},

@@ -22,6 +22,26 @@ import {
   type McpIssueUnlinkWriteData,
   type McpIssueUpdateInput,
   type McpIssueWriteData,
+  type McpMeetingCreateInput,
+  type McpMeetingDeleteData,
+  type McpMeetingDeleteInput,
+  type McpMeetingGetInput,
+  type McpMeetingListInput,
+  type McpMeetingSearchInput,
+  type McpMeetingUpdateInput,
+  type McpMeetingWriteData,
+  type McpNoteArchiveData,
+  type McpNoteArchiveInput,
+  type McpNoteConvertData,
+  type McpNoteConvertInput,
+  type McpNoteCreateInput,
+  type McpNoteDeleteData,
+  type McpNoteDeleteInput,
+  type McpNoteGetInput,
+  type McpNoteListInput,
+  type McpNoteSearchInput,
+  type McpNoteUpdateInput,
+  type McpNoteWriteData,
   type McpReadResult,
   type McpRequirementGetInput,
   type McpRequirementListInput,
@@ -36,6 +56,8 @@ import {
 import { DomainError, RequirementService } from "./requirements.js";
 import { IssueService, type IssueActor } from "./issues.js";
 import { ArtifactService } from "./artifacts.js";
+import { MeetingService } from "./meetings.js";
+import { NoteService } from "./notes.js";
 import { RequirementProgressService } from "./requirement-progress.js";
 import { McpWriteService, type McpWriteTarget } from "./mcp-writes.js";
 
@@ -58,6 +80,8 @@ export interface McpGatewayDeps {
   issues: IssueService;
   artifacts: ArtifactService;
   progress: RequirementProgressService;
+  meetings: MeetingService;
+  notes: NoteService;
   writes: McpWriteService;
 }
 
@@ -102,10 +126,24 @@ interface McpToolInputs {
   "issue.activities": McpIssueActivitiesInput;
   "artifact.list": McpArtifactListInput;
   "artifact.get": McpArtifactGetInput;
+  "meeting.list": McpMeetingListInput;
+  "meeting.get": McpMeetingGetInput;
+  "meeting.search": McpMeetingSearchInput;
+  "note.list": McpNoteListInput;
+  "note.get": McpNoteGetInput;
+  "note.search": McpNoteSearchInput;
   "issue.update": McpIssueUpdateInput;
   "issue.comment": McpIssueCommentInput;
   "issue.linkAsset": McpIssueLinkAssetInput;
   "issue.unlinkAsset": McpIssueUnlinkAssetInput;
+  "meeting.create": McpMeetingCreateInput;
+  "meeting.update": McpMeetingUpdateInput;
+  "meeting.delete": McpMeetingDeleteInput;
+  "note.create": McpNoteCreateInput;
+  "note.update": McpNoteUpdateInput;
+  "note.archive": McpNoteArchiveInput;
+  "note.delete": McpNoteDeleteInput;
+  "note.convertToTask": McpNoteConvertInput;
 }
 
 const ISSUE_PREVIEW_CHARS = 200;
@@ -181,8 +219,40 @@ function actorFor(options?: McpToolCallOptions): IssueActor {
   };
 }
 
-function payloadTarget(payload: Record<string, unknown>): McpWriteTarget {
-  return issueTarget(Number(payload.requirementId), Number(payload.issueId));
+function payloadTarget(
+  tool: (typeof mcpWriteToolNames)[number],
+  payload: Record<string, unknown>,
+): McpWriteTarget {
+  switch (tool) {
+    case "issue.update":
+    case "issue.comment":
+    case "issue.linkAsset":
+    case "issue.unlinkAsset":
+      return issueTarget(
+        Number(payload.requirementId),
+        Number(payload.issueId),
+      );
+    case "meeting.create":
+      return { requirementId: null, targetType: "meeting", targetId: "new" };
+    case "meeting.update":
+    case "meeting.delete":
+      return {
+        requirementId: null,
+        targetType: "meeting",
+        targetId: String(payload.meetingId),
+      };
+    case "note.create":
+      return { requirementId: null, targetType: "note", targetId: "new" };
+    case "note.update":
+    case "note.archive":
+    case "note.delete":
+    case "note.convertToTask":
+      return {
+        requirementId: null,
+        targetType: "note",
+        targetId: String(payload.noteId),
+      };
+  }
 }
 
 function writeSummary(
@@ -190,6 +260,8 @@ function writeSummary(
   payload: Record<string, unknown>,
 ) {
   const issueId = Number(payload.issueId);
+  const meetingId = Number(payload.meetingId);
+  const noteId = Number(payload.noteId);
   switch (tool) {
     case "issue.update": {
       const fields = [
@@ -208,6 +280,34 @@ function writeSummary(
       return `关联产出物 #${Number(payload.assetId)} 到问题 #${issueId}`;
     case "issue.unlinkAsset":
       return `取消问题 #${issueId} 与产出物 #${Number(payload.assetId)} 的关联`;
+    case "meeting.create":
+      return `创建会议记录（${String(payload.type)}）`;
+    case "meeting.update": {
+      const fields = [
+        "title",
+        "type",
+        "meetingTime",
+        "requirementIds",
+        "contentHtml",
+      ].filter((key) => payload[key] !== undefined);
+      return `更新会议 #${meetingId}（${fields.join("、")}）`;
+    }
+    case "meeting.delete":
+      return `删除会议 #${meetingId}`;
+    case "note.create":
+      return "创建便签";
+    case "note.update": {
+      const fields = ["title", "content", "type", "color", "isPinned"].filter(
+        (key) => payload[key] !== undefined,
+      );
+      return `更新便签 #${noteId}（${fields.join("、")}）`;
+    }
+    case "note.archive":
+      return `${payload.archived === true ? "归档" : "恢复"}便签 #${noteId}`;
+    case "note.delete":
+      return `删除便签 #${noteId}`;
+    case "note.convertToTask":
+      return `将便签 #${noteId} 转换为每日任务`;
   }
 }
 
@@ -379,6 +479,12 @@ export function buildMcpTools(deps: McpGatewayDeps): McpGateway {
         input.nodeId,
         input.maxChars,
       ),
+    "meeting.list": (input) => deps.meetings.query(input),
+    "meeting.get": (input) => ({ meeting: deps.meetings.get(input.id) }),
+    "meeting.search": (input) => deps.meetings.search(input),
+    "note.list": (input) => deps.notes.query(input),
+    "note.get": (input) => ({ note: deps.notes.get(input.id) }),
+    "note.search": (input) => deps.notes.search(input),
     "issue.update": (input, options) => {
       const { confirmationToken, idempotencyKey, ...payload } = input;
       const { requirementId, issueId, ...patch } = payload;
@@ -489,6 +595,155 @@ export function buildMcpTools(deps: McpGatewayDeps): McpGateway {
         unlinked: true,
       } satisfies McpIssueUnlinkWriteData;
     },
+    "meeting.create": (input, options) => {
+      const { confirmationToken, idempotencyKey, ...payload } = input;
+      const meeting = writes.execute(
+        {
+          tool: "meeting.create",
+          payload,
+          idempotencyKey,
+          confirmationToken,
+          target: payloadTarget("meeting.create", payload),
+          actorName: actorFor(options).actorName,
+          summary: writeSummary("meeting.create", payload),
+        },
+        () => deps.meetings.create(payload),
+      );
+      return {
+        meeting,
+        changedFields: [
+          "title",
+          "type",
+          "meetingTime",
+          "requirementIds",
+          "contentHtml",
+        ],
+      } satisfies McpMeetingWriteData;
+    },
+    "meeting.update": (input, options) => {
+      const { confirmationToken, idempotencyKey, meetingId, ...patch } = input;
+      const meeting = writes.execute(
+        {
+          tool: "meeting.update",
+          payload: { meetingId, ...patch },
+          idempotencyKey,
+          confirmationToken,
+          target: payloadTarget("meeting.update", {
+            meetingId,
+            ...patch,
+          }),
+          actorName: actorFor(options).actorName,
+          summary: writeSummary("meeting.update", { meetingId, ...patch }),
+        },
+        () => deps.meetings.update(meetingId, patch),
+      );
+      return {
+        meeting,
+        changedFields: Object.keys(patch),
+      } satisfies McpMeetingWriteData;
+    },
+    "meeting.delete": (input, options) => {
+      const { confirmationToken, idempotencyKey, meetingId } = input;
+      writes.execute(
+        {
+          tool: "meeting.delete",
+          payload: { meetingId },
+          idempotencyKey,
+          confirmationToken,
+          target: payloadTarget("meeting.delete", { meetingId }),
+          actorName: actorFor(options).actorName,
+          summary: writeSummary("meeting.delete", { meetingId }),
+        },
+        () => deps.meetings.remove(meetingId),
+      );
+      return { meetingId, deleted: true } satisfies McpMeetingDeleteData;
+    },
+    "note.create": (input, options) => {
+      const { confirmationToken, idempotencyKey, ...payload } = input;
+      const note = writes.execute(
+        {
+          tool: "note.create",
+          payload,
+          idempotencyKey,
+          confirmationToken,
+          target: payloadTarget("note.create", payload),
+          actorName: actorFor(options).actorName,
+          summary: writeSummary("note.create", payload),
+        },
+        () => deps.notes.create(payload),
+      );
+      return {
+        note,
+        changedFields: ["title", "content", "type", "color", "isPinned"],
+      } satisfies McpNoteWriteData;
+    },
+    "note.update": (input, options) => {
+      const { confirmationToken, idempotencyKey, noteId, ...patch } = input;
+      const note = writes.execute(
+        {
+          tool: "note.update",
+          payload: { noteId, ...patch },
+          idempotencyKey,
+          confirmationToken,
+          target: payloadTarget("note.update", { noteId, ...patch }),
+          actorName: actorFor(options).actorName,
+          summary: writeSummary("note.update", { noteId, ...patch }),
+        },
+        () => deps.notes.update(noteId, patch),
+      );
+      return {
+        note,
+        changedFields: Object.keys(patch),
+      } satisfies McpNoteWriteData;
+    },
+    "note.archive": (input, options) => {
+      const { confirmationToken, idempotencyKey, noteId, archived } = input;
+      const note = writes.execute(
+        {
+          tool: "note.archive",
+          payload: { noteId, archived },
+          idempotencyKey,
+          confirmationToken,
+          target: payloadTarget("note.archive", { noteId, archived }),
+          actorName: actorFor(options).actorName,
+          summary: writeSummary("note.archive", { noteId, archived }),
+        },
+        () => deps.notes.update(noteId, { isArchived: archived }),
+      );
+      return { note, archived } satisfies McpNoteArchiveData;
+    },
+    "note.delete": (input, options) => {
+      const { confirmationToken, idempotencyKey, noteId } = input;
+      writes.execute(
+        {
+          tool: "note.delete",
+          payload: { noteId },
+          idempotencyKey,
+          confirmationToken,
+          target: payloadTarget("note.delete", { noteId }),
+          actorName: actorFor(options).actorName,
+          summary: writeSummary("note.delete", { noteId }),
+        },
+        () => deps.notes.remove(noteId),
+      );
+      return { noteId, deleted: true } satisfies McpNoteDeleteData;
+    },
+    "note.convertToTask": (input, options) => {
+      const { confirmationToken, idempotencyKey, noteId } = input;
+      const result = writes.execute(
+        {
+          tool: "note.convertToTask",
+          payload: { noteId },
+          idempotencyKey,
+          confirmationToken,
+          target: payloadTarget("note.convertToTask", { noteId }),
+          actorName: actorFor(options).actorName,
+          summary: writeSummary("note.convertToTask", { noteId }),
+        },
+        () => deps.notes.convert(noteId),
+      );
+      return result satisfies McpNoteConvertData;
+    },
   };
 
   const prepare = (
@@ -503,7 +758,7 @@ export function buildMcpTools(deps: McpGatewayDeps): McpGateway {
       tool: input.tool,
       payload,
       idempotencyKey: input.idempotencyKey,
-      target: payloadTarget(payload),
+      target: payloadTarget(input.tool, payload),
       actorName: actorFor(options).actorName,
       summary: writeSummary(input.tool, payload),
     });
