@@ -52,6 +52,19 @@ export class RequirementsRepository {
       .all()
       .map(decodeRequirement);
   }
+  references(ids: number[]) {
+    if (!ids.length) return [];
+    return this.orm
+      .select({
+        id: requirements.id,
+        requirementNo: requirements.requirementNo,
+        name: requirements.name,
+        deletedAt: requirements.deletedAt,
+      })
+      .from(requirements)
+      .where(inArray(requirements.id, ids))
+      .all();
+  }
   insert(data: RequirementCreateParsed) {
     const last = this.orm
       .select({ id: requirements.id, number: requirements.requirementNo })

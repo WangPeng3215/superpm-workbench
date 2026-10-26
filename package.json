@@ -1,6 +1,6 @@
 {
   "name": "superpm-workbench",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
   "type": "module",
   "workspaces": [
@@ -35,6 +35,9 @@
     "yazl": "^3.3.1"
   },
   "overrides": {
-    "esbuild": "^0.28.1"
+    "esbuild": "^0.28.1",
+    "@tiptap/extension-color": "3.31.4",
+    "@tiptap/extension-highlight": "3.31.4",
+    "@tiptap/extension-text-style": "3.31.4"
   }
 }

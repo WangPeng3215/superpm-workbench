@@ -2,6 +2,7 @@ import {
   requirementCreateSchema,
   requirementUpdateSchema,
   requirementListSchema,
+  type RequirementReferenceState,
 } from "@superpm/shared";
 import type Database from "better-sqlite3";
 import { RequirementsRepository } from "../repositories/requirements.js";
@@ -64,7 +65,27 @@ export class RequirementService {
       if (this.repo.children(id).length)
         throw new DomainError("CONFLICT", "存在有效子需求，无法删除", 409);
       this.repo.softDelete(id);
+      // 需求为软删除，外键级联不会触发；会议关联必须显式清理，避免留下悬空记录。
+      this.db
+        .prepare("DELETE FROM meeting_requirements WHERE requirement_id = ?")
+        .run(id);
       this.repo.audit(id, "delete", {});
+    });
+  }
+  references(ids: number[]): RequirementReferenceState[] {
+    if (!ids.length) return [];
+    const rows = this.repo.references(ids);
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    return ids.map((id) => {
+      const row = byId.get(id);
+      return row && !row.deletedAt
+        ? {
+            id,
+            requirementNo: row.requirementNo,
+            name: row.name,
+            exists: true,
+          }
+        : { id, requirementNo: null, name: null, exists: false };
     });
   }
   history(id: number) {
@@ -74,7 +95,8 @@ export class RequirementService {
   relations(id: number) {
     const item = this.get(id);
     return {
-      parent: item.parentId === null ? null : (this.repo.get(item.parentId) ?? null),
+      parent:
+        item.parentId === null ? null : (this.repo.get(item.parentId) ?? null),
       children: this.repo.children(id),
     };
   }

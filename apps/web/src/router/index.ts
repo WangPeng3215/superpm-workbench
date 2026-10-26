@@ -21,6 +21,21 @@ export const router = createRouter({
       meta: { title: "需求详情" },
     },
     {
+      path: "/meetings",
+      component: () => import("../pages/MeetingsPage.vue"),
+      meta: { title: "会议记录" },
+    },
+    {
+      path: "/meetings/new",
+      component: () => import("../pages/MeetingCreatePage.vue"),
+      meta: { title: "新建会议" },
+    },
+    {
+      path: "/meetings/:id",
+      component: () => import("../pages/MeetingDetailPage.vue"),
+      meta: { title: "会议详情" },
+    },
+    {
       path: "/tasks",
       component: () => import("../pages/DailyTasksPage.vue"),
       meta: { title: "每日任务", module: "tasks" },

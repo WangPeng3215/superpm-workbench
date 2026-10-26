@@ -6,6 +6,7 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import {
   CalendarOutlined,
   ProjectOutlined,
+  TeamOutlined,
   ToolOutlined,
 } from "@ant-design/icons-vue";
 import type { SystemInfo } from "@superpm/shared";
@@ -64,6 +65,7 @@ watch(
 
 const navigation = [
   { path: "/requirements", label: "需求列表", icon: ProjectOutlined },
+  { path: "/meetings", label: "会议记录", icon: TeamOutlined },
   { path: "/tasks", label: "每日任务", icon: CalendarOutlined },
   { path: "/online-tools", label: "在线工具", icon: ToolOutlined },
 ];

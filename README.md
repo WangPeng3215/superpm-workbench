@@ -41,6 +41,7 @@ npm start
 - 需求问题跟踪：问题、活动记录与文件关联。
 - 每日任务：按日计划与拖拽排序、关联需求、计划时段、状态筛选与月度日历；支持单活动计时、18:00/8 小时自动结束、工时校正与审计，以及可复制的每日工作总结。规则与接口见 `docs/daily-tasks.md`。
 - 在线工具箱：维护常用工具的名称、地址、图标、分类、描述、启停与收藏；全局悬浮按钮可拖动并把位置保存在本机，快捷弹窗按收藏排序搜索并新窗口打开。
+- 会议记录：记录周例会、组例会、需求沟通会议与功能上线培训，支持按标题/类型检索、关联多个需求；正文复用 Tiptap 富文本，支持文本颜色、高亮与可跳转的需求引用。
 - 需求物理目录自动初始化：可读目录名（`REQ-xxxx 名称`）、默认目录与系统级资源、失败可重试。
 - 前后端共享契约、真实 SQLite 集成测试、浏览器验收和 GitHub Actions CI 流水线。
 
@@ -182,7 +183,7 @@ npm run backup -- restore <备份ID>
 发布构建、安装包冒烟测试、真实版本升级演练与数据根迁移演练：
 
 ```powershell
-node scripts/release/build-release.mjs --version 0.6.0 --notes "更新说明"
+node scripts/release/build-release.mjs --version 0.7.0 --notes "更新说明"
 node scripts/release/rehearse-update.mjs --from release/0.2.0/superpm-workbench-0.2.0-win-x64.zip --manifest release/0.3.0/update-manifest.json
 node scripts/release/rehearse-move-home.mjs
 ```

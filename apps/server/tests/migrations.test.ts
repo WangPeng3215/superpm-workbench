@@ -453,7 +453,7 @@ describe("migrations 0005（资产与问题管理）", () => {
   });
   it("SCHEMA_VERSION 与已应用迁移数一致", () => {
     migrate(db);
-    expect(SCHEMA_VERSION).toBe(15);
+    expect(SCHEMA_VERSION).toBe(16);
     expect(appliedVersions(db)).toHaveLength(SCHEMA_VERSION);
   });
 });
@@ -967,5 +967,72 @@ describe("migrations 0015（在线工具箱）", () => {
     expect(() =>
       insert.run("示例工具", "https://example.org", timestamp, timestamp),
     ).toThrow();
+  });
+});
+
+describe("migrations 0016（会议记录）", () => {
+  it("创建会议与需求关联表，索引、唯一约束与外键级联生效", () => {
+    migrate(db);
+    expect(tableColumns(db, "meetings")).toEqual([
+      "id",
+      "title",
+      "meeting_type",
+      "meeting_time",
+      "content_html",
+      "created_at",
+      "updated_at",
+    ]);
+    expect(tableColumns(db, "meeting_requirements")).toEqual([
+      "meeting_id",
+      "requirement_id",
+      "created_at",
+    ]);
+    const indexes = (
+      db
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name IN ('meetings','meeting_requirements')",
+        )
+        .all() as { name: string }[]
+    ).map((row) => row.name);
+    expect(indexes).toEqual(
+      expect.arrayContaining([
+        "idx_meetings_time",
+        "idx_meetings_type_time",
+        "idx_meeting_requirements_requirement",
+      ]),
+    );
+
+    insertRequirement(db);
+    const timestamp = "2026-10-26T02:00:00.000Z";
+    const insertMeeting = db.prepare(
+      `INSERT INTO meetings (title, meeting_type, meeting_time, content_html, created_at, updated_at)
+       VALUES (?, ?, ?, '<p>记录</p>', ?, ?)`,
+    );
+    const meetingId = Number(
+      insertMeeting.run("周例会", "weekly", timestamp, timestamp, timestamp)
+        .lastInsertRowid,
+    );
+    // 类型枚举与标题必填约束
+    expect(() =>
+      insertMeeting.run("非法类型", "invalid", timestamp, timestamp, timestamp),
+    ).toThrowError(/CHECK/i);
+    expect(() =>
+      insertMeeting.run("", "weekly", timestamp, timestamp, timestamp),
+    ).not.toThrow();
+    // 关联联合主键拒绝重复
+    const insertLink = db.prepare(
+      "INSERT INTO meeting_requirements (meeting_id, requirement_id, created_at) VALUES (?, 1, ?)",
+    );
+    insertLink.run(meetingId, timestamp);
+    expect(() => insertLink.run(meetingId, timestamp)).toThrowError(/UNIQUE/i);
+    // 删除会议级联清理关联
+    db.prepare("DELETE FROM meetings WHERE id = ?").run(meetingId);
+    expect(
+      db.prepare("SELECT COUNT(*) AS count FROM meeting_requirements").get(),
+    ).toEqual({ count: 0 });
+    // 非法需求引用被外键拒绝
+    expect(() => insertLink.run(meetingId, timestamp)).toThrowError(
+      /FOREIGN KEY/i,
+    );
   });
 });

@@ -3,6 +3,7 @@ import type {
   RequirementCreate,
   RequirementListQuery,
   RequirementListResult,
+  RequirementReferenceState,
   RequirementRelations,
   RequirementUpdate,
   StageHistory,
@@ -34,6 +35,12 @@ export const requirementApi = {
     request<StageHistory[]>(`/requirements/${id}/history`),
   relations: (id: number) =>
     request<RequirementRelations>(`/requirements/${id}/relations`),
+  references: (ids: number[]) => {
+    if (!ids.length) return Promise.resolve([] as RequirementReferenceState[]);
+    return request<RequirementReferenceState[]>(
+      `/requirements/references?ids=${ids.join(",")}`,
+    );
+  },
   /** @deprecated 旧阶段工作区 JSON，服务端仅为兼容保留；勿在新代码中调用。 */
   workspace: (id: number) =>
     request<StageWorkspace>(`/requirements/${id}/workspace`),

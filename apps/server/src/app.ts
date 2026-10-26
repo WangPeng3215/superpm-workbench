@@ -111,6 +111,7 @@ export async function createApp(
     artifacts: artifactService,
     dailyTasks,
     onlineTools,
+    meetings,
   } = container;
   const paths = { databasePath, workspacePath };
   const updates = createUpdateService({
@@ -298,6 +299,7 @@ export async function createApp(
           status: "available",
         },
         { key: "tasks", name: roadmap.tasks, status: "available" },
+        { key: "meetings", name: "会议记录", status: "available" },
         { key: "online-tools", name: "在线工具", status: "available" },
         { key: "updates", name: "版本与更新", status: "available" },
         ...Object.entries(roadmap)
@@ -356,6 +358,22 @@ export async function createApp(
   app.post("/api/auth/logout", async (_request, reply) => {
     reply.header("set-cookie", serializeClearAuthCookie());
     return { ok: true };
+  });
+  // 静态路径先于 /:id 注册：编辑器按 ID 批量解析需求引用的最新名称。
+  const requirementReferenceQuery = z
+    .object({ ids: z.string().max(4000).default("") })
+    .strict();
+  app.get("/api/requirements/references", async (request) => {
+    const query = requirementReferenceQuery.parse(request.query ?? {});
+    const ids = [
+      ...new Set(
+        query.ids
+          .split(",")
+          .map((value) => Number(value.trim()))
+          .filter((value) => Number.isInteger(value) && value > 0),
+      ),
+    ].slice(0, 200);
+    return service.references(ids);
   });
   app.get("/api/requirements", async (request) =>
     service.list(request.query ?? {}),
@@ -684,6 +702,26 @@ export async function createApp(
     "/api/online-tools/:id",
     async (request, reply) => {
       onlineTools.remove(parseScopedId(request.params.id, "在线工具"));
+      return reply.status(204).send();
+    },
+  );
+  // ===== 会议记录 =====
+  app.get("/api/meetings", async (request) =>
+    meetings.list(request.query ?? {}),
+  );
+  app.post("/api/meetings", async (request, reply) =>
+    reply.status(201).send(meetings.create(request.body)),
+  );
+  app.get<{ Params: { id: string } }>("/api/meetings/:id", async (request) =>
+    meetings.get(parseScopedId(request.params.id, "会议")),
+  );
+  app.patch<{ Params: { id: string } }>("/api/meetings/:id", async (request) =>
+    meetings.update(parseScopedId(request.params.id, "会议"), request.body),
+  );
+  app.delete<{ Params: { id: string } }>(
+    "/api/meetings/:id",
+    async (request, reply) => {
+      meetings.remove(parseScopedId(request.params.id, "会议"));
       return reply.status(204).send();
     },
   );

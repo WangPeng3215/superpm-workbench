@@ -1,11 +1,14 @@
 <script setup lang="ts">
-import { onBeforeUnmount, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useEditor, EditorContent } from "@tiptap/vue-3";
 import StarterKit from "@tiptap/starter-kit";
 import Image from "@tiptap/extension-image";
 import { TableKit } from "@tiptap/extension-table";
 import { TaskItem, TaskList } from "@tiptap/extension-list";
 import { Placeholder } from "@tiptap/extensions";
+import { Color } from "@tiptap/extension-color";
+import { Highlight } from "@tiptap/extension-highlight";
+import { TextStyle } from "@tiptap/extension-text-style";
 import DOMPurify from "dompurify";
 import { ElMessage, ElMessageBox } from "element-plus";
 import {
@@ -15,6 +18,8 @@ import {
   BoldOutlined,
   CheckSquareOutlined,
   CodeOutlined,
+  FontColorsOutlined,
+  HighlightOutlined,
   ItalicOutlined,
   LinkOutlined,
   MinusOutlined,
@@ -22,15 +27,20 @@ import {
   PictureOutlined,
   RedoOutlined,
   StrikethroughOutlined,
+  TagsOutlined,
   UnderlineOutlined,
   UndoOutlined,
   UnorderedListOutlined,
 } from "@ant-design/icons-vue";
 import { artifactApi } from "../../api/artifacts";
 import { errorMessage } from "../../api/client";
+import { dark } from "../../theme";
 import { BlockStyle, MAX_BLOCK_INDENT, type BlockAlign } from "./block-style";
 import { imageDisplayUrl, toDisplayHtml } from "./doc-images";
 import { looksLikeMarkdown, markdownToHtml } from "./doc-markdown";
+import RequirementReferenceDialog from "./RequirementReferenceDialog.vue";
+import type { RequirementOption } from "./requirement-options";
+import { RequirementRef, resolveRequirementRefHtml } from "./requirement-ref";
 
 const props = defineProps<{
   html: string;
@@ -44,10 +54,16 @@ const props = defineProps<{
   fillCard?: boolean;
   // 紧凑模式：单行工具条 + 较低的编辑区，用于问题记录等并排双编辑器
   compact?: boolean;
+  // 只读展示：隐藏工具条并禁止编辑（会议详情复用同一套内容样式与引用交互）
+  readonly?: boolean;
+  // 会议记录等富文本正文启用颜色/高亮；Markdown 文档编辑器保持关闭
+  enableColors?: boolean;
+  enableRequirementRefs?: boolean;
 }>();
 const emit = defineEmits<{
   "update:html": [html: string];
   "update:text": [text: string];
+  "open-requirement": [id: number];
 }>();
 
 // 写入与回显共用同一份净化配置，避免链接的 target 被滤掉
@@ -57,6 +73,35 @@ const SANITIZE = {
   FORBID_ATTR: ["onerror", "onload", "onclick"],
 };
 
+// 常用色板随主题切换，保证浅色/深色背景上都有可读对比度
+const textColorPalette = computed(() =>
+  dark.value
+    ? [
+        "#e6edf3",
+        "#94a3b8",
+        "#60a5fa",
+        "#a78bfa",
+        "#2dd4bf",
+        "#fbbf24",
+        "#fb923c",
+        "#fb7185",
+      ]
+    : [
+        "#1f2328",
+        "#64748b",
+        "#2563eb",
+        "#7c3aed",
+        "#0f766e",
+        "#b45309",
+        "#c2410c",
+        "#be123c",
+      ],
+);
+const highlightPalette = computed(() =>
+  dark.value
+    ? ["#854d0e", "#166534", "#1e40af", "#9d174d", "#9a3412", "#5b21b6"]
+    : ["#fef08a", "#bbf7d0", "#bfdbfe", "#fbcfe8", "#fed7aa", "#e9d5ff"],
+);
 const uploading = ref(false);
 const input = ref<HTMLInputElement>();
 const lastEmitted = ref("");
@@ -110,11 +155,16 @@ const editor = useEditor({
     TaskList,
     TaskItem.configure({ nested: true }),
     BlockStyle,
+    ...(props.enableColors
+      ? [TextStyle, Color, Highlight.configure({ multicolor: true })]
+      : []),
+    ...(props.enableRequirementRefs ? [RequirementRef] : []),
     Placeholder.configure({
       placeholder: props.placeholder ?? "在这里输入或粘贴内容…",
     }),
   ],
   content: toHtml(props.html, props.text ?? ""),
+  editable: !props.readonly,
   editorProps: {
     attributes: {
       class: "rich-document",
@@ -171,6 +221,17 @@ const editor = useEditor({
     emit("update:text", instance.getText());
   },
 });
+let contentSeq = 0;
+async function applyExternalContent(raw: string) {
+  const seq = ++contentSeq;
+  const next = props.enableRequirementRefs
+    ? await resolveRequirementRefHtml(raw)
+    : raw;
+  if (seq !== contentSeq) return;
+  const instance = editor.value;
+  if (!instance) return;
+  instance.commands.setContent(next || "<p></p>", { emitUpdate: false });
+}
 watch(
   () => `${props.html}\u0000${props.text ?? ""}`,
   () => {
@@ -178,9 +239,75 @@ watch(
     if (!instance) return;
     const next = toHtml(props.html, props.text ?? "");
     if (next === lastEmitted.value || next === instance.getHTML()) return;
-    instance.commands.setContent(next || "<p></p>", { emitUpdate: false });
+    void applyExternalContent(next);
   },
 );
+// 首次挂载后按需求 ID 刷新引用名称：改名后显示最新名称，删除后标记失效
+onMounted(() => {
+  if (!props.enableRequirementRefs) return;
+  const raw = toHtml(props.html, props.text ?? "");
+  if (!raw.includes("data-requirement-id")) return;
+  void applyExternalContent(raw);
+});
+const textColorOpen = ref(false);
+const highlightOpen = ref(false);
+function activeTextColor(): string {
+  return (editor.value?.getAttributes("textStyle").color as string) ?? "";
+}
+function activeHighlightColor(): string {
+  return (editor.value?.getAttributes("highlight").color as string) ?? "";
+}
+function setTextColor(color: string) {
+  editor.value?.chain().focus().setColor(color).run();
+  textColorOpen.value = false;
+}
+function clearTextColor() {
+  editor.value?.chain().focus().unsetColor().run();
+  textColorOpen.value = false;
+}
+function setHighlightColor(color: string) {
+  editor.value?.chain().focus().setHighlight({ color }).run();
+  highlightOpen.value = false;
+}
+function clearHighlight() {
+  editor.value?.chain().focus().unsetHighlight().run();
+  highlightOpen.value = false;
+}
+function onCustomTextColor(event: Event) {
+  const color = (event.target as HTMLInputElement).value;
+  if (color) editor.value?.chain().focus().setColor(color).run();
+}
+function onCustomTextColorDone() {
+  textColorOpen.value = false;
+}
+const refDialogOpen = ref(false);
+function insertRequirement(option: RequirementOption) {
+  editor.value
+    ?.chain()
+    .focus()
+    .insertRequirementRef({
+      id: option.id,
+      name: option.name,
+      requirementNo: option.requirementNo,
+    })
+    .run();
+  refDialogOpen.value = false;
+}
+function onContentClick(event: MouseEvent) {
+  if (!props.enableRequirementRefs) return;
+  const target = (event.target as HTMLElement | null)?.closest<HTMLElement>(
+    "[data-requirement-id]",
+  );
+  if (!target) return;
+  event.preventDefault();
+  const id = Number(target.dataset.requirementId);
+  if (!Number.isInteger(id) || id <= 0) return;
+  if (target.dataset.requirementMissing === "true") {
+    ElMessage.warning("该需求已删除或无法访问");
+    return;
+  }
+  emit("open-requirement", id);
+}
 function setParagraph() {
   editor.value?.chain().focus().setParagraph().run();
 }
@@ -349,11 +476,17 @@ onBeforeUnmount(() => editor.value?.destroy());
 <template>
   <div
     class="inline-rich"
-    :class="{ 'fill-height': fillHeight, 'fill-card': fillCard, compact }"
+    :class="{
+      'fill-height': fillHeight,
+      'fill-card': fillCard,
+      compact,
+      readonly,
+    }"
     v-if="editor"
     @error.capture="onImageError"
+    @click="onContentClick"
   >
-    <div class="rich-toolbar" @mousedown.prevent>
+    <div class="rich-toolbar" v-if="!readonly" @mousedown.prevent>
       <div class="toolbar-group">
         <button
           type="button"
@@ -430,6 +563,121 @@ onBeforeUnmount(() => editor.value?.destroy());
           清除格式
         </button>
       </div>
+      <template v-if="enableColors">
+        <span class="toolbar-divider"></span>
+        <div class="toolbar-group">
+          <el-popover
+            v-model:visible="textColorOpen"
+            placement="bottom-start"
+            :width="210"
+            trigger="click"
+            :show-arrow="false"
+          >
+            <template #reference>
+              <button
+                type="button"
+                class="color-trigger"
+                aria-label="文字颜色"
+                title="文字颜色"
+              >
+                <FontColorsOutlined />
+                <span
+                  class="color-bar"
+                  :style="{
+                    background: activeTextColor() || 'var(--text-body)',
+                  }"
+                  aria-hidden="true"
+                />
+              </button>
+            </template>
+            <div class="color-panel" @mousedown.prevent>
+              <div class="color-panel-title">文字颜色</div>
+              <div class="color-grid">
+                <button
+                  v-for="color in textColorPalette"
+                  :key="color"
+                  type="button"
+                  class="color-chip"
+                  :style="{ background: color }"
+                  :aria-label="`文字颜色 ${color}`"
+                  :title="color"
+                  @click="setTextColor(color)"
+                />
+              </div>
+              <div class="color-panel-actions">
+                <button
+                  type="button"
+                  class="color-clear"
+                  @click="clearTextColor"
+                >
+                  清除颜色
+                </button>
+                <label class="custom-color">
+                  自定义
+                  <input
+                    type="color"
+                    :value="activeTextColor() || '#2563eb'"
+                    aria-label="自定义文字颜色"
+                    @mousedown.stop
+                    @input="onCustomTextColor"
+                    @change="onCustomTextColorDone"
+                  />
+                </label>
+              </div>
+            </div>
+          </el-popover>
+          <el-popover
+            v-model:visible="highlightOpen"
+            placement="bottom-start"
+            :width="210"
+            trigger="click"
+            :show-arrow="false"
+          >
+            <template #reference>
+              <button
+                type="button"
+                class="color-trigger"
+                aria-label="文字高亮"
+                title="文字高亮"
+              >
+                <HighlightOutlined />
+                <span
+                  class="color-bar"
+                  :style="{
+                    background:
+                      activeHighlightColor() || 'var(--tone-amber-bg)',
+                  }"
+                  aria-hidden="true"
+                />
+              </button>
+            </template>
+            <div class="color-panel" @mousedown.prevent>
+              <div class="color-panel-title">文字高亮</div>
+              <div class="color-grid color-grid--highlight">
+                <button
+                  v-for="color in highlightPalette"
+                  :key="color"
+                  type="button"
+                  class="color-chip"
+                  :style="{ background: color }"
+                  :aria-label="`高亮颜色 ${color}`"
+                  :title="color"
+                  @click="setHighlightColor(color)"
+                />
+              </div>
+              <div class="color-panel-actions">
+                <button
+                  type="button"
+                  class="color-clear"
+                  @click="clearHighlight"
+                >
+                  清除高亮
+                </button>
+              </div>
+            </div>
+          </el-popover>
+        </div>
+      </template>
       <span class="toolbar-divider toolbar-divider--heading"></span>
       <div class="toolbar-group toolbar-group--heading">
         <button
@@ -640,6 +888,15 @@ onBeforeUnmount(() => editor.value?.destroy());
           <LinkOutlined />
         </button>
         <button
+          v-if="enableRequirementRefs"
+          type="button"
+          aria-label="插入需求引用"
+          title="插入需求引用"
+          @click="refDialogOpen = true"
+        >
+          <TagsOutlined />
+        </button>
+        <button
           type="button"
           :disabled="uploading || !requirementId"
           :title="
@@ -664,6 +921,11 @@ onBeforeUnmount(() => editor.value?.destroy());
       </div>
     </div>
     <EditorContent :editor="editor" />
+    <RequirementReferenceDialog
+      v-if="enableRequirementRefs"
+      v-model="refDialogOpen"
+      @select="insertRequirement"
+    />
   </div>
 </template>
 <style scoped>
@@ -987,5 +1249,147 @@ onBeforeUnmount(() => editor.value?.destroy());
   float: left;
   height: 0;
   pointer-events: none;
+}
+/* 文字颜色/高亮：色块下划线跟随当前值，清除操作与设置分开 */
+.inline-rich .rich-toolbar button.color-trigger {
+  position: relative;
+  padding-bottom: 2px;
+}
+.inline-rich .rich-toolbar .color-bar {
+  position: absolute;
+  right: 5px;
+  bottom: 3px;
+  left: 5px;
+  height: 3px;
+  border-radius: 2px;
+  pointer-events: none;
+}
+.color-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.color-panel-title {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+.color-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 7px;
+}
+.color-grid--highlight {
+  grid-template-columns: repeat(6, 1fr);
+}
+.color-chip {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid rgb(0 0 0 / 12%);
+  border-radius: 50%;
+  cursor: pointer;
+  transition:
+    transform var(--duration-fast) var(--ease-standard),
+    box-shadow var(--duration-fast) var(--ease-standard);
+}
+.color-chip:hover {
+  transform: scale(1.14);
+  box-shadow: 0 0 0 2px var(--bg-brand-soft);
+}
+.color-chip:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+.color-panel-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 2px;
+  border-top: 1px solid var(--border-soft);
+}
+.color-clear {
+  padding: 3px 0;
+  border: 0;
+  background: transparent;
+  color: var(--brand);
+  font-size: 12px;
+  cursor: pointer;
+}
+.color-clear:hover {
+  color: var(--brand-strong);
+  text-decoration: underline;
+}
+.custom-color {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.custom-color input {
+  width: 28px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+/* 需求引用：内联胶囊；失效引用保留名称并弱化展示，点击给出提示 */
+.inline-rich :deep(.rich-document .requirement-ref) {
+  display: inline-block;
+  max-width: 100%;
+  margin: 0 2px;
+  padding: 0 7px;
+  overflow: hidden;
+  border: 1px solid var(--border-brand);
+  border-radius: 99px;
+  background: var(--bg-brand-soft);
+  color: var(--brand);
+  font-size: 12px;
+  line-height: 1.75;
+  text-overflow: ellipsis;
+  vertical-align: 1px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard);
+}
+.inline-rich :deep(.rich-document .requirement-ref:hover) {
+  border-color: var(--brand);
+  background: color-mix(in srgb, var(--brand) 16%, transparent);
+}
+.inline-rich :deep(.rich-document .requirement-ref.is-missing) {
+  border-color: var(--tone-red-bd);
+  background: var(--tone-red-bg);
+  color: var(--tone-red-fg);
+  cursor: help;
+  text-decoration: line-through;
+}
+.inline-rich :deep(.rich-document .requirement-ref.ProseMirror-selectednode) {
+  outline: 2px solid var(--brand);
+  outline-offset: 1px;
+}
+/* 只读展示：去掉编辑器外框与工具栏，内容直接嵌在详情卡片中 */
+.inline-rich.readonly {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.inline-rich.readonly:focus-within {
+  box-shadow: none;
+}
+.inline-rich.readonly :deep(.rich-document) {
+  min-height: 80px;
+  max-height: none;
+  padding: 0;
+  cursor: default;
+}
+.inline-rich.readonly
+  :deep(.rich-document p.is-editor-empty:first-child::before) {
+  display: none;
 }
 </style>
