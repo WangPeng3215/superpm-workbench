@@ -10,9 +10,10 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          # 需要标签注对象才能把注记首行写进更新清单说明
-          fetch-tags: true
+      - name: 拉取标签注对象
+        shell: bash
+        # fetch-tags 在标签触发时与 checkout 的 SHA refspec 冲突，改为单独拉取
+        run: git fetch --tags --force
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
