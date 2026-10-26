@@ -198,16 +198,6 @@ onMounted(load);
 </script>
 
 <template>
-  <div class="page-heading">
-    <div>
-      <h1>在线工具</h1>
-      <p>维护工具信息，配置全局快捷入口。</p>
-    </div>
-    <el-button type="primary" :icon="PlusIcon" @click="openCreate">
-      添加工具
-    </el-button>
-  </div>
-
   <div class="tools-toolbar">
     <el-input
       v-model="keyword"
@@ -237,6 +227,9 @@ onMounted(load);
     <span class="toolbar-spacer" />
     <el-button text :icon="ReloadIcon" :loading="loading" @click="load">
       刷新
+    </el-button>
+    <el-button type="primary" :icon="PlusIcon" @click="openCreate">
+      添加工具
     </el-button>
   </div>
 

@@ -176,7 +176,7 @@ npm run mcp:dev -w @superpm/server
 | `type`          | enum         | —           | `feature` `improvement` `bug` `refactor` `other`                                                                                                                             |
 | `priority`      | enum         | —           | `P0` `P1` `P2` `P3`                                                                                                                                                          |
 | `status`        | enum         | —           | `not_started` `in_progress` `blocked` `paused` `completed` `cancelled`                                                                                                       |
-| `currentStage`  | enum         | —           | `analysis` `design` `development` `testing`                                                                                                                                  |
+| `currentStage`  | enum         | —           | `analysis` `design` `development` `testing` `online`                                                                                                                         |
 | `*From` / `*To` | `YYYY-MM-DD` | —           | 六组各自成对：`proposedAt` `startedAt` `expectedAt` `completedAt` `plannedReleaseAt` `releasedAt`；闭区间，可只给一端                                                        |
 | `page`          | int          | 1           | `>= 1`                                                                                                                                                                       |
 | `pageSize`      | int          | 20          | 1–100                                                                                                                                                                        |
@@ -230,7 +230,7 @@ npm run mcp:dev -w @superpm/server
 | 参数            | 类型   | 默认 | 约束                                                      |
 | --------------- | ------ | ---- | --------------------------------------------------------- |
 | `requirementId` | int    | 必填 | 正整数                                                    |
-| `stage`         | enum   | —    | `analysis` `design` `development` `testing`               |
+| `stage`         | enum   | —    | `analysis` `design` `development` `testing` `online`      |
 | `status`        | enum   | —    | `pending` `to_confirm` `processing` `resolved` `wont_fix` |
 | `type`          | enum   | —    | `analysis` `ui` `development` `testing` `other`           |
 | `q`             | string | —    | 最长 200；对标题与描述正文做忽略大小写包含匹配            |
@@ -313,7 +313,7 @@ npm run mcp:dev -w @superpm/server
 | `requirementId` / `issueId` | int       | 必填 | 正整数，二者必须匹配                                        |
 | `title`                     | string    | —    | trim 后 1–200 字符                                          |
 | `description`               | string    | —    | 最长 200,000 字符                                           |
-| `stage`                     | enum      | —    | `analysis` `design` `development` `testing`                 |
+| `stage`                     | enum      | —    | `analysis` `design` `development` `testing` `online`        |
 | `type`                      | enum/null | —    | `analysis` `ui` `development` `testing` `other`，可显式置空 |
 | `status`                    | enum      | —    | `pending` `to_confirm` `processing` `resolved` `wont_fix`   |
 | `solution`                  | string    | —    | 最长 200,000 字符                                           |

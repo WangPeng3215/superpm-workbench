@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
 import type { FastifyInstance } from "fastify";
+import { stages } from "@superpm/shared";
 import type {
   ArtifactImageUploadResult,
   Issue,
@@ -88,8 +89,8 @@ describe("issues API with real SQLite", () => {
       offset: 0,
       hasMore: false,
     });
-    // 四阶段、状态与类型过滤同样为空数组
-    for (const stage of ["analysis", "design", "development", "testing"]) {
+    // 全部阶段、状态与类型过滤同样为空数组
+    for (const stage of stages) {
       const scoped = (
         await app.inject(
           `/api/requirements/${requirement.id}/issues?stage=${stage}`,
@@ -138,7 +139,7 @@ describe("issues API with real SQLite", () => {
       activityType: "system",
       actorType: "system",
     });
-    // 未指定阶段时取需求当前阶段（默认需求分析），四阶段均可记录问题
+    // 未指定阶段时取需求当前阶段（默认需求分析），所有阶段均可记录问题
     const defaulted = (
       await app.inject({
         method: "POST",

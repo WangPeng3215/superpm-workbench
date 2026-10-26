@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
-import { SearchOutlined } from "@ant-design/icons-vue";
+import { computed, onMounted, ref } from "vue";
+import { CloseOutlined, SearchOutlined } from "@ant-design/icons-vue";
 import type { MeetingRequirementRef } from "@superpm/shared";
 import { decorative } from "../../components/decorativeIcon";
 import {
@@ -14,32 +14,19 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{
   "update:modelValue": [value: MeetingRequirementRef[]];
+  "open-requirement": [id: number];
 }>();
 
 const SearchIcon = decorative(SearchOutlined);
 const options = ref<RequirementOption[]>([]);
-const results = ref<RequirementOption[]>([]);
 const loading = ref(false);
+const pickedId = ref<number>();
 let requestSeq = 0;
 let timer: number | undefined;
 
-function selectedOptions(): RequirementOption[] {
-  return props.modelValue.map((item) => ({
-    id: item.id,
-    requirementNo: item.requirementNo,
-    name: item.name,
-    depth: 0,
-    label: `${item.requirementNo} · ${item.name}`,
-  }));
-}
-
-// 已选项永远保留在候选里，继续搜索不会让已选标签丢失
-function mergeOptions(items: RequirementOption[]) {
-  const merged = selectedOptions();
-  for (const item of items)
-    if (!merged.some((existing) => existing.id === item.id)) merged.push(item);
-  options.value = merged;
-}
+const selectedIds = computed(
+  () => new Set(props.modelValue.map((item) => item.id)),
+);
 
 async function load(query: string) {
   const seq = ++requestSeq;
@@ -47,10 +34,9 @@ async function load(query: string) {
   try {
     const items = await searchRequirementOptions(query);
     if (seq !== requestSeq) return;
-    results.value = items;
-    mergeOptions(items);
+    options.value = items;
   } catch {
-    // 搜索失败时保留现有选项，避免已选需求被清空
+    // 搜索失败时保留现有选项，避免列表闪空
   } finally {
     if (seq === requestSeq) loading.value = false;
   }
@@ -62,81 +48,114 @@ function search(query: string) {
 }
 
 function onVisibleChange(open: boolean) {
-  if (open && !results.value.length) void load("");
+  if (open) void load("");
 }
 
-watch(
-  () => props.modelValue,
-  () => mergeOptions(results.value),
-  { deep: true },
-);
+// 搜索框只负责检索：选中即加入下方列表并清空，不在框内保留标签
+function addRequirement(id?: number) {
+  const option =
+    id === undefined ? undefined : options.value.find((item) => item.id === id);
+  if (option && !selectedIds.value.has(option.id)) {
+    emit("update:modelValue", [
+      ...props.modelValue,
+      {
+        id: option.id,
+        requirementNo: option.requirementNo,
+        name: option.name,
+      },
+    ]);
+  }
+  pickedId.value = undefined;
+}
 
-const selectedIds = computed({
-  get: () => props.modelValue.map((item) => item.id),
-  set: (value: number[]) => {
-    const lookup = new Map(options.value.map((item) => [item.id, item]));
-    const next = value
-      .map((id) => {
-        const known = props.modelValue.find((item) => item.id === id);
-        if (known) return known;
-        const option = lookup.get(id);
-        return option
-          ? {
-              id: option.id,
-              requirementNo: option.requirementNo,
-              name: option.name,
-            }
-          : null;
-      })
-      .filter((item): item is MeetingRequirementRef => item !== null);
-    emit("update:modelValue", next);
-  },
-});
+function removeRequirement(id: number) {
+  emit(
+    "update:modelValue",
+    props.modelValue.filter((item) => item.id !== id),
+  );
+}
 
-onMounted(() => {
-  mergeOptions([]);
-  void load("");
-});
+onMounted(() => void load(""));
 </script>
 
 <template>
-  <el-select
-    v-model="selectedIds"
-    multiple
-    filterable
-    remote
-    clearable
-    collapse-tags
-    collapse-tags-tooltip
-    :max-collapse-tags="3"
-    :remote-method="search"
-    :loading="loading"
-    :disabled="disabled"
-    placeholder="搜索需求编号或名称，可多选"
-    aria-label="关联需求"
-    style="width: 100%"
-    @visible-change="onVisibleChange"
-  >
-    <template #prefix>
-      <el-icon class="select-search" aria-hidden="true">
-        <component :is="SearchIcon" />
-      </el-icon>
-    </template>
-    <el-option
-      v-for="option in options"
-      :key="option.id"
-      :label="option.label"
-      :value="option.id"
+  <div class="requirement-picker">
+    <el-select
+      v-model="pickedId"
+      filterable
+      remote
+      :remote-method="search"
+      :loading="loading"
+      :disabled="disabled"
+      placeholder="搜索需求编号或名称，点击结果添加"
+      aria-label="搜索需求"
+      style="width: 100%"
+      @visible-change="onVisibleChange"
+      @change="addRequirement"
     >
-      <div class="requirement-option">
-        <span class="requirement-no">{{ option.requirementNo }}</span>
-        <span class="requirement-name">{{ option.name }}</span>
+      <template #prefix>
+        <el-icon class="select-search" aria-hidden="true">
+          <component :is="SearchIcon" />
+        </el-icon>
+      </template>
+      <el-option
+        v-for="option in options"
+        :key="option.id"
+        :label="option.label"
+        :value="option.id"
+        :disabled="selectedIds.has(option.id)"
+      >
+        <div class="requirement-option">
+          <span class="requirement-no">{{ option.requirementNo }}</span>
+          <span class="requirement-name">{{ option.name }}</span>
+          <span v-if="selectedIds.has(option.id)" class="requirement-added">
+            已添加
+          </span>
+        </div>
+      </el-option>
+      <template #empty>
+        <p class="requirements-empty">没有匹配的需求</p>
+      </template>
+    </el-select>
+
+    <div v-if="modelValue.length" class="selected-list">
+      <div
+        v-for="item in modelValue"
+        :key="item.id"
+        class="selected-row"
+        :title="`${item.requirementNo} ${item.name}`"
+      >
+        <button
+          type="button"
+          class="selected-open"
+          :aria-label="`打开需求 ${item.requirementNo}`"
+          @click="emit('open-requirement', item.id)"
+        >
+          <span class="selected-no">{{ item.requirementNo }}</span>
+          <span class="selected-name">{{ item.name }}</span>
+        </button>
+        <button
+          type="button"
+          class="selected-remove"
+          :disabled="disabled"
+          :aria-label="`移除关联 ${item.requirementNo}`"
+          title="移除关联"
+          @click="removeRequirement(item.id)"
+        >
+          <el-icon aria-hidden="true"><CloseOutlined /></el-icon>
+        </button>
       </div>
-    </el-option>
-  </el-select>
+    </div>
+    <p v-else class="selected-empty">尚未关联需求。</p>
+  </div>
 </template>
 
 <style scoped>
+.requirement-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
 .select-search {
   color: var(--text-faint);
 }
@@ -156,5 +175,101 @@ onMounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.requirement-added {
+  flex: none;
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: 10px;
+}
+.requirements-empty {
+  margin: 0;
+  padding: 8px 0;
+  color: var(--text-faint);
+  font-size: 12px;
+  text-align: center;
+}
+.selected-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.selected-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  background: var(--bg-surface);
+  color: var(--text-regular);
+  font-size: 12px;
+  transition:
+    border-color var(--duration-fast) var(--ease-standard),
+    background var(--duration-fast) var(--ease-standard);
+}
+.selected-row:hover {
+  border-color: var(--border-brand);
+  background: var(--bg-brand-soft);
+}
+.selected-open {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.selected-open:hover .selected-name {
+  color: var(--brand);
+}
+.selected-no {
+  flex: none;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.selected-name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.selected-remove {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 11px;
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+.selected-remove:hover:not(:disabled) {
+  background: var(--tone-red-bg);
+  color: var(--tone-red-fg);
+}
+.selected-remove:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+.selected-empty {
+  margin: 0;
+  color: var(--text-faint);
+  font-size: 11px;
 }
 </style>

@@ -29,12 +29,10 @@ onMounted(load);
 watch(dataRootRevision, () => void load());
 </script>
 <template>
-  <div class="page-heading">
-    <div>
-      <h1>系统设置</h1>
-      <p>本地数据位置、版本与更新。</p>
-    </div>
-    <el-button @click="load" :loading="loading">刷新信息</el-button>
+  <div class="settings-actions">
+    <el-button text size="small" :loading="loading" @click="load">
+      刷新信息
+    </el-button>
   </div>
   <el-alert
     v-if="error"
@@ -90,6 +88,11 @@ watch(dataRootRevision, () => void load());
   </div>
 </template>
 <style scoped>
+.settings-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
 .settings-layout {
   display: grid;
   grid-template-columns: 176px minmax(0, 1fr);

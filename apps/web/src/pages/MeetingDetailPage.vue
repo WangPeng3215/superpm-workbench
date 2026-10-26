@@ -232,15 +232,9 @@ async function removeMeeting() {
           </div>
           <span v-else class="editing-hint">编辑中，保存后生效</span>
         </div>
-        <div class="head-meta">
-          <span class="meta-item">
-            <el-icon aria-hidden="true"><component :is="ClockIcon" /></el-icon>
-            {{ formatMeetingTime(meeting.meetingTime) }}
-          </span>
-        </div>
       </section>
 
-      <section v-if="editing" class="surface detail-card">
+      <section v-if="editing" class="surface edit-surface">
         <MeetingForm
           ref="form"
           :key="meeting.id"
@@ -253,57 +247,90 @@ async function removeMeeting() {
         />
       </section>
 
-      <template v-else>
-        <section class="surface detail-card">
-          <h2>关联需求</h2>
-          <div v-if="meeting.requirements.length" class="requirement-chips">
-            <button
-              v-for="item in meeting.requirements"
-              :key="item.id"
-              type="button"
-              class="requirement-chip"
-              @click="openRequirement(item.id)"
-            >
-              <span class="chip-no">{{ item.requirementNo }}</span>
-              <span class="chip-name">{{ item.name }}</span>
-            </button>
-          </div>
-          <p v-else class="muted empty-text">未关联需求。</p>
-        </section>
-
-        <section class="surface detail-card">
-          <h2>会议内容</h2>
+      <div v-else class="detail-grid">
+        <section class="surface content-panel">
           <InlineRichTextEditor
             v-if="meeting.contentHtml"
             :key="meeting.id"
             readonly
             :html="meeting.contentHtml"
             label="会议内容"
-            enable-colors
-            enable-requirement-refs
             @open-requirement="openRequirement"
           />
-          <p v-else class="muted empty-text">暂无会议内容。</p>
+          <div v-else class="empty-content">
+            <p class="muted empty-text">暂无会议内容。</p>
+            <el-button size="small" :icon="EditIcon" @click="startEdit">
+              编辑记录
+            </el-button>
+          </div>
         </section>
-      </template>
+
+        <aside class="detail-side">
+          <section class="surface side-card">
+            <h2>会议信息</h2>
+            <div class="meta-row">
+              <span class="meta-label">类型</span>
+              <el-tag
+                size="small"
+                class="enum-tag"
+                :class="meetingTypeTone[meeting.type]"
+              >
+                {{ meetingTypeLabels[meeting.type] }}
+              </el-tag>
+            </div>
+            <div class="meta-row">
+              <span class="meta-label">时间</span>
+              <span class="meta-value">
+                <el-icon aria-hidden="true"
+                  ><component :is="ClockIcon"
+                /></el-icon>
+                {{ formatMeetingTime(meeting.meetingTime) }}
+              </span>
+            </div>
+          </section>
+
+          <section class="surface side-card">
+            <h2>关联需求</h2>
+            <div v-if="meeting.requirements.length" class="requirement-list">
+              <button
+                v-for="item in meeting.requirements"
+                :key="item.id"
+                type="button"
+                class="requirement-row"
+                :title="`${item.requirementNo} ${item.name}`"
+                @click="openRequirement(item.id)"
+              >
+                <span class="chip-no">{{ item.requirementNo }}</span>
+                <span class="chip-name">{{ item.name }}</span>
+              </button>
+            </div>
+            <p v-else class="muted empty-text">未关联需求。</p>
+          </section>
+        </aside>
+      </div>
     </template>
   </div>
 </template>
 
 <style scoped>
 .meeting-detail {
+  /* 视口限高：页头固定，正文区左右分栏并各自消化溢出。
+     40px = 全局 .page-content 的上下内边距（20px × 2） */
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   width: 100%;
-  max-width: 1180px;
+  height: calc(100dvh - var(--app-header-h) - 40px);
+  min-height: 0;
   margin: 0 auto;
 }
 .load-error {
+  flex: none;
   margin-bottom: 0;
 }
 .detail-head {
-  padding: 14px 18px 12px;
+  flex: none;
+  padding: 8px 18px;
 }
 .head-row {
   display: flex;
@@ -343,7 +370,7 @@ async function removeMeeting() {
 .head-title {
   margin: 0;
   overflow: hidden;
-  font-size: 17px;
+  font-size: 16px;
   font-weight: 650;
   letter-spacing: -0.2px;
   line-height: 1.35;
@@ -364,52 +391,106 @@ async function removeMeeting() {
   color: var(--warning-text);
   font-size: 11px;
 }
-.head-meta {
+.detail-grid {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
+  gap: 16px;
+  min-height: 0;
+}
+.content-panel {
+  position: relative;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+}
+/* 只读编辑器没有工具条，直接铺满左栏并让正文内部滚动 */
+.content-panel > .inline-rich {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+}
+.content-panel > .inline-rich :deep(.rich-document) {
+  height: 100%;
+  min-height: 0;
+  max-height: none;
+  padding: 16px 18px;
+}
+.empty-content {
+  display: flex;
+  height: 100%;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+.empty-text {
+  margin: 0;
+}
+.detail-side {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  overflow-y: auto;
+}
+.side-card {
+  flex: none;
+  padding: 14px 16px;
+}
+.side-card h2 {
+  margin: 0 0 10px;
+  font-size: 13px;
+}
+.meta-row {
   display: flex;
   align-items: center;
-  gap: 16px;
-  margin-top: 8px;
-  padding-left: 38px;
-  color: var(--text-muted);
+  gap: 10px;
+  padding: 4px 0;
   font-size: 12px;
 }
-.meta-item {
+.meta-label {
+  flex: none;
+  width: 32px;
+  color: var(--text-faint);
+  font-size: 11px;
+}
+.meta-value {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  color: var(--text-secondary);
   font-variant-numeric: tabular-nums;
 }
-.detail-card {
-  padding: 18px 22px;
-}
-.detail-card h2 {
-  margin: 0 0 12px;
-  font-size: 14px;
-}
-.requirement-chips {
+.requirement-list {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  flex-direction: column;
+  gap: 6px;
 }
-.requirement-chip {
-  display: inline-flex;
+.requirement-row {
+  display: flex;
   align-items: center;
   gap: 8px;
-  max-width: 100%;
-  padding: 4px 10px;
-  border: 1px solid var(--border-brand);
-  border-radius: 99px;
-  background: var(--bg-brand-soft);
-  color: var(--brand);
+  width: 100%;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  background: var(--bg-subtle);
+  color: var(--text-regular);
   font-size: 12px;
+  text-align: left;
   cursor: pointer;
   transition:
     border-color var(--duration-fast) var(--ease-standard),
-    background var(--duration-fast) var(--ease-standard);
+    background var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
 }
-.requirement-chip:hover {
-  border-color: var(--brand);
-  background: color-mix(in srgb, var(--brand) 14%, transparent);
+.requirement-row:hover {
+  border-color: var(--border-brand);
+  background: var(--bg-brand-soft);
+  color: var(--brand);
 }
 .chip-no {
   flex: none;
@@ -422,8 +503,32 @@ async function removeMeeting() {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.empty-text {
-  margin: 0;
+.edit-surface {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 14px 18px;
+  overflow: hidden;
+}
+.edit-surface :deep(.meeting-form) {
+  height: 100%;
+}
+@media (max-width: 980px) {
+  .meeting-detail {
+    height: auto;
+  }
+  .detail-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .content-panel {
+    min-height: 420px;
+  }
+  .detail-side {
+    overflow: visible;
+  }
+  .edit-surface {
+    padding: 14px 12px;
+  }
 }
 @media (max-width: 700px) {
   .detail-head {
@@ -439,12 +544,6 @@ async function removeMeeting() {
   .editing-hint {
     width: 100%;
     justify-content: flex-end;
-  }
-  .head-meta {
-    padding-left: 0;
-  }
-  .detail-card {
-    padding: 14px 12px;
   }
 }
 </style>

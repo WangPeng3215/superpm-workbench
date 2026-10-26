@@ -78,18 +78,53 @@ function carrierAttributes(value: string) {
   return `${style}${level ? ` data-indent="${level}"` : ""}`;
 }
 
+// 载体 span 内可能嵌套颜色/高亮/需求引用等行内 HTML，不能用非贪婪正则找结束标签；
+// 按 <span> 深度扫描，找到与载体配对的 </span> 后再还原块属性
+function matchingSpanEnd(html: string, bodyStart: number) {
+  let depth = 1;
+  const tags = /<span\b[^>]*>|<\/span>/gi;
+  tags.lastIndex = bodyStart;
+  let match: RegExpExecArray | null;
+  while ((match = tags.exec(html))) {
+    if (match[0].startsWith("</")) depth -= 1;
+    else depth += 1;
+    if (depth === 0) {
+      return { body: html.slice(bodyStart, match.index), end: tags.lastIndex };
+    }
+  }
+  return null;
+}
+
 function restoreBlockCarriers(html: string) {
-  return html
-    .replace(
-      /<p><span data-block="([^"]+)">([\s\S]*?)<\/span><\/p>/g,
-      (_match, value: string, body: string) =>
-        `<p${carrierAttributes(value)}>${body}</p>`,
-    )
-    .replace(
-      /<li><span data-block="([^"]+)">([\s\S]*?)<\/span>/g,
-      (_match, value: string, body: string) =>
-        `<li><p${carrierAttributes(value)}>${body}</p>`,
-    );
+  let result = "";
+  let cursor = 0;
+  const paragraph = /<p><span data-block="([^"]+)">/g;
+  let match: RegExpExecArray | null;
+  while ((match = paragraph.exec(html))) {
+    const span = matchingSpanEnd(html, paragraph.lastIndex);
+    if (!span || !html.startsWith("</p>", span.end)) continue;
+    result +=
+      html.slice(cursor, match.index) +
+      `<p${carrierAttributes(match[1])}>${span.body}</p>`;
+    cursor = span.end + 4;
+    paragraph.lastIndex = cursor;
+  }
+  result += html.slice(cursor);
+
+  let restored = "";
+  cursor = 0;
+  const listItem = /<li><span data-block="([^"]+)">/g;
+  while ((match = listItem.exec(result))) {
+    const span = matchingSpanEnd(result, listItem.lastIndex);
+    if (!span) continue;
+    restored +=
+      result.slice(cursor, match.index) +
+      `<li><p${carrierAttributes(match[1])}>${span.body}</p>`;
+    cursor = span.end;
+    listItem.lastIndex = cursor;
+  }
+  restored += result.slice(cursor);
+  return restored;
 }
 
 /** Markdown 正文 → 编辑器 HTML（未做图片地址转换，调用方按文档目录再处理） */
@@ -304,6 +339,20 @@ function createMarkdownWriter() {
   service.addRule("strikethrough", {
     filter: ["del", "s"],
     replacement: (content) => `~~${content}~~`,
+  });
+  // 文字颜色、高亮与需求引用都没有 Markdown 语法，保留内联 HTML 以保证往返不丢格式；
+  // 列表项的块级样式载体由 blockCarrier 规则处理，这里必须跳过 data-block
+  service.addRule("inlineHtml", {
+    filter: (node) => {
+      if (node.nodeName === "MARK") return true;
+      if (node.nodeName !== "SPAN") return false;
+      const element = node as Element;
+      if (element.hasAttribute("data-block")) return false;
+      if (element.hasAttribute("data-requirement-id")) return true;
+      const style = element.getAttribute("style") ?? "";
+      return /(?:^|;)\s*(?:color|background-color)\s*:/i.test(style);
+    },
+    replacement: (_content, node) => (node as Element).outerHTML,
   });
   service.keep(["u"]);
   return service;

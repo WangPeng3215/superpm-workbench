@@ -12,6 +12,7 @@ import { documentToEditorHtml, htmlToMarkdown } from "./doc-markdown";
 // 存储约定（V1.1 §12）：磁盘上保存原生 Markdown，编辑器内保持所见即所得，
 // 读取时 Markdown → HTML，保存时 HTML → Markdown，图片始终写相对文档目录的路径。
 const props = defineProps<{ requirementId: number; node: ArtifactNode }>();
+const emit = defineEmits<{ "open-requirement": [id: number] }>();
 const opening = ref(true);
 const ready = ref(false);
 const loadError = ref("");
@@ -169,6 +170,7 @@ onBeforeUnmount(() => {
         fill-height
         @update:html="onHtml"
         @update:text="onText"
+        @open-requirement="emit('open-requirement', $event)"
       />
       <p v-else-if="loadError" class="muted">{{ loadError }}</p>
       <div class="md-footer">

@@ -46,7 +46,7 @@
 - 主键一律 `INTEGER PRIMARY KEY AUTOINCREMENT`。
 - 日期 `YYYY-MM-DD` TEXT；时间戳 ISO 8601 TEXT；无 SQLite 原生日期类型。
 - 枚举值 TEXT 存储，合法值定义在 `packages/shared`（zod 校验）。
-- 四步骤枚举：`stages = ["analysis", "design", "development", "testing"]`。
+- 阶段枚举：`stages = ["analysis", "design", "development", "testing", "online"]`。
 
 `requirement_files` 现有列：`id, requirement_id, phase, category, name(展示名), file_name(落盘 UUID 物理名), kind('file'|'link'), link_url, is_final, created_at, updated_at`。
 
@@ -62,7 +62,7 @@
 
 - 需求详情页 `RequirementDetailPage.vue`：返回链接 + 顶部标题卡（编号/标题/操作 + 横向步骤时间线）+ 双 tab（需求详情 / 需求进展）。
   - 详情 tab：左侧富文本描述编辑器（占满卡片）+ 右侧表单。
-  - 进展 tab：`RequirementAnalysisPanel.vue`（左侧编辑器 + 右侧文件 tab 列表）。当前仅 analysis 阶段有完整面板；design/development/testing 共用占位（阶段切换仅改变查看视角，无各阶段专属 UI）。
+  - 进展 tab：`RequirementAnalysisPanel.vue`（左侧编辑器 + 右侧文件 tab 列表）。当前仅 analysis 阶段有完整面板；design/development/testing/online 共用占位（阶段切换仅改变查看视角，无各阶段专属 UI）。
 - API 层：`apps/web/src/api/*.ts` 薄封装 fetch；类型来自 `@superpm/shared`。
 
 ## 6. 测试体系

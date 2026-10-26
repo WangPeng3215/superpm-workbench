@@ -277,11 +277,17 @@ test("stage workspace persists analysis docs and issue resolution", async ({
   await expect(issuesPanel.locator(".meta-field--status")).toContainText(
     "已解决",
   );
+  // 新增的「已上线」阶段可在详情中切换并回显
+  await switchStage(page, "已上线");
+  await expect(
+    page.locator("label.field").filter({ hasText: "当前阶段" }),
+  ).toContainText("已上线");
   // 服务端持久化校验：需求记忆文档内容与各阶段问题状态
   const found = await (
     await request.get(`/api/requirements?q=${encodeURIComponent(name)}`)
   ).json();
   const id = found.items[0].id;
+  expect(found.items[0].currentStage).toBe("online");
   const memory = (await (
     await request.get(`/api/requirements/${id}/memory`)
   ).json()) as { id: number };
@@ -459,6 +465,12 @@ test("workbench shell uses compact native theme and collapsed navigation", async
   page,
 }) => {
   await page.goto("/requirements");
+  await expect(page.locator('nav[aria-label="主导航"] > a')).toHaveText([
+    "需求列表",
+    "每日任务",
+    "会议记录",
+    "在线工具",
+  ]);
   await expect(page.locator(".topbar")).toHaveCSS("height", "52px");
   await expect(page.locator(".topbar-tabs")).toHaveCSS(
     "background-color",

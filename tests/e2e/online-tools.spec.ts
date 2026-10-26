@@ -87,7 +87,7 @@ test("在线工具箱：维护、快捷弹窗与安全打开", async ({ page }) 
   const processOn = `${prefix}${Date.now()}-ProcessOn`;
 
   await page.goto("/online-tools");
-  await expect(page.getByRole("heading", { name: "在线工具" })).toBeVisible();
+  await expect(page.locator(".page-heading")).toHaveCount(0);
   await expect(page.getByText("还没有在线工具")).toBeVisible();
 
   // 新增两个收藏工具：第二个应追加到快捷入口末尾
@@ -99,7 +99,8 @@ test("在线工具箱：维护、快捷弹窗与安全打开", async ({ page }) 
     favorite: true,
   });
   await expect(page.getByText("在线工具已添加")).toBeVisible();
-  await expect(page.locator(".fab-badge")).toHaveText("1");
+  // 收藏工具后悬浮按钮不再显示数字红点
+  await expect(page.locator(".fab-badge")).toHaveCount(0);
 
   await addTool(page, {
     name: processOn,
@@ -108,7 +109,6 @@ test("在线工具箱：维护、快捷弹窗与安全打开", async ({ page }) 
     description: "在线流程图与思维导图",
     favorite: true,
   });
-  await expect(page.locator(".fab-badge")).toHaveText("2");
 
   const firstRow = page.locator(".el-table__row").first();
   await expect(firstRow).toContainText(figma);
@@ -174,7 +174,7 @@ test("在线工具箱：维护、快捷弹窗与安全打开", async ({ page }) 
   });
 
   // 点击外部关闭弹窗
-  await page.getByRole("heading", { name: "在线工具" }).click();
+  await page.locator(".tools-toolbar").click({ position: { x: 4, y: 4 } });
   await expect(panel).toBeHidden();
 
   // 停用后不出现在快捷弹窗；重新启用恢复

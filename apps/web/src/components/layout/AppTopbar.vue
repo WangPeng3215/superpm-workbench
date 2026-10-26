@@ -11,6 +11,7 @@ import { authStore } from "../../stores/auth";
 import ThemeSwitch from "../ThemeSwitch.vue";
 import {
   closeTab,
+  siblingTabPath,
   syncRoute,
   tabsStore,
   type WorkTab,
@@ -32,11 +33,20 @@ function pushTab(tab: WorkTab) {
   if (route.path !== tab.path) void router.push(tab.path);
 }
 
+// 先完成导航再移除激活页签：未保存确认被取消时，页签必须保留在原页面
 async function onCloseTab(tab: WorkTab) {
-  const target = closeTab(tab.key);
-  if (!target) return;
-  if (route.path === target) syncRoute(target);
-  else await router.push(target);
+  const active = tabsStore.activePath === tab.key || route.path === tab.key;
+  if (!active) {
+    closeTab(tab.key);
+    return;
+  }
+  const target = siblingTabPath(tab.key) ?? "/requirements";
+  if (route.path !== target) {
+    const failure = await router.push(target);
+    if (failure) return;
+  }
+  const fallback = closeTab(tab.key);
+  if (fallback && route.path === fallback) syncRoute(fallback);
 }
 
 function handleUserCommand(command: string | number | object) {

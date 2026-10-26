@@ -146,6 +146,10 @@ function sortable(key: string) {
 function openDetailPage(row: Requirement) {
   router.push(`/requirements/${row.id}`);
 }
+function openRequirement(requirementId: number) {
+  richOpen.value = false;
+  void router.push(`/requirements/${requirementId}`);
+}
 </script>
 <template>
   <el-form
@@ -534,6 +538,7 @@ function openDetailPage(row: Requirement) {
     :text="form.description"
     :requirement-id="richTarget?.id"
     @save="saveRich"
+    @open-requirement="openRequirement"
   />
 </template>
 <style scoped src="../features/requirements/workbench.css"></style>

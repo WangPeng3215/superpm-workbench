@@ -17,8 +17,8 @@ export const requirementStatuses = [
   "completed",
   "cancelled",
 ] as const;
-export const stages = ["analysis", "design", "development", "testing"] as const;
-export type Stage = (typeof stages)[number];
+import { stages, type Stage } from "./stages.js";
+export { stages, type Stage } from "./stages.js";
 export type RequirementStatus = (typeof requirementStatuses)[number];
 export const typeLabels: Record<(typeof requirementTypes)[number], string> = {
   feature: "新功能",
@@ -40,6 +40,7 @@ export const stageLabels: Record<Stage, string> = {
   design: "UI 设计",
   development: "开发跟进",
   testing: "需求测试",
+  online: "已上线",
 };
 
 export const dateSchema = z
@@ -236,6 +237,7 @@ export const stageFileCategories: Record<Stage, FileCategory[]> = {
   design: ["designLink", "uiAssets", "designNote", "prototype", "other"],
   development: ["discussionRecord", "changeNote", "technicalDoc", "other"],
   testing: ["testReport", "testData", "testEvidence", "other"],
+  online: ["other"],
 };
 // 分类条目形态：file 仅文件、link 仅链接、text 仅文本、both 文件或链接均可
 export const fileCategoryKinds: Record<
@@ -396,7 +398,7 @@ export const assetCategories: AssetCategoryDef[] = [
   { key: "uiAssets", label: "UI 设计稿", defaultPhase: "design" },
   { key: "other", label: "其他文件", defaultPhase: "analysis" },
 ];
-// 问题记录：四个需求阶段均可记录问题（V1.0 文档 §3）
+// 问题记录：所有需求阶段均可记录问题（V1.0 文档 §3）
 export const issueStages = stages;
 export type IssueStage = Stage;
 export const issueStatuses = [

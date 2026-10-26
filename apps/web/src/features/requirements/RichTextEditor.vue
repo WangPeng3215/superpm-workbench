@@ -15,6 +15,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   "update:modelValue": [value: boolean];
   save: [html: string, text: string];
+  "open-requirement": [id: number];
 }>();
 
 const editor = ref<InstanceType<typeof InlineRichTextEditor>>();
@@ -80,6 +81,7 @@ async function apply() {
       :requirement-id="requirementId"
       @update:html="onHtml"
       @update:text="onText"
+      @open-requirement="emit('open-requirement', $event)"
     />
     <div class="rich-footer">{{ textLength }} 字 · 应用后仍需保存所在行</div>
     <template #footer

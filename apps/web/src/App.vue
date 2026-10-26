@@ -65,8 +65,8 @@ watch(
 
 const navigation = [
   { path: "/requirements", label: "需求列表", icon: ProjectOutlined },
-  { path: "/meetings", label: "会议记录", icon: TeamOutlined },
   { path: "/tasks", label: "每日任务", icon: CalendarOutlined },
+  { path: "/meetings", label: "会议记录", icon: TeamOutlined },
   { path: "/online-tools", label: "在线工具", icon: ToolOutlined },
 ];
 onMounted(async () => {

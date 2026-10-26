@@ -4,21 +4,9 @@ import XlyEmpty from "../components/ease-ui/xly-empty/index.vue";
 const route = useRoute();
 </script>
 <template>
-  <div class="page-heading">
-    <div>
-      <h1>{{ route.meta.title }}</h1>
-      <p>
-        {{
-          route.meta.module === "tasks"
-            ? "记录每天的计划、执行与工作结果。"
-            : "集中查看需要你关注的系统事件。"
-        }}
-      </p>
-    </div>
-    <el-tag type="info" effect="plain">规划中</el-tag>
-  </div>
   <section class="surface planned-surface">
     <div class="planned-content">
+      <el-tag type="info" effect="plain">规划中</el-tag>
       <XlyEmpty
         type="list"
         :description="

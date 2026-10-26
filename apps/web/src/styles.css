@@ -534,13 +534,6 @@ a,
   padding: 20px 24px;
   overflow: auto;
 }
-.page-heading {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 16px;
-  margin-bottom: 20px;
-}
 h1 {
   margin: 0;
   color: var(--text-heading);
@@ -548,11 +541,6 @@ h1 {
   line-height: 1.35;
   font-weight: 650;
   letter-spacing: -0.4px;
-}
-.page-heading p {
-  margin: 8px 0 0;
-  color: var(--text-muted);
-  font-size: 12px;
 }
 h2 {
   font-size: 15px;
@@ -751,15 +739,8 @@ h2 {
   .page-content {
     padding: 12px;
   }
-  .page-heading {
-    align-items: flex-start;
-  }
   h1 {
     font-size: 20px;
-  }
-  .page-heading p {
-    max-width: 220px;
-    line-height: 1.6;
   }
 }
 @media (pointer: coarse) {

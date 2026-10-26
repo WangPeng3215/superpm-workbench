@@ -22,6 +22,7 @@ const tones: Record<EnumField, Record<string, string>> = {
     design: "teal",
     development: "blue",
     testing: "amber",
+    online: "green",
   },
 };
 

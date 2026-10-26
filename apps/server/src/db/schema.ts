@@ -84,7 +84,7 @@ export const requirementFiles = sqliteTable("requirement_files", {
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });
-// 问题表：stage 为产生阶段，四阶段均可记录
+// 问题表：stage 为产生阶段，所有需求阶段均可记录
 export const issues = sqliteTable("issues", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   requirementId: integer("requirement_id")

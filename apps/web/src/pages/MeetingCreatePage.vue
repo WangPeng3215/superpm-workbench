@@ -72,34 +72,54 @@ async function submit(payload: MeetingCreate) {
 </script>
 
 <template>
-  <div class="page-heading">
-    <div>
-      <h1>新建会议</h1>
-      <p>填写会议信息并记录讨论内容，保存后可继续编辑。</p>
+  <div class="create-page">
+    <div class="create-bar">
+      <el-button text :icon="BackIcon" @click="back">返回会议列表</el-button>
     </div>
-    <el-button :icon="BackIcon" @click="back">返回会议列表</el-button>
-  </div>
 
-  <section class="surface create-card">
-    <MeetingForm
-      ref="form"
-      :saving="saving"
-      :error="error"
-      @submit="submit"
-      @cancel="back"
-      @open-requirement="openRequirement"
-    />
-  </section>
+    <section class="surface create-card">
+      <MeetingForm
+        ref="form"
+        :saving="saving"
+        :error="error"
+        @submit="submit"
+        @cancel="back"
+        @open-requirement="openRequirement"
+      />
+    </section>
+  </div>
 </template>
 
 <style scoped>
-.create-card {
-  max-width: 1180px;
-  padding: 22px 24px;
+.create-page {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: calc(100dvh - var(--app-header-h) - 40px);
+  min-height: 0;
 }
-@media (max-width: 700px) {
+.create-bar {
+  display: flex;
+  flex: none;
+  align-items: center;
+}
+.create-card {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 14px 18px;
+  overflow: hidden;
+}
+.create-card :deep(.meeting-form) {
+  height: 100%;
+}
+@media (max-width: 980px) {
+  .create-page {
+    height: auto;
+  }
   .create-card {
-    padding: 16px 14px;
+    min-height: 640px;
+    padding: 14px 12px;
   }
 }
 </style>

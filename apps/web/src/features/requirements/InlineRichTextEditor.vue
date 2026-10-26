@@ -56,9 +56,6 @@ const props = defineProps<{
   compact?: boolean;
   // 只读展示：隐藏工具条并禁止编辑（会议详情复用同一套内容样式与引用交互）
   readonly?: boolean;
-  // 会议记录等富文本正文启用颜色/高亮；Markdown 文档编辑器保持关闭
-  enableColors?: boolean;
-  enableRequirementRefs?: boolean;
 }>();
 const emit = defineEmits<{
   "update:html": [html: string];
@@ -155,10 +152,10 @@ const editor = useEditor({
     TaskList,
     TaskItem.configure({ nested: true }),
     BlockStyle,
-    ...(props.enableColors
-      ? [TextStyle, Color, Highlight.configure({ multicolor: true })]
-      : []),
-    ...(props.enableRequirementRefs ? [RequirementRef] : []),
+    TextStyle,
+    Color,
+    Highlight.configure({ multicolor: true }),
+    RequirementRef,
     Placeholder.configure({
       placeholder: props.placeholder ?? "在这里输入或粘贴内容…",
     }),
@@ -224,9 +221,7 @@ const editor = useEditor({
 let contentSeq = 0;
 async function applyExternalContent(raw: string) {
   const seq = ++contentSeq;
-  const next = props.enableRequirementRefs
-    ? await resolveRequirementRefHtml(raw)
-    : raw;
+  const next = await resolveRequirementRefHtml(raw);
   if (seq !== contentSeq) return;
   const instance = editor.value;
   if (!instance) return;
@@ -244,7 +239,6 @@ watch(
 );
 // 首次挂载后按需求 ID 刷新引用名称：改名后显示最新名称，删除后标记失效
 onMounted(() => {
-  if (!props.enableRequirementRefs) return;
   const raw = toHtml(props.html, props.text ?? "");
   if (!raw.includes("data-requirement-id")) return;
   void applyExternalContent(raw);
@@ -294,7 +288,6 @@ function insertRequirement(option: RequirementOption) {
   refDialogOpen.value = false;
 }
 function onContentClick(event: MouseEvent) {
-  if (!props.enableRequirementRefs) return;
   const target = (event.target as HTMLElement | null)?.closest<HTMLElement>(
     "[data-requirement-id]",
   );
@@ -563,121 +556,110 @@ onBeforeUnmount(() => editor.value?.destroy());
           清除格式
         </button>
       </div>
-      <template v-if="enableColors">
-        <span class="toolbar-divider"></span>
-        <div class="toolbar-group">
-          <el-popover
-            v-model:visible="textColorOpen"
-            placement="bottom-start"
-            :width="210"
-            trigger="click"
-            :show-arrow="false"
-          >
-            <template #reference>
+      <span class="toolbar-divider"></span>
+      <div class="toolbar-group">
+        <el-popover
+          v-model:visible="textColorOpen"
+          placement="bottom-start"
+          :width="240"
+          trigger="click"
+          :show-arrow="false"
+        >
+          <template #reference>
+            <button
+              type="button"
+              class="color-trigger"
+              aria-label="文字颜色"
+              title="文字颜色"
+            >
+              <FontColorsOutlined />
+              <span
+                class="color-bar"
+                :style="{
+                  background: activeTextColor() || 'var(--text-body)',
+                }"
+                aria-hidden="true"
+              />
+            </button>
+          </template>
+          <div class="color-panel" @mousedown.prevent>
+            <div class="color-panel-title">文字颜色</div>
+            <div class="color-grid">
               <button
+                v-for="color in textColorPalette"
+                :key="color"
                 type="button"
-                class="color-trigger"
-                aria-label="文字颜色"
-                title="文字颜色"
-              >
-                <FontColorsOutlined />
-                <span
-                  class="color-bar"
-                  :style="{
-                    background: activeTextColor() || 'var(--text-body)',
-                  }"
-                  aria-hidden="true"
-                />
-              </button>
-            </template>
-            <div class="color-panel" @mousedown.prevent>
-              <div class="color-panel-title">文字颜色</div>
-              <div class="color-grid">
-                <button
-                  v-for="color in textColorPalette"
-                  :key="color"
-                  type="button"
-                  class="color-chip"
-                  :style="{ background: color }"
-                  :aria-label="`文字颜色 ${color}`"
-                  :title="color"
-                  @click="setTextColor(color)"
-                />
-              </div>
-              <div class="color-panel-actions">
-                <button
-                  type="button"
-                  class="color-clear"
-                  @click="clearTextColor"
-                >
-                  清除颜色
-                </button>
-                <label class="custom-color">
-                  自定义
-                  <input
-                    type="color"
-                    :value="activeTextColor() || '#2563eb'"
-                    aria-label="自定义文字颜色"
-                    @mousedown.stop
-                    @input="onCustomTextColor"
-                    @change="onCustomTextColorDone"
-                  />
-                </label>
-              </div>
+                class="color-chip"
+                :style="{ background: color }"
+                :aria-label="`文字颜色 ${color}`"
+                :title="color"
+                @click="setTextColor(color)"
+              />
             </div>
-          </el-popover>
-          <el-popover
-            v-model:visible="highlightOpen"
-            placement="bottom-start"
-            :width="210"
-            trigger="click"
-            :show-arrow="false"
-          >
-            <template #reference>
+            <div class="color-panel-actions">
+              <button type="button" class="color-clear" @click="clearTextColor">
+                清除颜色
+              </button>
+              <label class="custom-color">
+                自定义
+                <input
+                  type="color"
+                  :value="activeTextColor() || '#2563eb'"
+                  aria-label="自定义文字颜色"
+                  @mousedown.stop
+                  @input="onCustomTextColor"
+                  @change="onCustomTextColorDone"
+                />
+              </label>
+            </div>
+          </div>
+        </el-popover>
+        <el-popover
+          v-model:visible="highlightOpen"
+          placement="bottom-start"
+          :width="210"
+          trigger="click"
+          :show-arrow="false"
+        >
+          <template #reference>
+            <button
+              type="button"
+              class="color-trigger"
+              aria-label="文字高亮"
+              title="文字高亮"
+            >
+              <HighlightOutlined />
+              <span
+                class="color-bar"
+                :style="{
+                  background: activeHighlightColor() || 'var(--tone-amber-bg)',
+                }"
+                aria-hidden="true"
+              />
+            </button>
+          </template>
+          <div class="color-panel" @mousedown.prevent>
+            <div class="color-panel-title">文字高亮</div>
+            <div class="color-grid color-grid--highlight">
               <button
+                v-for="color in highlightPalette"
+                :key="color"
                 type="button"
-                class="color-trigger"
-                aria-label="文字高亮"
-                title="文字高亮"
-              >
-                <HighlightOutlined />
-                <span
-                  class="color-bar"
-                  :style="{
-                    background:
-                      activeHighlightColor() || 'var(--tone-amber-bg)',
-                  }"
-                  aria-hidden="true"
-                />
-              </button>
-            </template>
-            <div class="color-panel" @mousedown.prevent>
-              <div class="color-panel-title">文字高亮</div>
-              <div class="color-grid color-grid--highlight">
-                <button
-                  v-for="color in highlightPalette"
-                  :key="color"
-                  type="button"
-                  class="color-chip"
-                  :style="{ background: color }"
-                  :aria-label="`高亮颜色 ${color}`"
-                  :title="color"
-                  @click="setHighlightColor(color)"
-                />
-              </div>
-              <div class="color-panel-actions">
-                <button
-                  type="button"
-                  class="color-clear"
-                  @click="clearHighlight"
-                >
-                  清除高亮
-                </button>
-              </div>
+                class="color-chip"
+                :style="{ background: color }"
+                :aria-label="`高亮颜色 ${color}`"
+                :title="color"
+                @click="setHighlightColor(color)"
+              />
             </div>
-          </el-popover>
-        </div>
-      </template>
+            <div class="color-panel-actions">
+              <button type="button" class="color-clear" @click="clearHighlight">
+                清除高亮
+              </button>
+            </div>
+          </div>
+        </el-popover>
+      </div>
       <span class="toolbar-divider toolbar-divider--heading"></span>
       <div class="toolbar-group toolbar-group--heading">
         <button
@@ -888,7 +870,6 @@ onBeforeUnmount(() => editor.value?.destroy());
           <LinkOutlined />
         </button>
         <button
-          v-if="enableRequirementRefs"
           type="button"
           aria-label="插入需求引用"
           title="插入需求引用"
@@ -922,7 +903,6 @@ onBeforeUnmount(() => editor.value?.destroy());
     </div>
     <EditorContent :editor="editor" />
     <RequirementReferenceDialog
-      v-if="enableRequirementRefs"
       v-model="refDialogOpen"
       @select="insertRequirement"
     />
@@ -1276,11 +1256,13 @@ onBeforeUnmount(() => editor.value?.destroy());
 }
 .color-grid {
   display: grid;
-  grid-template-columns: repeat(8, 1fr);
+  grid-template-columns: repeat(8, 20px);
+  justify-content: space-between;
   gap: 7px;
 }
 .color-grid--highlight {
-  grid-template-columns: repeat(6, 1fr);
+  grid-template-columns: repeat(6, 20px);
+  justify-content: start;
 }
 .color-chip {
   width: 20px;

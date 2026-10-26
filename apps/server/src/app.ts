@@ -506,7 +506,7 @@ export async function createApp(
     },
   );
   const issueListQuery = z.object({
-    stage: z.enum(["analysis", "design", "development", "testing"]).optional(),
+    stage: z.enum(stages).optional(),
     status: z
       .enum(["pending", "to_confirm", "processing", "resolved", "wont_fix"])
       .optional(),

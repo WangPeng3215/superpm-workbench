@@ -237,6 +237,9 @@ function onDescriptionText(text: string) {
 function go(target: Requirement) {
   router.push(`/requirements/${target.id}`);
 }
+function openRequirement(requirementId: number) {
+  void router.push(`/requirements/${requirementId}`);
+}
 </script>
 <template>
   <div class="detail-page" v-loading="loading">
@@ -266,7 +269,11 @@ function go(target: Requirement) {
             <span class="detail-save-state" :class="{ dirty }">
               {{ dirty ? "有未保存的修改" : "已同步到本地" }}
             </span>
-            <el-button size="small" :disabled="!dirty || saving" @click="revert">
+            <el-button
+              size="small"
+              :disabled="!dirty || saving"
+              @click="revert"
+            >
               重置
             </el-button>
             <el-button
@@ -305,6 +312,7 @@ function go(target: Requirement) {
                   :requirement-id="item.id"
                   @update:html="onDescriptionHtml"
                   @update:text="onDescriptionText"
+                  @open-requirement="openRequirement"
                 />
               </article>
               <div v-show="propertiesOpen" class="detail-fields">
@@ -514,6 +522,7 @@ function go(target: Requirement) {
               :key="item.id"
               :requirement-id="item.id"
               :current-stage="item.currentStage"
+              @open-requirement="openRequirement"
             />
           </el-tab-pane>
           <el-tab-pane
@@ -527,6 +536,7 @@ function go(target: Requirement) {
               :ref="(el) => setDocEditor(tab.node.id, el)"
               :requirement-id="item.id"
               :node="tab.node"
+              @open-requirement="openRequirement"
             />
           </el-tab-pane>
         </el-tabs>

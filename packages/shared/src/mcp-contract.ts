@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { stages } from "./stages.js";
 import type {
   ArtifactDirectory,
   ArtifactMemoryReadResult,
@@ -265,9 +266,7 @@ export const mcpRequirementListInput = z
         "cancelled",
       ])
       .optional(),
-    currentStage: z
-      .enum(["analysis", "design", "development", "testing"])
-      .optional(),
+    currentStage: z.enum(stages).optional(),
     proposedAtFrom: mcpDate.optional(),
     proposedAtTo: mcpDate.optional(),
     startedAtFrom: mcpDate.optional(),
@@ -329,7 +328,7 @@ export type McpRequirementProgressGetInput = z.output<
 export const mcpIssueListInput = z
   .object({
     requirementId: id,
-    stage: z.enum(["analysis", "design", "development", "testing"]).optional(),
+    stage: z.enum(stages).optional(),
     status: z
       .enum(["pending", "to_confirm", "processing", "resolved", "wont_fix"])
       .optional(),
@@ -390,7 +389,7 @@ const issueUpdateFields = {
   issueId: id,
   title: z.string().trim().min(1, "请输入问题标题").max(200).optional(),
   description: z.string().max(200000).optional(),
-  stage: z.enum(["analysis", "design", "development", "testing"]).optional(),
+  stage: z.enum(stages).optional(),
   type: z
     .enum(["analysis", "ui", "development", "testing", "other"])
     .nullable()

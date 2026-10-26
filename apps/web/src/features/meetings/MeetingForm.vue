@@ -93,96 +93,124 @@ defineExpose({ isDirty });
 
 <template>
   <form class="meeting-form" @submit.prevent="submit">
-    <el-alert
-      v-if="error || formError"
-      :title="error || formError"
-      type="error"
-      :closable="false"
-      show-icon
-      class="form-alert"
-    />
-    <label class="field">
-      <span class="field-label"
-        >会议标题<i class="required" aria-hidden="true">*</i></span
-      >
-      <el-input
-        v-model="title"
-        maxlength="200"
-        show-word-limit
-        placeholder="例如：第 42 周项目周例会"
-        @input="markDirty"
+    <div class="form-main">
+      <el-alert
+        v-if="error || formError"
+        :title="error || formError"
+        type="error"
+        :closable="false"
+        show-icon
+        class="form-alert"
       />
-    </label>
-    <div class="field-row">
-      <div class="field">
-        <span class="field-label">会议类型</span>
-        <el-radio-group v-model="type" @change="markDirty">
-          <el-radio-button
-            v-for="value in meetingTypes"
-            :key="value"
-            :value="value"
-          >
-            {{ meetingTypeLabels[value] }}
-          </el-radio-button>
-        </el-radio-group>
-      </div>
       <label class="field">
         <span class="field-label"
-          >会议时间<i class="required" aria-hidden="true">*</i></span
+          >会议标题<i class="required" aria-hidden="true">*</i></span
         >
-        <el-date-picker
-          v-model="meetingTime"
-          type="datetime"
-          format="YYYY-MM-DD HH:mm"
-          placeholder="选择会议时间"
-          :clearable="false"
-          style="width: 100%"
-          @change="markDirty"
+        <el-input
+          v-model="title"
+          maxlength="200"
+          show-word-limit
+          placeholder="例如：第 42 周项目周例会"
+          @input="markDirty"
         />
       </label>
+      <div class="content-field">
+        <span class="field-label">会议内容</span>
+        <InlineRichTextEditor
+          fill-height
+          :html="contentHtml"
+          label="会议内容"
+          placeholder="记录会议议题、结论与后续行动…"
+          @update:html="onContentHtml"
+          @open-requirement="emit('open-requirement', $event)"
+        />
+      </div>
     </div>
-    <div class="field">
-      <span class="field-label">关联需求</span>
-      <MeetingRequirementSelect
-        v-model="requirements"
-        :disabled="saving"
-        @update:model-value="markDirty"
-      />
-      <span class="field-hint"
-        >可按编号或名称搜索，支持关联多个需求，也可以暂不关联。</span
-      >
-    </div>
-    <div class="field">
-      <span class="field-label">会议内容</span>
-      <InlineRichTextEditor
-        :html="contentHtml"
-        label="会议内容"
-        placeholder="记录会议议题、结论与后续行动…"
-        enable-colors
-        enable-requirement-refs
-        @update:html="onContentHtml"
-        @open-requirement="emit('open-requirement', $event)"
-      />
-    </div>
-    <div class="form-actions">
-      <el-button :disabled="saving" @click="emit('cancel')">取消</el-button>
-      <el-button
-        type="primary"
-        native-type="submit"
-        :loading="saving"
-        :disabled="saving"
-      >
-        {{ meeting ? "保存修改" : "保存会议" }}
-      </el-button>
-    </div>
+    <aside class="form-side">
+      <section class="side-section">
+        <span class="side-title">会议信息</span>
+        <div class="field">
+          <span class="field-label">会议类型</span>
+          <el-radio-group v-model="type" size="small" @change="markDirty">
+            <el-radio-button
+              v-for="value in meetingTypes"
+              :key="value"
+              :value="value"
+            >
+              {{ meetingTypeLabels[value] }}
+            </el-radio-button>
+          </el-radio-group>
+        </div>
+        <label class="field">
+          <span class="field-label"
+            >会议时间<i class="required" aria-hidden="true">*</i></span
+          >
+          <el-date-picker
+            v-model="meetingTime"
+            type="datetime"
+            format="YYYY-MM-DD HH:mm"
+            placeholder="选择会议时间"
+            :clearable="false"
+            style="width: 100%"
+            @change="markDirty"
+          />
+        </label>
+      </section>
+      <section class="side-section">
+        <span class="side-title">关联需求</span>
+        <div class="field">
+          <MeetingRequirementSelect
+            v-model="requirements"
+            :disabled="saving"
+            @update:model-value="markDirty"
+            @open-requirement="emit('open-requirement', $event)"
+          />
+          <span class="field-hint"
+            >搜索并点击结果即可添加到下方列表，支持关联多个需求，也可以暂不关联。</span
+          >
+        </div>
+      </section>
+      <div class="form-actions">
+        <el-button :disabled="saving" @click="emit('cancel')">取消</el-button>
+        <el-button
+          type="primary"
+          native-type="submit"
+          :loading="saving"
+          :disabled="saving"
+        >
+          {{ meeting ? "保存修改" : "保存会议" }}
+        </el-button>
+      </div>
+    </aside>
   </form>
 </template>
 
 <style scoped>
 .meeting-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+  gap: 20px;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+.form-main {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
+  min-width: 0;
+  min-height: 0;
+}
+.content-field {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 7px;
+  min-height: 0;
+}
+.content-field > .inline-rich {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 .form-alert {
   margin-bottom: 0;
@@ -208,12 +236,29 @@ defineExpose({ isDirty });
   font-size: 11px;
   line-height: 1.6;
 }
-.field-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1.25fr) minmax(240px, 1fr);
+.form-side {
+  display: flex;
+  flex-direction: column;
   gap: 16px;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
 }
-.field-row :deep(.el-radio-group) {
+.side-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+}
+.side-title {
+  color: var(--text-heading);
+  font-size: 12px;
+  font-weight: 600;
+}
+.form-side :deep(.el-radio-group) {
   display: flex;
   flex-wrap: wrap;
   gap: 0;
@@ -222,15 +267,24 @@ defineExpose({ isDirty });
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-  padding-top: 16px;
+  margin-top: auto;
+  padding-top: 14px;
   border-top: 1px solid var(--border-soft);
 }
 .form-actions :deep(.el-button) {
   margin: 0;
 }
-@media (max-width: 760px) {
-  .field-row {
+@media (max-width: 980px) {
+  .meeting-form {
     grid-template-columns: minmax(0, 1fr);
+    height: auto;
+  }
+  .content-field {
+    flex: none;
+    min-height: 360px;
+  }
+  .form-side {
+    overflow: visible;
   }
 }
 </style>

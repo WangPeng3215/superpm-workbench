@@ -79,13 +79,13 @@ describe("requirements API with real SQLite", () => {
     const updated = await app.inject({
       method: "PATCH",
       url: `/api/requirements/${requirement.id}`,
-      payload: { currentStage: "testing", stageNote: "验证主链路" },
+      payload: { currentStage: "online", stageNote: "上线验收" },
     });
     expect(updated.statusCode).toBe(200);
     expect(updated.json()).toMatchObject({
       name: requirement.name,
       status: "not_started",
-      currentStage: "testing",
+      currentStage: "online",
     });
     const history = await app.inject(
       `/api/requirements/${requirement.id}/history`,
@@ -93,8 +93,8 @@ describe("requirements API with real SQLite", () => {
     expect(history.json()).toEqual([
       expect.objectContaining({
         fromStage: "analysis",
-        toStage: "testing",
-        note: "验证主链路",
+        toStage: "online",
+        note: "上线验收",
         actor: "local-user",
       }),
     ]);

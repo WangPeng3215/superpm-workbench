@@ -45,9 +45,6 @@ const favorites = computed(() =>
   toolboxStore.tools.filter((tool) => tool.enabled && tool.isFavorite),
 );
 const favoriteCount = computed(() => favorites.value.length);
-const badgeLabel = computed(() =>
-  favoriteCount.value > 99 ? "99+" : String(favoriteCount.value),
-);
 const filteredTools = computed(() => {
   const query = keyword.value.trim().toLowerCase();
   if (!query) return favorites.value;
@@ -346,14 +343,6 @@ onUnmounted(() => {
         <el-icon class="fab-glyph glyph-close" :size="20">
           <CloseOutlined />
         </el-icon>
-      </span>
-      <span
-        v-if="favoriteCount"
-        :key="badgeLabel"
-        class="fab-badge"
-        aria-hidden="true"
-      >
-        {{ badgeLabel }}
       </span>
     </button>
 
@@ -667,28 +656,6 @@ onUnmounted(() => {
   opacity: 1;
   transform: rotate(0deg) scale(1);
 }
-.fab-badge {
-  position: absolute;
-  top: -4px;
-  right: -3px;
-  display: grid;
-  place-items: center;
-  min-width: 20px;
-  height: 20px;
-  padding: 0 5px;
-  border: 2px solid var(--bg-page);
-  border-radius: 999px;
-  background: linear-gradient(135deg, #ff8a5b, #ff4d6d);
-  color: #fff;
-  font-size: 10px;
-  font-weight: 700;
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
-  box-shadow: 0 5px 12px -4px rgb(255 77 109 / 65%);
-  animation: badge-pop 280ms cubic-bezier(0.2, 0.9, 0.3, 1.3);
-  pointer-events: none;
-}
-
 .toolbox-panel {
   position: fixed;
   z-index: 941;
@@ -1039,16 +1006,6 @@ onUnmounted(() => {
 @keyframes fab-spin {
   to {
     transform: rotate(360deg);
-  }
-}
-@keyframes badge-pop {
-  from {
-    opacity: 0;
-    transform: scale(0.4);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
   }
 }
 @keyframes tile-in {

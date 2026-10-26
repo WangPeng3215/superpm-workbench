@@ -47,6 +47,7 @@ const props = defineProps<{
   requirementId: number;
   currentStage?: IssueStage;
 }>();
+const emit = defineEmits<{ "open-requirement": [id: number] }>();
 
 interface Snapshot {
   title: string;
@@ -1189,6 +1190,7 @@ onBeforeUnmount(() => {
               placeholder="描述问题现象、上下文或需要确认的点…"
               compact
               @update:html="onDescHtml"
+              @open-requirement="emit('open-requirement', $event)"
             />
           </section>
 
@@ -1215,6 +1217,7 @@ onBeforeUnmount(() => {
               placeholder="记录处理方案、最终结论，或暂不处理的原因…"
               compact
               @update:html="onSolHtml"
+              @open-requirement="emit('open-requirement', $event)"
             />
           </section>
 

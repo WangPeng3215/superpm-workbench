@@ -150,6 +150,57 @@ describe("document markdown serialization", () => {
     expect(roundtrip(markdown)).toBe(markdown);
   });
 
+  it("keeps text colors and highlights as inline html", () => {
+    const colored =
+      '<p>说明 <span style="color: rgb(37, 99, 235)">蓝色重点</span> 结束</p>';
+    const colorMarkdown = htmlToMarkdown(colored);
+    expect(colorMarkdown).toContain(
+      '<span style="color: rgb(37, 99, 235)">蓝色重点</span>',
+    );
+    expect(roundtrip(colorMarkdown)).toBe(colorMarkdown);
+
+    const highlighted =
+      '<p><mark data-color="#fef08a" style="background-color: #fef08a; color: inherit">高亮</mark>内容</p>';
+    const highlightMarkdown = htmlToMarkdown(highlighted);
+    expect(highlightMarkdown).toContain(
+      '<mark data-color="#fef08a" style="background-color: #fef08a; color: inherit">高亮</mark>',
+    );
+    expect(roundtrip(highlightMarkdown)).toBe(highlightMarkdown);
+  });
+
+  it("keeps requirement references as inline html", () => {
+    const reference =
+      '<p>关联 <span data-requirement-id="7" data-requirement-name="登录优化" ' +
+      'data-requirement-code="REQ-0007" class="requirement-ref" ' +
+      'title="REQ-0007 · 登录优化">REQ-0007 · 登录优化</span></p>';
+    const markdown = htmlToMarkdown(reference);
+    expect(markdown).toContain('data-requirement-id="7"');
+    expect(markdown).toContain("REQ-0007 · 登录优化");
+    expect(roundtrip(markdown)).toBe(markdown);
+  });
+
+  it("keeps inline html inside lists and styled blocks", () => {
+    const listMarkdown = htmlToMarkdown(
+      '<ul><li>条目 <span style="color: #be123c">红色</span></li></ul>',
+    );
+    expect(listMarkdown).toContain(
+      '- 条目 <span style="color: #be123c">红色</span>',
+    );
+    expect(roundtrip(listMarkdown)).toBe(listMarkdown);
+
+    const styledMarkdown = htmlToMarkdown(
+      '<ul><li><p style="text-align: center"><span style="color: #be123c">居中红色</span></p></li></ul>',
+    );
+    expect(styledMarkdown).toContain('data-block="center"');
+    expect(styledMarkdown).toContain(
+      '<span style="color: #be123c">居中红色</span>',
+    );
+    const restored = markdownToHtml(styledMarkdown);
+    expect(restored).toContain('style="text-align: center"');
+    expect(restored).toContain('<span style="color: #be123c">居中红色</span>');
+    expect(roundtrip(styledMarkdown)).toBe(styledMarkdown);
+  });
+
   it("does not mistake styled blocks at the start for legacy html", () => {
     expect(
       isLegacyHtmlContent('<p style="text-align: center">居中</p>\n\n- 列表\n'),

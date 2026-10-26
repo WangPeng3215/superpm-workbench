@@ -109,16 +109,6 @@ onMounted(load);
 </script>
 
 <template>
-  <div class="page-heading">
-    <div>
-      <h1>会议记录</h1>
-      <p>记录周会、需求沟通与培训内容，并关联相关需求。</p>
-    </div>
-    <el-button type="primary" :icon="PlusIcon" @click="openCreate">
-      新建会议
-    </el-button>
-  </div>
-
   <div class="meetings-toolbar">
     <el-input
       v-model="keyword"
@@ -157,6 +147,9 @@ onMounted(load);
     <span class="toolbar-spacer" />
     <el-button text :icon="ReloadIcon" :loading="loading" @click="load">
       刷新
+    </el-button>
+    <el-button type="primary" :icon="PlusIcon" @click="openCreate">
+      新建会议
     </el-button>
   </div>
 

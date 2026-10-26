@@ -73,17 +73,24 @@ export function setTabLabel(path: string, label: string) {
   if (tab) tab.label = label;
 }
 
+// 关闭页签后应跳转的相邻页签路径（不修改 store）：右侧第一个 → 左侧第一个
+export function siblingTabPath(key: string): string | null {
+  const index = tabsStore.tabs.findIndex((tab) => tab.key === key);
+  if (index < 0) return null;
+  const next = tabsStore.tabs[index + 1] ?? tabsStore.tabs[index - 1];
+  return next ? next.path : null;
+}
+
 // 关闭页签。若关的是激活页签，返回应跳转的路径
-//（右侧第一个 → 左侧第一个 → 兜底「需求列表」路由，路由联动会重新开出首页页签）；
+//（相邻页签 → 兜底「需求列表」路由，路由联动会重新开出首页页签）；
 // 关非激活页签返回 null（路由不变）
 export function closeTab(key: string): string | null {
   const index = tabsStore.tabs.findIndex((tab) => tab.key === key);
   if (index < 0) return null;
   const wasActive = tabsStore.activePath === key;
+  const target = wasActive ? (siblingTabPath(key) ?? "/requirements") : null;
   tabsStore.tabs.splice(index, 1);
-  if (!wasActive) return null;
-  const next = tabsStore.tabs[index] ?? tabsStore.tabs[index - 1];
-  const target = next ? next.path : "/requirements";
+  if (!wasActive || !target) return null;
   tabsStore.activePath = target;
   return target;
 }
