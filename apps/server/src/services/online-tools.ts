@@ -150,7 +150,7 @@ export class OnlineToolService {
       for (const id of parsed.ids) {
         const row = statement.get(id) as
           { id: number; is_favorite: number } | undefined;
-        if (!row) throw new DomainError("NOT_FOUND", "在线工具不存在", 404);
+        if (!row) throw new DomainError("NOT_FOUND", "工具不存在", 404);
         if (row.is_favorite !== 1)
           throw new DomainError(
             "VALIDATION_ERROR",
@@ -170,7 +170,7 @@ export class OnlineToolService {
     const row = this.db
       .prepare(`SELECT ${selectColumns} FROM online_tools WHERE id = ?`)
       .get(id) as OnlineToolRow | undefined;
-    if (!row) throw new DomainError("NOT_FOUND", "在线工具不存在", 404);
+    if (!row) throw new DomainError("NOT_FOUND", "工具不存在", 404);
     return row;
   }
 

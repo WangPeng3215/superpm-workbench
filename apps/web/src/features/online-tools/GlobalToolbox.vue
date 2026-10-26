@@ -6,6 +6,7 @@ import { ElMessage } from "element-plus";
 import {
   AppstoreOutlined,
   CloseOutlined,
+  PlusOutlined,
   RightOutlined,
   SearchOutlined,
 } from "@ant-design/icons-vue";
@@ -13,10 +14,12 @@ import {
   isAllowedExternalUrl,
   onlineToolCategoryLabels,
   onlineToolHost,
+  type Note,
   type OnlineTool,
 } from "@superpm/shared";
 import XlyEmpty from "../../components/ease-ui/xly-empty/index.vue";
 import { decorative } from "../../components/decorativeIcon";
+import NoteQuickDialog from "../notes/NoteQuickDialog.vue";
 import { categoryTone, onlineToolIcon } from "./icons";
 import {
   clampToolboxPosition,
@@ -33,6 +36,7 @@ const route = useRoute();
 const router = useRouter();
 
 const open = ref(false);
+const quickNoteOpen = ref(false);
 const keyword = ref("");
 const position = ref<ToolboxPoint>(loadToolboxPosition());
 const dragging = ref(false);
@@ -80,7 +84,7 @@ const fabStyle = computed(() => ({
 
 function estimatePanelHeight() {
   const rows = Math.ceil(Math.max(filteredTools.value.length, 1) / 3);
-  return Math.min(window.innerHeight - 24, 186 + rows * 78);
+  return Math.min(window.innerHeight - 24, 258 + rows * 78);
 }
 
 function updatePanelStyle() {
@@ -162,7 +166,7 @@ function onEscape(event: KeyboardEvent) {
 
 function openTool(tool: OnlineTool) {
   if (!isAllowedExternalUrl(tool.url)) {
-    ElMessage.warning("该工具网址无效，请先在在线工具页修正");
+    ElMessage.warning("该工具网址无效，请先在工具箱页修正");
     return;
   }
   const win = window.open(tool.url, "_blank");
@@ -181,6 +185,15 @@ function openTool(tool: OnlineTool) {
 function goManage() {
   open.value = false;
   void router.push("/online-tools");
+}
+
+function openQuickNote() {
+  open.value = false;
+  quickNoteOpen.value = true;
+}
+
+function onQuickNoteCreated(_note: Note) {
+  ElMessage.success("便签已创建，可在「便签」中继续编辑");
 }
 
 // ===== 拖动 =====
@@ -365,11 +378,8 @@ onUnmounted(() => {
             </span>
             <div class="panel-heading">
               <h2>快捷工具</h2>
-              <p class="panel-sub">常用在线工具，一键打开</p>
+              <p class="panel-sub">常用工具与便签，随手打开</p>
             </div>
-            <span v-if="favoriteCount" class="panel-count">
-              {{ favoriteCount }}
-            </span>
             <button
               type="button"
               class="panel-close"
@@ -391,6 +401,27 @@ onUnmounted(() => {
         </header>
 
         <div class="panel-scroll">
+          <div class="builtin-row">
+            <button
+              type="button"
+              class="builtin-tile quick"
+              @click="openQuickNote"
+            >
+              <span class="builtin-icon">
+                <el-icon :size="18" aria-hidden="true"
+                  ><PlusOutlined
+                /></el-icon>
+              </span>
+              <span class="builtin-text">
+                <span class="builtin-name">新建便签</span>
+                <span class="builtin-sub">不离开当前页面，快速记录灵感</span>
+              </span>
+            </button>
+          </div>
+          <div class="panel-section">
+            <span>我的工具</span>
+          </div>
+
           <div v-if="showSkeleton" class="tool-skeleton" aria-label="正在加载">
             <span v-for="index in 6" :key="index" class="skeleton-tile" />
           </div>
@@ -413,9 +444,7 @@ onUnmounted(() => {
                 去添加
               </el-button>
             </XlyEmpty>
-            <p class="panel-hint">
-              在「在线工具」中开启快捷入口后，会出现在这里
-            </p>
+            <p class="panel-hint">在「工具箱」中开启快捷入口后，会出现在这里</p>
           </div>
 
           <div v-else-if="showNoMatch" class="panel-state">
@@ -459,13 +488,17 @@ onUnmounted(() => {
 
         <footer class="panel-foot">
           <button type="button" class="panel-manage" @click="goManage">
-            <span>管理在线工具</span>
+            <span>管理工具箱</span>
             <el-icon :size="12" aria-hidden="true"><RightOutlined /></el-icon>
           </button>
         </footer>
       </section>
     </Transition>
   </Teleport>
+  <NoteQuickDialog
+    v-model:visible="quickNoteOpen"
+    @created="onQuickNoteCreated"
+  />
 </template>
 
 <style scoped>
@@ -722,23 +755,13 @@ onUnmounted(() => {
   font-size: 10px;
   line-height: 1.4;
 }
-.panel-count {
-  margin-left: auto;
-  padding: 1px 7px;
-  border: 1px solid var(--border-brand);
-  border-radius: 99px;
-  background: var(--bg-brand-soft);
-  color: var(--brand);
-  font-size: 10px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
 .panel-close {
   display: grid;
   flex: none;
   place-items: center;
   width: 24px;
   height: 24px;
+  margin-left: auto;
   padding: 0;
   border: 0;
   border-radius: 7px;
@@ -748,9 +771,6 @@ onUnmounted(() => {
   transition:
     background var(--duration-fast) var(--ease-standard),
     color var(--duration-fast) var(--ease-standard);
-}
-.panel-count + .panel-close {
-  margin-left: 4px;
 }
 .panel-close:hover {
   background: var(--bg-hover);
@@ -784,6 +804,79 @@ onUnmounted(() => {
 }
 .panel-scroll::-webkit-scrollbar-track {
   background: transparent;
+}
+.builtin-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  padding-bottom: 10px;
+}
+.builtin-tile {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--bg-subtle) 72%, transparent);
+  color: var(--text-secondary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color var(--duration-fast) var(--ease-standard),
+    background var(--duration-fast) var(--ease-standard),
+    transform var(--duration-fast) var(--ease-standard);
+}
+.builtin-tile:hover {
+  border-color: var(--border-brand);
+  background: var(--bg-brand-soft);
+  transform: translateY(-1px);
+}
+.builtin-tile:focus-visible {
+  outline-offset: 1px;
+}
+.builtin-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  background: var(--tone-blue-bg);
+  color: var(--tone-blue-fg);
+}
+.builtin-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.25;
+}
+.builtin-name {
+  overflow: hidden;
+  color: var(--text-title);
+  font-size: 11px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.builtin-sub {
+  overflow: hidden;
+  margin-top: 2px;
+  color: var(--text-faint);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.panel-section {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 2px 7px;
+  color: var(--text-faint);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
 }
 .tool-grid {
   display: grid;

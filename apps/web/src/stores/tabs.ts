@@ -17,7 +17,8 @@ const FEATURE_TAB_LABELS: Record<string, string> = {
   "/meetings": "会议记录",
   "/meetings/new": "新建会议",
   "/tasks": "每日任务",
-  "/online-tools": "在线工具",
+  "/notes": "便签",
+  "/online-tools": "工具箱",
   "/notifications": "系统通知",
   "/settings": "系统设置",
 };

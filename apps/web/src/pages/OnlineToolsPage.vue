@@ -104,7 +104,7 @@ async function submit(payload: OnlineToolPayload) {
   try {
     if (editing) await onlineToolApi.update(editing.id, payload);
     else await onlineToolApi.create(payload);
-    ElMessage.success(editing ? "在线工具已更新" : "在线工具已添加");
+    ElMessage.success(editing ? "工具已更新" : "工具已添加");
     formOpen.value = false;
     await reloadAfterChange();
   } catch (error) {
@@ -174,7 +174,7 @@ async function removeTool(tool: OnlineTool) {
   try {
     await ElMessageBox.confirm(
       "删除后，该工具将从快捷工具箱中移除。此操作不可撤销。",
-      "删除在线工具",
+      "删除工具",
       {
         type: "warning",
         confirmButtonText: "删除",
@@ -187,7 +187,7 @@ async function removeTool(tool: OnlineTool) {
   }
   try {
     await onlineToolApi.remove(tool.id);
-    ElMessage.success("在线工具已删除");
+    ElMessage.success("工具已删除");
     await reloadAfterChange();
   } catch (error) {
     ElMessage.error(errorMessage(error));
@@ -365,9 +365,7 @@ onMounted(load);
         <XlyEmpty
           size="small"
           :type="hasFilters ? 'search' : 'list'"
-          :description="
-            hasFilters ? '没有找到匹配的在线工具' : '还没有在线工具'
-          "
+          :description="hasFilters ? '没有找到匹配的工具' : '还没有工具'"
         >
           <el-button v-if="hasFilters" plain @click="clearFilters">
             清除筛选

@@ -453,7 +453,7 @@ describe("migrations 0005（资产与问题管理）", () => {
   });
   it("SCHEMA_VERSION 与已应用迁移数一致", () => {
     migrate(db);
-    expect(SCHEMA_VERSION).toBe(16);
+    expect(SCHEMA_VERSION).toBe(17);
     expect(appliedVersions(db)).toHaveLength(SCHEMA_VERSION);
   });
 });
@@ -1034,5 +1034,74 @@ describe("migrations 0016（会议记录）", () => {
     expect(() => insertLink.run(meetingId, timestamp)).toThrowError(
       /FOREIGN KEY/i,
     );
+  });
+});
+
+describe("migrations 0017（便签）", () => {
+  it("创建便签表并约束枚举、归档默认值与目标任务外键", () => {
+    migrate(db);
+    expect(tableColumns(db, "notes")).toEqual([
+      "id",
+      "title",
+      "content",
+      "type",
+      "color",
+      "is_pinned",
+      "is_archived",
+      "converted_task_id",
+      "created_at",
+      "updated_at",
+      "archived_at",
+    ]);
+    const indexes = (
+      db
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='notes'",
+        )
+        .all() as { name: string }[]
+    ).map((row) => row.name);
+    expect(indexes).toEqual(
+      expect.arrayContaining([
+        "idx_notes_archived_pinned_created",
+        "idx_notes_converted_task",
+      ]),
+    );
+    const timestamp = "2026-10-26T03:00:00.000Z";
+    const insert = db.prepare(
+      `INSERT INTO notes (title, content, type, color, created_at, updated_at)
+       VALUES (?, '', ?, ?, ?, ?)`,
+    );
+    insert.run("保持灵感", "inspiration", "blue", timestamp, timestamp);
+    const row = db
+      .prepare(
+        "SELECT is_pinned, is_archived, archived_at FROM notes WHERE title = '保持灵感'",
+      )
+      .get() as {
+      is_pinned: number;
+      is_archived: number;
+      archived_at: string | null;
+    };
+    expect(row).toEqual({ is_pinned: 0, is_archived: 0, archived_at: null });
+    expect(() =>
+      insert.run("非法类型", "invalid", "blue", timestamp, timestamp),
+    ).toThrowError(/CHECK/i);
+    expect(() =>
+      insert.run("非法颜色", "inspiration", "neon", timestamp, timestamp),
+    ).toThrowError(/CHECK/i);
+    // 目标任务被物理删除时只清空引用，便签本身保留
+    db.prepare(
+      `INSERT INTO daily_tasks
+        (title, description, plan_date, estimated_minutes, status, sort_order, created_at, updated_at)
+       VALUES ('目标任务', '', '2026-10-26', 30, 'pending', 0, ?, ?)`,
+    ).run(timestamp, timestamp);
+    db.prepare(
+      "UPDATE notes SET converted_task_id = 1 WHERE title = '保持灵感'",
+    ).run();
+    db.prepare("DELETE FROM daily_tasks WHERE id = 1").run();
+    expect(
+      db
+        .prepare("SELECT converted_task_id FROM notes WHERE title = '保持灵感'")
+        .get(),
+    ).toEqual({ converted_task_id: null });
   });
 });

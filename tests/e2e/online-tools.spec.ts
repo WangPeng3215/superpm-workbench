@@ -12,7 +12,7 @@ declare global {
 
 async function openAddDialog(page: Page) {
   await page.getByRole("button", { name: "添加工具" }).click();
-  const dialog = page.getByRole("dialog", { name: "添加在线工具" });
+  const dialog = page.getByRole("dialog", { name: "添加工具" });
   await expect(dialog).toBeVisible();
   return dialog;
 }
@@ -88,7 +88,7 @@ test("在线工具箱：维护、快捷弹窗与安全打开", async ({ page }) 
 
   await page.goto("/online-tools");
   await expect(page.locator(".page-heading")).toHaveCount(0);
-  await expect(page.getByText("还没有在线工具")).toBeVisible();
+  await expect(page.getByText("还没有工具")).toBeVisible();
 
   // 新增两个收藏工具：第二个应追加到快捷入口末尾
   await addTool(page, {
@@ -98,7 +98,7 @@ test("在线工具箱：维护、快捷弹窗与安全打开", async ({ page }) 
     description: "在线协作设计",
     favorite: true,
   });
-  await expect(page.getByText("在线工具已添加")).toBeVisible();
+  await expect(page.getByText("工具已添加")).toBeVisible();
   // 收藏工具后悬浮按钮不再显示数字红点
   await expect(page.locator(".fab-badge")).toHaveCount(0);
 
@@ -138,6 +138,9 @@ test("在线工具箱：维护、快捷弹窗与安全打开", async ({ page }) 
     panel.getByRole("button", { name: new RegExp(processOn) }),
   ).toBeVisible();
   await expect(panel.getByText("www.figma.com")).toBeVisible();
+  // 面板不展示收藏数量的圆圈数字
+  await expect(panel.locator(".panel-count")).toHaveCount(0);
+  await expect(panel.locator(".panel-section")).toHaveText("我的工具");
   const search = panel.getByRole("textbox", { name: "搜索快捷工具" });
   await search.fill("思维导图");
   await expect(
@@ -222,12 +225,12 @@ test("在线工具箱：维护、快捷弹窗与安全打开", async ({ page }) 
   const deleteRow = page.locator(".el-table__row").filter({ hasText: figma });
   await deleteRow.getByRole("button", { name: "删除" }).click();
   const confirm = page.locator(".el-message-box");
-  await expect(confirm).toContainText("删除在线工具");
+  await expect(confirm).toContainText("删除工具");
   await expect(confirm).toContainText(
     "删除后，该工具将从快捷工具箱中移除。此操作不可撤销。",
   );
   await confirm.getByRole("button", { name: "删除" }).click();
-  await expect(page.getByText("在线工具已删除")).toBeVisible();
+  await expect(page.getByText("工具已删除")).toBeVisible();
   await expect(page.locator(".el-table__row")).toHaveCount(1);
 
   await page
@@ -239,7 +242,7 @@ test("在线工具箱：维护、快捷弹窗与安全打开", async ({ page }) 
     .locator(".el-message-box")
     .getByRole("button", { name: "删除" })
     .click();
-  await expect(page.getByText("还没有在线工具")).toBeVisible();
+  await expect(page.getByText("还没有工具")).toBeVisible();
   await expect(page.locator(".fab-badge")).toHaveCount(0);
   await expect(page.locator(".el-message-box")).toBeHidden();
 

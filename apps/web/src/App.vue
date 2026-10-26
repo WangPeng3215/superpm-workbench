@@ -5,6 +5,7 @@ import type { FormInstance, FormRules } from "element-plus";
 import { ElMessage, ElMessageBox } from "element-plus";
 import {
   CalendarOutlined,
+  FileTextOutlined,
   ProjectOutlined,
   TeamOutlined,
   ToolOutlined,
@@ -67,7 +68,8 @@ const navigation = [
   { path: "/requirements", label: "需求列表", icon: ProjectOutlined },
   { path: "/tasks", label: "每日任务", icon: CalendarOutlined },
   { path: "/meetings", label: "会议记录", icon: TeamOutlined },
-  { path: "/online-tools", label: "在线工具", icon: ToolOutlined },
+  { path: "/notes", label: "便签", icon: FileTextOutlined },
+  { path: "/online-tools", label: "工具箱", icon: ToolOutlined },
 ];
 onMounted(async () => {
   try {

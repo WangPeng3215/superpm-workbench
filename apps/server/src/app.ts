@@ -110,6 +110,7 @@ export async function createApp(
     issues: issueService,
     artifacts: artifactService,
     dailyTasks,
+    notes,
     onlineTools,
     meetings,
   } = container;
@@ -300,7 +301,7 @@ export async function createApp(
         },
         { key: "tasks", name: roadmap.tasks, status: "available" },
         { key: "meetings", name: "会议记录", status: "available" },
-        { key: "online-tools", name: "在线工具", status: "available" },
+        { key: "online-tools", name: "工具箱", status: "available" },
         { key: "updates", name: "版本与更新", status: "available" },
         ...Object.entries(roadmap)
           .filter(([key]) => key !== "issues" && key !== "tasks")
@@ -675,7 +676,26 @@ export async function createApp(
         request.body,
       ),
   );
-  // ===== 在线工具箱 =====
+  // ===== 便签 =====
+  app.get("/api/notes", async (request) => notes.list(request.query ?? {}));
+  app.post("/api/notes", async (request, reply) =>
+    reply.status(201).send(notes.create(request.body)),
+  );
+  app.post<{ Params: { id: string } }>(
+    "/api/notes/:id/convert",
+    async (request) => notes.convert(parseScopedId(request.params.id, "便签")),
+  );
+  app.patch<{ Params: { id: string } }>("/api/notes/:id", async (request) =>
+    notes.update(parseScopedId(request.params.id, "便签"), request.body),
+  );
+  app.delete<{ Params: { id: string } }>(
+    "/api/notes/:id",
+    async (request, reply) => {
+      notes.remove(parseScopedId(request.params.id, "便签"));
+      return reply.status(204).send();
+    },
+  );
+  // ===== 工具箱 =====
   app.get("/api/online-tools", async () => onlineTools.list());
   app.get("/api/online-tools/favorites", async () => onlineTools.favorites());
   app.post("/api/online-tools", async (request, reply) =>
@@ -688,20 +708,20 @@ export async function createApp(
   app.get<{ Params: { id: string } }>(
     "/api/online-tools/:id",
     async (request) =>
-      onlineTools.get(parseScopedId(request.params.id, "在线工具")),
+      onlineTools.get(parseScopedId(request.params.id, "工具")),
   );
   app.patch<{ Params: { id: string } }>(
     "/api/online-tools/:id",
     async (request) =>
       onlineTools.update(
-        parseScopedId(request.params.id, "在线工具"),
+        parseScopedId(request.params.id, "工具"),
         request.body,
       ),
   );
   app.delete<{ Params: { id: string } }>(
     "/api/online-tools/:id",
     async (request, reply) => {
-      onlineTools.remove(parseScopedId(request.params.id, "在线工具"));
+      onlineTools.remove(parseScopedId(request.params.id, "工具"));
       return reply.status(204).send();
     },
   );

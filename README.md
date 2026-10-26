@@ -40,7 +40,8 @@ npm start
 - 需求文档知识库：多层级文件夹、Markdown 文件、外部链接，磁盘为唯一事实来源，支持本地文件上传（选择/拖拽）、最终版标记与外部修改刷新。
 - 需求问题跟踪：问题、活动记录与文件关联。
 - 每日任务：按日计划与拖拽排序、关联需求、计划时段、状态筛选与月度日历；支持单活动计时、18:00/8 小时自动结束、工时校正与审计，以及可复制的每日工作总结。规则与接口见 `docs/daily-tasks.md`。
-- 在线工具箱：维护常用工具的名称、地址、图标、分类、描述、启停与收藏；全局悬浮按钮可拖动并把位置保存在本机，快捷弹窗按收藏排序搜索并新窗口打开。
+- 工具箱：维护常用工具的名称、地址、图标、分类、描述、启停与收藏；全局悬浮按钮可拖动并把位置保存在本机，快捷弹窗按收藏排序搜索并新窗口打开，并保留「新建便签」快捷入口。
+- 便签：左侧导航独立入口，纸张卡片网格，卡片内直接编辑标题与正文，700ms 防抖自动保存、失焦补充保存与失败提示；支持搜索、类型/置顶筛选、置顶、归档/恢复与删除确认；可一键转为每日任务并记录目标任务，转换幂等。
 - 会议记录：记录周例会、组例会、需求沟通会议与功能上线培训，支持按标题/类型检索、关联多个需求；正文复用 Tiptap 富文本，支持文本颜色、高亮与可跳转的需求引用。
 - 需求物理目录自动初始化：可读目录名（`REQ-xxxx 名称`）、默认目录与系统级资源、失败可重试。
 - 前后端共享契约、真实 SQLite 集成测试、浏览器验收和 GitHub Actions CI 流水线。
@@ -183,7 +184,7 @@ npm run backup -- restore <备份ID>
 发布构建、安装包冒烟测试、真实版本升级演练与数据根迁移演练：
 
 ```powershell
-node scripts/release/build-release.mjs --version 0.7.0 --notes "更新说明"
+node scripts/release/build-release.mjs --version 0.8.0 --notes "更新说明"
 node scripts/release/rehearse-update.mjs --from release/0.2.0/superpm-workbench-0.2.0-win-x64.zip --manifest release/0.3.0/update-manifest.json
 node scripts/release/rehearse-move-home.mjs
 ```
@@ -238,6 +239,11 @@ node scripts/release/rehearse-move-home.mjs
 | POST `/api/daily-tasks/:id/start`                 | 开始计时                                         |
 | POST `/api/daily-tasks/:id/stop`                  | 结束计时                                         |
 | PATCH `/api/daily-time-entries/:id`               | 校正已完成工时并写入审计                         |
+| GET `/api/notes`                                  | 便签列表，按归档视图与置顶/创建时间排序          |
+| POST `/api/notes`                                 | 创建便签                                         |
+| PATCH `/api/notes/:id`                            | 更新便签内容、类型、颜色与状态                   |
+| DELETE `/api/notes/:id`                           | 删除便签                                         |
+| POST `/api/notes/:id/convert`                     | 转为每日任务；已转换且任务存在时幂等返回         |
 
 输入字段与枚举见 `packages/shared/src/index.ts`。分页总数按主需求计算；子需求匹配筛选时携带父需求作为上下文。统一错误响应 `{ error: { code, message, details? } }`。
 

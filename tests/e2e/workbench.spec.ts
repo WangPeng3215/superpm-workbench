@@ -469,7 +469,8 @@ test("workbench shell uses compact native theme and collapsed navigation", async
     "需求列表",
     "每日任务",
     "会议记录",
-    "在线工具",
+    "便签",
+    "工具箱",
   ]);
   await expect(page.locator(".topbar")).toHaveCSS("height", "52px");
   await expect(page.locator(".topbar-tabs")).toHaveCSS(

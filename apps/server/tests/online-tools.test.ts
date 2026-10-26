@@ -94,17 +94,15 @@ describe("online tool service", () => {
     expect(() => service.reorder({ ids: [plain.id] })).toThrowError(
       "只能调整快捷工具箱中工具的排序",
     );
-    expect(() => service.reorder({ ids: [9999] })).toThrowError(
-      "在线工具不存在",
-    );
+    expect(() => service.reorder({ ids: [9999] })).toThrowError("工具不存在");
   });
 
   it("removes tools and reports missing ids", () => {
     const tool = create();
     service.remove(tool.id);
     expect(service.list()).toEqual([]);
-    expect(() => service.get(tool.id)).toThrowError("在线工具不存在");
-    expect(() => service.remove(tool.id)).toThrowError("在线工具不存在");
+    expect(() => service.get(tool.id)).toThrowError("工具不存在");
+    expect(() => service.remove(tool.id)).toThrowError("工具不存在");
   });
 });
 

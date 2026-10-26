@@ -959,3 +959,4 @@ export * from "./update-contract.js";
 export * from "./daily-tasks.js";
 export * from "./online-tools.js";
 export * from "./meetings.js";
+export * from "./notes.js";

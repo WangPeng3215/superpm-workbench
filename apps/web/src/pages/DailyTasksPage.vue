@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import {
   CheckOutlined,
@@ -42,6 +43,9 @@ import {
 const CopyIcon = decorative(CopyOutlined);
 const PlusIcon = decorative(PlusOutlined);
 const ReloadIcon = decorative(ReloadOutlined);
+
+const route = useRoute();
+const router = useRouter();
 
 const day = ref<DailyTaskDay | null>(null);
 const selectedDate = ref("");
@@ -465,6 +469,39 @@ function onVisibilityChange() {
   if (!document.hidden) void refreshBackground();
 }
 
+function deepLinkParams() {
+  const date = typeof route.query.date === "string" ? route.query.date : "";
+  const taskId = Number(route.query.task);
+  if (!date || !Number.isInteger(taskId) || taskId <= 0) return null;
+  return { date, taskId };
+}
+
+async function openDeepLinkedTask() {
+  const target = deepLinkParams();
+  if (!target) return;
+  const data = await loadDay(target.date);
+  if (data) {
+    const task = data.tasks.find((item) => item.id === target.taskId);
+    if (task) {
+      editingTask.value = task;
+      formOpen.value = true;
+    } else {
+      ElMessage.warning("目标任务不存在或已被删除");
+    }
+  }
+  const query = { ...route.query };
+  delete query.date;
+  delete query.task;
+  void router.replace({ path: route.path, query });
+}
+
+watch(
+  () => [route.query.date, route.query.task],
+  () => {
+    if (deepLinkParams()) void openDeepLinkedTask();
+  },
+);
+
 watch(nowMs, () => {
   const timer = activeTimer.value;
   if (!timer) return;
@@ -475,7 +512,8 @@ watch(nowMs, () => {
 let tickTimer = 0;
 let pollTimer = 0;
 onMounted(() => {
-  void loadDay();
+  if (deepLinkParams()) void openDeepLinkedTask();
+  else void loadDay();
   tickTimer = window.setInterval(() => {
     nowMs.value = Date.now();
   }, 1000);

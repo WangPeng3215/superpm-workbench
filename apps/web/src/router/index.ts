@@ -41,9 +41,14 @@ export const router = createRouter({
       meta: { title: "每日任务", module: "tasks" },
     },
     {
+      path: "/notes",
+      component: () => import("../pages/NotesPage.vue"),
+      meta: { title: "便签" },
+    },
+    {
       path: "/online-tools",
       component: () => import("../pages/OnlineToolsPage.vue"),
-      meta: { title: "在线工具" },
+      meta: { title: "工具箱" },
     },
     {
       path: "/notifications",

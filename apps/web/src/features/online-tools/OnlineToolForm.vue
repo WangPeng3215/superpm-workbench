@@ -39,7 +39,7 @@ const form = reactive({
   isFavorite: false,
 });
 
-const title = computed(() => (props.tool ? "编辑在线工具" : "添加在线工具"));
+const title = computed(() => (props.tool ? "编辑工具" : "添加工具"));
 const urlHint = computed(() => {
   if (!form.url.trim()) return "支持 http / https，点击后在新标签页打开";
   if (!isAllowedExternalUrl(form.url))
