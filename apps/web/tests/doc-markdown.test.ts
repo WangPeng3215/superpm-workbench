@@ -62,6 +62,30 @@ describe("document markdown serialization", () => {
     expect(roundtrip(markdown)).toBe(markdown);
   });
 
+  it("keeps an inserted empty table stable", () => {
+    const html =
+      "<table><colgroup><col><col></colgroup><tbody><tr><th><p></p></th><th><p></p></th></tr><tr><td><p></p></td><td><p></p></td></tr><tr><td><p></p></td><td><p></p></td></tr></tbody></table>";
+    const markdown = htmlToMarkdown(html);
+    expect(markdown).toBe("|  |  |\n| --- | --- |\n|  |  |\n|  |  |\n");
+    expect(roundtrip(markdown)).toBe(markdown);
+  });
+
+  it("keeps a multiparagraph cell on one markdown line", () => {
+    const html =
+      "<table><tbody><tr><th><p>第一行</p><p>第二行</p></th><th><p>列</p></th></tr><tr><td><p>a</p><p>b</p></td><td><p>c</p></td></tr></tbody></table>";
+    const markdown = htmlToMarkdown(html);
+    expect(markdown).toBe(
+      "| 第一行 第二行 | 列 |\n| --- | --- |\n| a b | c |\n",
+    );
+    expect(roundtrip(markdown)).toBe(markdown);
+  });
+
+  it("keeps a wider table with header and body rows stable", () => {
+    const markdown =
+      "| 名称 | 状态 | 负责人 | 备注 |\n| --- | --- | --- | --- |\n| A | 进行中 | 张三 | 无 |\n| B | 已完成 | 李四 | 无 |\n";
+    expect(roundtrip(markdown)).toBe(markdown);
+  });
+
   it("preserves ordered list start numbers", () => {
     expect(htmlToMarkdown(markdownToHtml("3. 丙\n4. 丁\n"))).toBe(
       "3. 丙\n4. 丁\n",

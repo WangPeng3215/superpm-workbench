@@ -176,3 +176,72 @@ test("rich text colors, highlights and requirement refs are shared across editor
 
   expect(errors).toEqual([]);
 });
+
+// 表格沿用 GFM Markdown 存储：工具栏可插入带表头的表格并增删行，
+// 自动保存后磁盘上的 Markdown 仍能还原成同一张表。
+test("tables can be inserted and edited from the toolbar", async ({
+  page,
+  request,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  const suffix = Date.now();
+  const requirement = await createRequirementViaApi(
+    request,
+    `表格能力-${suffix}`,
+  );
+
+  await page.goto(`/requirements/${requirement.id}`);
+  await page.getByRole("tab", { name: "文档管理", exact: true }).click();
+  await page.locator('.doc-card[data-name="需求记忆.md"]').click();
+  const doc = page.getByLabel("文档内容");
+  const toolbar = page
+    .locator(".inline-rich")
+    .filter({ has: page.getByLabel("文档内容") })
+    .locator(".rich-toolbar");
+
+  await doc.click();
+  await toolbar.getByRole("button", { name: "表格", exact: true }).click();
+  await page.locator('button[aria-label="插入 3 × 4 表格"]:visible').click();
+  const table = doc.locator("table");
+  await expect(table).toHaveCount(1);
+  await expect(table.locator("tr")).toHaveCount(3);
+  await expect(table.locator("tr").first().locator("th")).toHaveCount(4);
+
+  const cells = table.locator("th, td");
+  await cells.nth(0).click();
+  await page.keyboard.type("名称");
+  await page.keyboard.press("Tab");
+  await page.keyboard.type("状态");
+
+  await toolbar.getByRole("button", { name: "表格", exact: true }).click();
+  await page.getByRole("button", { name: "下方插入行", exact: true }).click();
+  await expect(table.locator("tr")).toHaveCount(4);
+
+  const memory = (await (
+    await request.get(`/api/requirements/${requirement.id}/memory`)
+  ).json()) as { id: number };
+  await expect
+    .poll(async () => {
+      const response = await request.get(
+        `/api/artifacts/nodes/${memory.id}/content`,
+      );
+      return ((await response.json()) as { content: string }).content;
+    })
+    .toContain("| 名称 | 状态 |");
+  const stored = (await (
+    await request.get(`/api/artifacts/nodes/${memory.id}/content`)
+  ).json()) as { content: string };
+  expect(stored.content).toContain("| --- | --- | --- | --- |");
+
+  await page.reload();
+  await page.getByRole("tab", { name: "文档管理", exact: true }).click();
+  await page.locator('.doc-card[data-name="需求记忆.md"]').click();
+  const reopened = page.getByLabel("文档内容");
+  await expect(reopened.locator("table")).toHaveCount(1);
+  await expect(reopened.locator("table tr")).toHaveCount(4);
+  await expect(reopened.locator("table th").nth(0)).toHaveText("名称");
+  await expect(reopened.locator("table th").nth(1)).toHaveText("状态");
+
+  expect(errors).toEqual([]);
+});

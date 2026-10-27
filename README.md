@@ -43,6 +43,7 @@ npm start
 - 工具箱：维护常用工具的名称、地址、图标、分类、描述、启停与收藏；全局悬浮按钮可拖动并把位置保存在本机，快捷弹窗按收藏排序搜索并新窗口打开，并保留「新建便签」快捷入口。
 - 便签：左侧导航独立入口，纸张卡片网格，卡片内直接编辑标题与正文，700ms 防抖自动保存、失焦补充保存与失败提示；支持搜索、类型/置顶筛选、置顶、归档/恢复与删除确认；可一键转为每日任务并记录目标任务，转换幂等。
 - 会议记录：记录周例会、组例会、需求沟通会议与功能上线培训，支持按标题/类型检索、关联多个需求；正文复用 Tiptap 富文本，支持文本颜色、高亮与可跳转的需求引用。
+- 富文本表格：需求描述、需求文档与会议正文的编辑器都支持插入表格（始终带表头）与行列增删、删除表格；表格按 GFM Markdown 保存，不提供合并/拆分单元格。
 - 需求物理目录自动初始化：可读目录名（`REQ-xxxx 名称`）、默认目录与系统级资源、失败可重试。
 - 前后端共享契约、真实 SQLite 集成测试、浏览器验收和 GitHub Actions CI 流水线。
 
@@ -184,7 +185,7 @@ npm run backup -- restore <备份ID>
 发布构建、安装包冒烟测试、真实版本升级演练与数据根迁移演练：
 
 ```powershell
-node scripts/release/build-release.mjs --version 0.9.0 --notes "更新说明"
+node scripts/release/build-release.mjs --version 0.10.0 --notes "更新说明"
 node scripts/release/rehearse-update.mjs --from release/0.2.0/superpm-workbench-0.2.0-win-x64.zip --manifest release/0.3.0/update-manifest.json
 node scripts/release/rehearse-move-home.mjs
 ```

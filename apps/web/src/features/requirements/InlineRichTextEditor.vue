@@ -18,8 +18,15 @@ import {
   BoldOutlined,
   CheckSquareOutlined,
   CodeOutlined,
+  DeleteColumnOutlined,
+  DeleteOutlined,
+  DeleteRowOutlined,
   FontColorsOutlined,
   HighlightOutlined,
+  InsertRowAboveOutlined,
+  InsertRowBelowOutlined,
+  InsertRowLeftOutlined,
+  InsertRowRightOutlined,
   ItalicOutlined,
   LinkOutlined,
   MinusOutlined,
@@ -27,6 +34,7 @@ import {
   PictureOutlined,
   RedoOutlined,
   StrikethroughOutlined,
+  TableOutlined,
   TagsOutlined,
   UnderlineOutlined,
   UndoOutlined,
@@ -286,6 +294,79 @@ function insertRequirement(option: RequirementOption) {
     })
     .run();
   refDialogOpen.value = false;
+}
+const MAX_TABLE_ROWS = 8;
+const MAX_TABLE_COLS = 8;
+const tableMenuOpen = ref(false);
+const tableHover = ref({ rows: 3, cols: 3 });
+const tableGrid = Array.from(
+  { length: MAX_TABLE_ROWS * MAX_TABLE_COLS },
+  (_, index) => ({
+    row: Math.floor(index / MAX_TABLE_COLS) + 1,
+    col: (index % MAX_TABLE_COLS) + 1,
+  }),
+);
+function hoverTable(rows: number, cols: number) {
+  tableHover.value = { rows, cols };
+}
+function insertTable(rows: number, cols: number) {
+  editor.value
+    ?.chain()
+    .focus()
+    .insertTable({ rows, cols, withHeaderRow: true })
+    .run();
+  tableHover.value = { rows: 3, cols: 3 };
+  tableMenuOpen.value = false;
+}
+function currentTableSize() {
+  const instance = editor.value;
+  if (!instance) return null;
+  const { $from } = instance.state.selection;
+  for (let depth = $from.depth; depth > 0; depth -= 1) {
+    const node = $from.node(depth);
+    if (node.type.name === "table")
+      return {
+        rows: node.childCount,
+        cols: node.firstChild?.childCount ?? 0,
+      };
+  }
+  return null;
+}
+type TableAction =
+  | "addRowBefore"
+  | "addRowAfter"
+  | "addColumnBefore"
+  | "addColumnAfter"
+  | "deleteRow"
+  | "deleteColumn"
+  | "deleteTable";
+function runTableAction(action: TableAction) {
+  const instance = editor.value;
+  if (!instance) return;
+  switch (action) {
+    case "addRowBefore":
+      instance.chain().focus().addRowBefore().run();
+      break;
+    case "addRowAfter":
+      instance.chain().focus().addRowAfter().run();
+      break;
+    case "addColumnBefore":
+      instance.chain().focus().addColumnBefore().run();
+      break;
+    case "addColumnAfter":
+      instance.chain().focus().addColumnAfter().run();
+      break;
+    case "deleteRow":
+      instance.chain().focus().deleteRow().run();
+      break;
+    case "deleteColumn":
+      instance.chain().focus().deleteColumn().run();
+      break;
+    case "deleteTable":
+      instance.chain().focus().deleteTable().run();
+      break;
+  }
+  tableMenuOpen.value = false;
 }
 function onContentClick(event: MouseEvent) {
   const target = (event.target as HTMLElement | null)?.closest<HTMLElement>(
@@ -860,6 +941,113 @@ onBeforeUnmount(() => editor.value?.destroy());
       </div>
       <span class="toolbar-divider"></span>
       <div class="toolbar-group">
+        <el-popover
+          v-model:visible="tableMenuOpen"
+          placement="bottom-start"
+          :width="editor.isActive('table') ? 208 : 236"
+          trigger="click"
+          :show-arrow="false"
+        >
+          <template #reference>
+            <button
+              type="button"
+              :class="{ active: editor.isActive('table') }"
+              aria-label="表格"
+              title="插入或编辑表格"
+            >
+              <TableOutlined />
+            </button>
+          </template>
+          <div class="table-panel" @mousedown.prevent>
+            <template v-if="!editor.isActive('table')">
+              <div class="table-panel-title">插入表格</div>
+              <div class="table-grid">
+                <button
+                  v-for="cell in tableGrid"
+                  :key="`${cell.row}-${cell.col}`"
+                  type="button"
+                  class="table-grid-cell"
+                  :class="{
+                    active:
+                      cell.row <= tableHover.rows &&
+                      cell.col <= tableHover.cols,
+                  }"
+                  :aria-label="`插入 ${cell.row} × ${cell.col} 表格`"
+                  :title="`${cell.row} × ${cell.col}`"
+                  @mouseenter="hoverTable(cell.row, cell.col)"
+                  @click="insertTable(cell.row, cell.col)"
+                />
+              </div>
+              <div class="table-panel-hint">
+                插入 {{ tableHover.rows }} ×
+                {{ tableHover.cols }} 表格（含表头）
+              </div>
+            </template>
+            <template v-else>
+              <div class="table-panel-title">表格操作</div>
+              <div class="table-actions">
+                <button
+                  type="button"
+                  class="table-action"
+                  aria-label="上方插入行"
+                  @click="runTableAction('addRowBefore')"
+                >
+                  <InsertRowAboveOutlined /><span>上方插入行</span>
+                </button>
+                <button
+                  type="button"
+                  class="table-action"
+                  aria-label="下方插入行"
+                  @click="runTableAction('addRowAfter')"
+                >
+                  <InsertRowBelowOutlined /><span>下方插入行</span>
+                </button>
+                <button
+                  type="button"
+                  class="table-action"
+                  aria-label="左侧插入列"
+                  @click="runTableAction('addColumnBefore')"
+                >
+                  <InsertRowLeftOutlined /><span>左侧插入列</span>
+                </button>
+                <button
+                  type="button"
+                  class="table-action"
+                  aria-label="右侧插入列"
+                  @click="runTableAction('addColumnAfter')"
+                >
+                  <InsertRowRightOutlined /><span>右侧插入列</span>
+                </button>
+                <button
+                  type="button"
+                  class="table-action"
+                  aria-label="删除当前行"
+                  :disabled="(currentTableSize()?.rows ?? 1) <= 1"
+                  @click="runTableAction('deleteRow')"
+                >
+                  <DeleteRowOutlined /><span>删除当前行</span>
+                </button>
+                <button
+                  type="button"
+                  class="table-action"
+                  aria-label="删除当前列"
+                  :disabled="(currentTableSize()?.cols ?? 1) <= 1"
+                  @click="runTableAction('deleteColumn')"
+                >
+                  <DeleteColumnOutlined /><span>删除当前列</span>
+                </button>
+                <button
+                  type="button"
+                  class="table-action table-action--danger"
+                  aria-label="删除表格"
+                  @click="runTableAction('deleteTable')"
+                >
+                  <DeleteOutlined /><span>删除表格</span>
+                </button>
+              </div>
+            </template>
+          </div>
+        </el-popover>
         <button
           type="button"
           :class="{ active: editor.isActive('link') }"
@@ -1318,6 +1506,97 @@ onBeforeUnmount(() => editor.value?.destroy());
   border: 0;
   background: none;
   cursor: pointer;
+}
+/* 表格面板：网格插入与表格内行列操作 */
+.table-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.table-panel-title {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+.table-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 20px);
+  gap: 4px;
+}
+.table-grid-cell {
+  width: 20px;
+  height: 20px;
+  box-sizing: border-box;
+  padding: 0;
+  border: 1px solid var(--border-base);
+  border-radius: 3px;
+  background: var(--bg-surface);
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard);
+}
+.table-grid-cell:hover,
+.table-grid-cell.active {
+  border-color: var(--brand);
+  background: var(--bg-brand-soft);
+}
+.table-grid-cell:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 1px;
+}
+.table-panel-hint {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.table-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.table-action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-body);
+  font-family: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    color var(--duration-fast) var(--ease-standard),
+    background-color var(--duration-fast) var(--ease-standard);
+}
+.table-action svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+}
+.table-action:hover {
+  background: var(--bg-brand-soft);
+  color: var(--brand);
+}
+.table-action:disabled {
+  background: transparent;
+  color: var(--text-faint);
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.table-action--danger {
+  color: var(--tone-red-fg);
+}
+.table-action--danger:hover {
+  background: var(--tone-red-bg);
+  color: var(--tone-red-fg);
+}
+.table-action--danger:disabled {
+  background: transparent;
+  color: var(--text-faint);
 }
 /* 需求引用：内联胶囊；失效引用保留名称并弱化展示，点击给出提示 */
 .inline-rich :deep(.rich-document .requirement-ref) {
