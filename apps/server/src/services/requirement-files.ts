@@ -27,12 +27,12 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, extname, isAbsolute, join, relative, sep } from "node:path";
-import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { DomainError, RequirementService } from "./requirements.js";
 import { RequirementDirectoryResolver } from "./requirement-directory.js";
 import { resolveWorkspacePath } from "../storage/workspace.js";
 import { allowSystemOpen } from "../config/index.js";
+import { launchSystemOpen } from "./system-open.js";
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 // 导出供知识库（artifacts）等服务复用统一的扩展名 → MIME 推断
@@ -367,12 +367,12 @@ export class RequirementFileService {
         "application/octet-stream",
     };
   }
-  // 本地默认程序打开（补充文档 5.4）：总开关默认关闭，仅文件资源可触发
+  // 本地默认程序打开（补充文档 5.4）：默认开启，可显式关闭；仅文件资源可触发
   openAsset(id: number, fileId: number) {
     if (!allowSystemOpen)
       throw new DomainError(
         "FORBIDDEN",
-        "本地程序打开功能未启用（需设置 SUPERPM_ALLOW_SYSTEM_OPEN=1）",
+        "本地程序打开功能已关闭（SUPERPM_ALLOW_SYSTEM_OPEN=0）",
       );
     const file = this.row(id, fileId);
     if (file.resourceType !== "file")
@@ -382,18 +382,7 @@ export class RequirementFileService {
       );
     const path = this.resolveLocalPath(file);
     this.assertLocalFile(file, path);
-    // Windows 用 start，macOS 用 open，其余走 xdg-open；detached 避免阻塞请求
-    const command =
-      process.platform === "win32"
-        ? ["cmd", "/c", "start", "", path]
-        : process.platform === "darwin"
-          ? ["open", path]
-          : ["xdg-open", path];
-    const child = spawn(command[0], command.slice(1), {
-      detached: true,
-      stdio: "ignore",
-    });
-    child.unref();
+    launchSystemOpen(path);
   }
   // 链接条目没有文件体，正文/二进制/保存类操作一律拒绝
   private assertContentable(file: RequirementFile) {

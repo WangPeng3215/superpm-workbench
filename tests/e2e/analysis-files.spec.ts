@@ -135,13 +135,20 @@ test("opens Markdown files from disk without changing their contents", async ({
   await docCard(page, markdownFile.name).click();
   await expect(editor.locator("h1")).toHaveText("文件内的分析方案");
   await expect(editor.locator("strong")).toHaveText("补充内容");
-  // 非 Markdown 附件（未知格式）：新窗口打开 raw 地址下载，绝不进入编辑器
-  const popupPromise = page.waitForEvent("popup");
+  // 非 Markdown 附件：点击卡片交给系统默认应用打开（拦截接口避免测试机真实弹窗），绝不进入编辑器
+  await page.route("**/api/artifacts/nodes/*/open", (route) =>
+    route.fulfill({ status: 204, body: "" }),
+  );
+  const openRequest = page.waitForRequest(
+    (outgoing) =>
+      outgoing.method() === "POST" &&
+      /\/api\/artifacts\/nodes\/\d+\/open$/.test(outgoing.url()),
+  );
   await gotoDocManager(page);
   await docCard(page, textFile.name).click();
-  const popup = await popupPromise;
-  await expect(popup).toHaveURL(/\/raw$/);
-  await popup.close();
+  expect((await openRequest).url()).toMatch(
+    new RegExp(`/api/artifacts/nodes/${textFile.id}/open$`),
+  );
   // 补充方案页签保持已保存状态，且全程没有触发 PUT 保存
   await docTab(page, markdownFile.name).click();
   await expect(activeFooter(page)).toContainText("已自动保存");

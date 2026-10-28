@@ -142,17 +142,33 @@ describe("artifact service", () => {
     });
   });
 
+  it("新建文件未填写扩展名时默认创建 Markdown", async () => {
+    const file = await createFile("无后缀笔记");
+    expect(file.statusCode).toBe(201);
+    expect(file.json()).toMatchObject({
+      name: "无后缀笔记.md",
+      extension: ".md",
+      mimeType: "text/markdown; charset=utf-8",
+    });
+    expect(existsSync(join(requirementRoot(), "无后缀笔记.md"))).toBe(true);
+    expect(existsSync(join(requirementRoot(), "无后缀笔记"))).toBe(false);
+  });
+
   it("同级重名节点与同名链接被拒绝", async () => {
-    await createFolder("方案");
+    await createFolder("方案.md");
     const duplicate = await createFile("方案");
     expect(duplicate.statusCode).toBe(409);
     const linkOnFolder = await app.inject({
       method: "POST",
       url: `/api/requirements/${requirementId}/artifacts/links`,
-      payload: { folderNodeId: null, name: "方案", url: "https://example.com" },
+      payload: {
+        folderNodeId: null,
+        name: "方案.md",
+        url: "https://example.com",
+      },
     });
     expect(linkOnFolder.statusCode).toBe(409);
-    const secondFolder = await createFolder("方案");
+    const secondFolder = await createFolder("方案.md");
     expect(secondFolder.statusCode).toBe(409);
   });
 

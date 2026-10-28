@@ -18,7 +18,7 @@ export const router = createRouter({
     {
       path: "/requirements/:id",
       component: () => import("../pages/RequirementDetailPage.vue"),
-      meta: { title: "需求详情" },
+      meta: { title: "需求详情", keepAlive: true },
     },
     {
       path: "/meetings",

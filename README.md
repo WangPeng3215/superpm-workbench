@@ -37,7 +37,7 @@ npm start
 - 详情抽屉与阶段工作区骨架。浏览阶段不修改业务数据，“设为当前阶段”才保存并记录历史。
 - 状态与阶段独立；关键变更和阶段历史通过数据库事务保存。
 - 未保存关闭和页面离开保护，API 失败提示，真实存储路径查看。
-- 需求文档知识库：多层级文件夹、Markdown 文件、外部链接，磁盘为唯一事实来源，支持本地文件上传（选择/拖拽）、最终版标记与外部修改刷新。
+- 需求文档知识库：多层级文件夹、Markdown 文件、外部链接，磁盘为唯一事实来源，支持本地文件上传（选择/拖拽）、最终版标记与外部修改刷新；Markdown 在应用内编辑，图片在页内预览，其他文件可用系统默认程序打开，目录可在资源管理器中打开。
 - 需求问题跟踪：问题、活动记录与文件关联。
 - 每日任务：按日计划与拖拽排序、关联需求、计划时段、状态筛选与月度日历；支持单活动计时、18:00/8 小时自动结束、工时校正与审计，以及可复制的每日工作总结。规则与接口见 `docs/daily-tasks.md`。
 - 工具箱：维护常用工具的名称、地址、图标、分类、描述、启停与收藏；全局悬浮按钮可拖动并把位置保存在本机，快捷弹窗按收藏排序搜索并新窗口打开，并保留「新建便签」快捷入口。
@@ -185,66 +185,66 @@ npm run backup -- restore <备份ID>
 发布构建、安装包冒烟测试、真实版本升级演练与数据根迁移演练：
 
 ```powershell
-node scripts/release/build-release.mjs --version 0.10.0 --notes "更新说明"
+node scripts/release/build-release.mjs --version 0.11.0 --notes "更新说明"
 node scripts/release/rehearse-update.mjs --from release/0.2.0/superpm-workbench-0.2.0-win-x64.zip --manifest release/0.3.0/update-manifest.json
 node scripts/release/rehearse-move-home.mjs
 ```
 
 ## API
 
-| 接口                                              | 用途                                             |
-| ------------------------------------------------- | ------------------------------------------------ |
-| GET `/api/health`                                 | 服务状态、应用版本与 schema 版本                 |
-| GET `/api/system`                                 | 运行路径与模块状态（需登录）                     |
-| GET `/api/system/home/move`                       | 当前迁移任务状态                                 |
-| POST `/api/system/home/validate`                  | 校验目标父目录、空间与数据量                     |
-| POST `/api/system/home/move`                      | 启动数据根迁移（停服、复制、切换并重启）         |
-| POST `/api/system/home/cleanup`                   | 处理旧数据：保留或删除                           |
-| POST `/api/system/home/pick`                      | Windows 原生目录选择                             |
-| POST `/api/system/home/open`                      | 在资源管理器中打开当前数据根                     |
-| GET `/api/update/status`                          | 当前版本、更新锁、MCP 进程与更新进度             |
-| POST `/api/update/check`                          | 读取并缓存发布源版本清单                         |
-| POST `/api/update/install`                        | 下载校验更新包并启动独立更新器                   |
-| GET `/api/requirements`                           | 搜索/筛选/排序/分页，返回主需求及子需求          |
-| POST `/api/requirements`                          | 创建需求                                         |
-| GET `/api/requirements/:id`                       | 查看需求                                         |
-| PATCH `/api/requirements/:id`                     | 部分更新需求，允许跳过/退回阶段                  |
-| DELETE `/api/requirements/:id`                    | 软删除需求                                       |
-| GET `/api/requirements/:id/history`               | 阶段变更历史                                     |
-| GET `/api/requirements/:id/artifacts`             | 需求文档目录列表（按父目录或全需求搜索）         |
-| POST `/api/requirements/:id/artifacts/folders`    | 新建文件夹                                       |
-| POST `/api/requirements/:id/artifacts/files`      | 新建文件                                         |
-| POST `/api/requirements/:id/artifacts/upload`     | 上传本地文件到指定目录（≤50 MB，重名自动加序号） |
-| POST `/api/requirements/:id/artifacts/links`      | 新建外部链接                                     |
-| POST `/api/requirements/:id/artifacts/refresh`    | 扫描磁盘并同步索引                               |
-| PUT `/api/artifacts/nodes/:nodeId/content`        | 保存文档内容                                     |
-| PATCH `/api/artifacts/nodes/:nodeId/final`        | 标记或取消文件的最终确认版本                     |
-| PATCH `/api/artifacts/links/:linkId/final`        | 标记或取消链接的最终确认版本                     |
-| POST `/api/artifacts/nodes/:nodeId/open`          | 打开目录或在文件夹中定位；文件默认程序打开需开关 |
-| POST `/api/requirements/:id/directory/open`       | 打开需求内物理目录（留空为需求根目录）           |
-| POST `/api/requirements/:id/artifacts/images`     | 上传图片到需求 `images/`，返回相对路径           |
-| GET `/api/requirements/:id/artifacts/image`       | 按文档相对路径读取图片                           |
-| GET `/api/requirements/:id/memory`                | 读取需求记忆（懒初始化）                         |
-| GET `/api/requirements/:id/directory`             | 需求物理目录与初始化状态                         |
-| POST `/api/requirements/:id/directory/initialize` | 幂等初始化默认目录与系统级资源                   |
-| POST `/api/requirements/:id/directory/repair`     | 显式补建缺失的默认结构                           |
-| GET `/api/daily-tasks`                            | 指定业务日的任务、统计、活动计时与总结           |
-| GET `/api/daily-tasks/calendar`                   | 月度每日任务数、完成数、工时与活动标记           |
-| GET `/api/daily-tasks/active`                     | 当前活动计时                                     |
-| GET `/api/daily-tasks/summary-text`               | 指定业务日的工作总结文本                         |
-| POST `/api/daily-tasks`                           | 创建每日任务                                     |
-| PATCH `/api/daily-tasks/:id`                      | 部分更新每日任务                                 |
-| PATCH `/api/daily-tasks/order`                    | 重写某日任务顺序                                 |
-| DELETE `/api/daily-tasks/:id`                     | 删除任务；有工时记录时归档                       |
-| GET `/api/daily-tasks/:id/time-entries`           | 任务的历史工时记录                               |
-| POST `/api/daily-tasks/:id/start`                 | 开始计时                                         |
-| POST `/api/daily-tasks/:id/stop`                  | 结束计时                                         |
-| PATCH `/api/daily-time-entries/:id`               | 校正已完成工时并写入审计                         |
-| GET `/api/notes`                                  | 便签列表，按归档视图与置顶/创建时间排序          |
-| POST `/api/notes`                                 | 创建便签                                         |
-| PATCH `/api/notes/:id`                            | 更新便签内容、类型、颜色与状态                   |
-| DELETE `/api/notes/:id`                           | 删除便签                                         |
-| POST `/api/notes/:id/convert`                     | 转为每日任务；已转换且任务存在时幂等返回         |
+| 接口                                              | 用途                                               |
+| ------------------------------------------------- | -------------------------------------------------- |
+| GET `/api/health`                                 | 服务状态、应用版本与 schema 版本                   |
+| GET `/api/system`                                 | 运行路径与模块状态（需登录）                       |
+| GET `/api/system/home/move`                       | 当前迁移任务状态                                   |
+| POST `/api/system/home/validate`                  | 校验目标父目录、空间与数据量                       |
+| POST `/api/system/home/move`                      | 启动数据根迁移（停服、复制、切换并重启）           |
+| POST `/api/system/home/cleanup`                   | 处理旧数据：保留或删除                             |
+| POST `/api/system/home/pick`                      | Windows 原生目录选择                               |
+| POST `/api/system/home/open`                      | 在资源管理器中打开当前数据根                       |
+| GET `/api/update/status`                          | 当前版本、更新锁、MCP 进程与更新进度               |
+| POST `/api/update/check`                          | 读取并缓存发布源版本清单                           |
+| POST `/api/update/install`                        | 下载校验更新包并启动独立更新器                     |
+| GET `/api/requirements`                           | 搜索/筛选/排序/分页，返回主需求及子需求            |
+| POST `/api/requirements`                          | 创建需求                                           |
+| GET `/api/requirements/:id`                       | 查看需求                                           |
+| PATCH `/api/requirements/:id`                     | 部分更新需求，允许跳过/退回阶段                    |
+| DELETE `/api/requirements/:id`                    | 软删除需求                                         |
+| GET `/api/requirements/:id/history`               | 阶段变更历史                                       |
+| GET `/api/requirements/:id/artifacts`             | 需求文档目录列表（按父目录或全需求搜索）           |
+| POST `/api/requirements/:id/artifacts/folders`    | 新建文件夹                                         |
+| POST `/api/requirements/:id/artifacts/files`      | 新建文件                                           |
+| POST `/api/requirements/:id/artifacts/upload`     | 上传本地文件到指定目录（≤50 MB，重名自动加序号）   |
+| POST `/api/requirements/:id/artifacts/links`      | 新建外部链接                                       |
+| POST `/api/requirements/:id/artifacts/refresh`    | 扫描磁盘并同步索引                                 |
+| PUT `/api/artifacts/nodes/:nodeId/content`        | 保存文档内容                                       |
+| PATCH `/api/artifacts/nodes/:nodeId/final`        | 标记或取消文件的最终确认版本                       |
+| PATCH `/api/artifacts/links/:linkId/final`        | 标记或取消链接的最终确认版本                       |
+| POST `/api/artifacts/nodes/:nodeId/open`          | 打开目录或在文件夹中定位；文件默认程序打开默认开启 |
+| POST `/api/requirements/:id/directory/open`       | 打开需求内物理目录（留空为需求根目录）             |
+| POST `/api/requirements/:id/artifacts/images`     | 上传图片到需求 `images/`，返回相对路径             |
+| GET `/api/requirements/:id/artifacts/image`       | 按文档相对路径读取图片                             |
+| GET `/api/requirements/:id/memory`                | 读取需求记忆（懒初始化）                           |
+| GET `/api/requirements/:id/directory`             | 需求物理目录与初始化状态                           |
+| POST `/api/requirements/:id/directory/initialize` | 幂等初始化默认目录与系统级资源                     |
+| POST `/api/requirements/:id/directory/repair`     | 显式补建缺失的默认结构                             |
+| GET `/api/daily-tasks`                            | 指定业务日的任务、统计、活动计时与总结             |
+| GET `/api/daily-tasks/calendar`                   | 月度每日任务数、完成数、工时与活动标记             |
+| GET `/api/daily-tasks/active`                     | 当前活动计时                                       |
+| GET `/api/daily-tasks/summary-text`               | 指定业务日的工作总结文本                           |
+| POST `/api/daily-tasks`                           | 创建每日任务                                       |
+| PATCH `/api/daily-tasks/:id`                      | 部分更新每日任务                                   |
+| PATCH `/api/daily-tasks/order`                    | 重写某日任务顺序                                   |
+| DELETE `/api/daily-tasks/:id`                     | 删除任务；有工时记录时归档                         |
+| GET `/api/daily-tasks/:id/time-entries`           | 任务的历史工时记录                                 |
+| POST `/api/daily-tasks/:id/start`                 | 开始计时                                           |
+| POST `/api/daily-tasks/:id/stop`                  | 结束计时                                           |
+| PATCH `/api/daily-time-entries/:id`               | 校正已完成工时并写入审计                           |
+| GET `/api/notes`                                  | 便签列表，按归档视图与置顶/创建时间排序            |
+| POST `/api/notes`                                 | 创建便签                                           |
+| PATCH `/api/notes/:id`                            | 更新便签内容、类型、颜色与状态                     |
+| DELETE `/api/notes/:id`                           | 删除便签                                           |
+| POST `/api/notes/:id/convert`                     | 转为每日任务；已转换且任务存在时幂等返回           |
 
 输入字段与枚举见 `packages/shared/src/index.ts`。分页总数按主需求计算；子需求匹配筛选时携带父需求作为上下文。统一错误响应 `{ error: { code, message, details? } }`。
 

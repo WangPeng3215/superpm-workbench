@@ -236,7 +236,8 @@ test.describe("需求知识库（文档管理）", () => {
     await memoryCard.hover();
     await memoryCard.locator(".doc-more-btn").click();
     const menu = page.locator(".el-dropdown-menu__item:visible");
-    await expect(menu.filter({ hasText: "打开" })).toBeVisible();
+    await expect(menu.filter({ hasText: /^打开$/ })).toBeVisible();
+    await expect(menu.filter({ hasText: /^下载$/ })).toBeVisible();
     await expect(menu.filter({ hasText: "删除" })).toHaveCount(0);
     await page.keyboard.press("Escape");
     // API 层同样拒绝（服务端删除保护）
@@ -255,7 +256,7 @@ test.describe("需求知识库（文档管理）", () => {
     await page.locator(".doc-tools .refresh-btn").click();
     await expect(docCard(page, "pixel.png")).toBeVisible();
     await expect(docCard(page, "外部说明.txt")).toBeVisible();
-    // 图片点卡片 → 页内预览弹层（teleport 到 body），图片源为 raw 地址
+    // 图片点卡片 → 页内预览弹层（teleport 到 body），图片源为 raw 地址，不交给系统应用
     await docCard(page, "pixel.png").click();
     const viewer = page.locator(".el-image-viewer__wrapper");
     await expect(viewer).toBeVisible();
@@ -320,5 +321,82 @@ test.describe("需求知识库（文档管理）", () => {
     await search.fill("");
     await expect(docCard(page, "会议记录.md")).toBeVisible();
     await expect(docCard(page, "调研笔记.md")).toHaveCount(0);
+  });
+
+  test("新建文件省略扩展名时默认创建 Markdown 文档", async ({
+    page,
+    request,
+  }) => {
+    const { requirementRoot } = await openDocManager(page, request);
+    await createViaDialog(page, "文件", { name: "默认格式笔记" });
+    await expect(docCard(page, "默认格式笔记.md")).toBeVisible();
+    await expect(docCard(page, "默认格式笔记")).toHaveCount(0);
+    expect(existsSync(join(requirementRoot, "默认格式笔记.md"))).toBe(true);
+    await docCard(page, "默认格式笔记.md").click();
+    await expect(
+      page.getByRole("tab", { name: "默认格式笔记.md", exact: true }),
+    ).toBeVisible();
+  });
+
+  test("最终版文件和链接排在其他卡片之前", async ({ page, request }) => {
+    const { requirement } = await openDocManager(page, request);
+    await createViaDialog(page, "文件夹", { name: "普通目录" });
+    await createViaDialog(page, "文件", { name: "普通文档.md" });
+    await createViaDialog(page, "文件", { name: "确认文档.md" });
+    await createViaDialog(page, "链接", {
+      name: "确认链接",
+      url: "https://example.com/final",
+    });
+    const root = await (
+      await request.get(`/api/requirements/${requirement.id}/artifacts`)
+    ).json();
+    const finalFile = root.files.find(
+      (file: ArtifactNode) => file.name === "确认文档.md",
+    ) as ArtifactNode;
+    const finalLink = root.links.find(
+      (link: { name: string }) => link.name === "确认链接",
+    );
+    await request.patch(`/api/artifacts/nodes/${finalFile.id}/final`, {
+      data: { isFinal: true },
+    });
+    await request.patch(`/api/artifacts/links/${finalLink.id}/final`, {
+      data: { isFinal: true },
+    });
+    await page.reload();
+    await page.getByRole("tab", { name: "文档管理", exact: true }).click();
+    const visualNames = await page.locator(".doc-card").evaluateAll((cards) =>
+      cards
+        .map((card) => {
+          const rect = card.getBoundingClientRect();
+          return {
+            name: card.getAttribute("data-name"),
+            top: rect.top,
+            left: rect.left,
+          };
+        })
+        .sort((a, b) => a.top - b.top || a.left - b.left)
+        .map((card) => card.name),
+    );
+    expect(new Set(visualNames.slice(0, 2))).toEqual(
+      new Set(["确认文档.md", "确认链接"]),
+    );
+    expect(visualNames.slice(2)).toContain("普通目录");
+    expect(visualNames.slice(2)).toContain("普通文档.md");
+  });
+
+  test("仅在文件名截断时通过悬浮气泡显示完整名称", async ({
+    page,
+    request,
+  }) => {
+    await openDocManager(page, request);
+    const longName = `${"这是一份用于验证长文件名悬浮提示的会议纪要".repeat(3)}.md`;
+    await createViaDialog(page, "文件", { name: "短.md" });
+    await createViaDialog(page, "文件", { name: longName });
+    await docCard(page, "短.md").locator(".name-text").hover();
+    await expect(page.getByRole("tooltip")).toHaveCount(0);
+    await docCard(page, longName).locator(".name-text").hover();
+    await expect(
+      page.getByRole("tooltip").filter({ hasText: longName }),
+    ).toBeVisible();
   });
 });

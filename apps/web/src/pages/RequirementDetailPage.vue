@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onActivated, ref } from "vue";
 import {
   onBeforeRouteLeave,
   onBeforeRouteUpdate,
@@ -49,7 +49,9 @@ type Editable = Pick<
 >;
 const route = useRoute();
 const router = useRouter();
-const id = computed(() => Number(route.params.id));
+// 详情路由按 fullPath 缓存（router/index.ts 中的 keepAlive），每个页面实例固定对应一个需求；
+// 不使用全局 route.params，以免缓存页失活时被其他路由的参数变化重新加载覆盖草稿
+const id = ref(Number(route.params.id));
 const item = ref<Requirement>();
 const relations = ref<RequirementRelations>();
 const draft = ref<Editable>();
@@ -174,6 +176,7 @@ async function load() {
     return;
   }
   const token = ++revision;
+  const path = route.path;
   loading.value = true;
   error.value = "";
   try {
@@ -186,14 +189,40 @@ async function load() {
     relations.value = related;
     resetDraft(detail);
     // 顶栏页签回填真实文案「编号 · 名称」（进入时先以「需求 #id」占位）
-    setTabLabel(route.path, `${detail.requirementNo} · ${detail.name}`);
+    setTabLabel(path, `${detail.requirementNo} · ${detail.name}`);
   } catch (e) {
     if (token === revision) error.value = errorMessage(e);
   } finally {
     if (token === revision) loading.value = false;
   }
 }
-watch(id, load, { immediate: true });
+void load();
+// 页面被缓存后，从其他功能切回时静默刷新需求基础数据；
+// 页签、已打开文档等界面状态保持不变，有未保存修改时也不覆盖本地草稿
+let firstActivation = true;
+onActivated(() => {
+  if (firstActivation) {
+    firstActivation = false;
+    return;
+  }
+  if (!dirty.value) void refresh();
+});
+async function refresh() {
+  if (!Number.isInteger(id.value) || id.value <= 0) return;
+  const path = route.path;
+  try {
+    const [detail, related] = await Promise.all([
+      requirementApi.get(id.value),
+      requirementApi.relations(id.value),
+    ]);
+    item.value = detail;
+    relations.value = related;
+    if (!dirty.value) resetDraft(detail);
+    setTabLabel(path, `${detail.requirementNo} · ${detail.name}`);
+  } catch {
+    // 刷新失败时保留缓存内容，用户仍可继续查看与编辑
+  }
+}
 async function save() {
   if (!item.value || !draft.value || saving.value) return;
   if (!draft.value.name.trim()) {
@@ -201,6 +230,7 @@ async function save() {
     return;
   }
   saving.value = true;
+  const path = route.path;
   try {
     const updated = await requirementApi.update(item.value.id, {
       ...draft.value,
@@ -208,7 +238,7 @@ async function save() {
     item.value = updated;
     resetDraft(updated);
     // 改名/改编号后同步刷新顶栏页签文案
-    setTabLabel(route.path, `${updated.requirementNo} · ${updated.name}`);
+    setTabLabel(path, `${updated.requirementNo} · ${updated.name}`);
     ElMessage.success("需求已保存");
   } catch (e) {
     ElMessage.error(errorMessage(e));

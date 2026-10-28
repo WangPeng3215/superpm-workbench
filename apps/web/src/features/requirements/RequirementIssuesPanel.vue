@@ -1,12 +1,17 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  watch,
+} from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import {
-  BarChartOutlined,
   BugOutlined,
   CodeOutlined,
   DeleteOutlined,
-  FormatPainterOutlined,
   LeftOutlined,
   LinkOutlined,
   MoreOutlined,
@@ -91,6 +96,14 @@ const selectedId = ref<number | null>(null);
 const mobileDetailOpen = ref(false);
 let listSeq = 0;
 let refreshTimer: number | undefined;
+let searchTimer: number | undefined;
+watch(keyword, () => {
+  if (searchTimer) window.clearTimeout(searchTimer);
+  searchTimer = window.setTimeout(() => {
+    searchTimer = undefined;
+    void loadList();
+  }, 250);
+});
 
 // ===== 详情与自动保存 =====
 const detail = ref<IssueDetail>();
@@ -224,20 +237,6 @@ function statusTone(status: IssueStatus): string {
       return "tone-slate";
   }
 }
-function typeIcon(type: IssueType | null) {
-  switch (type) {
-    case "analysis":
-      return BarChartOutlined;
-    case "ui":
-      return FormatPainterOutlined;
-    case "development":
-      return CodeOutlined;
-    case "testing":
-      return BugOutlined;
-    default:
-      return MoreOutlined;
-  }
-}
 function pad2(value: number) {
   return String(value).padStart(2, "0");
 }
@@ -349,6 +348,10 @@ function onTypeFilterChange(value: unknown) {
   void loadList();
 }
 function runSearchNow() {
+  if (searchTimer) {
+    window.clearTimeout(searchTimer);
+    searchTimer = undefined;
+  }
   void loadList();
 }
 function clearFilters() {
@@ -716,9 +719,8 @@ async function submitCreate() {
 }
 
 // ===== 删除问题 =====
-async function removeIssue() {
-  const current = detail.value;
-  if (!current) return;
+async function removeIssue(issueId = detail.value?.id) {
+  if (!issueId) return;
   try {
     await ElMessageBox.confirm(
       "删除后该问题不可恢复；描述中已插入的图片文件不会被删除。",
@@ -733,19 +735,25 @@ async function removeIssue() {
   } catch {
     return;
   }
-  clearSaveTimer();
+  const deletingCurrent = detail.value?.id === issueId;
+  if (deletingCurrent) clearSaveTimer();
   try {
-    await issueApi.remove(props.requirementId, current.id);
+    await issueApi.remove(props.requirementId, issueId);
     ElMessage.success("问题已删除");
-    detail.value = undefined;
-    snapshot.value = null;
-    selectedId.value = null;
-    assets.value = [];
-    mobileDetailOpen.value = false;
+    if (deletingCurrent) {
+      detail.value = undefined;
+      snapshot.value = null;
+      selectedId.value = null;
+      assets.value = [];
+      mobileDetailOpen.value = false;
+    }
     await loadList();
   } catch (error) {
     ElMessage.error(errorMessage(error));
   }
+}
+function onDetailCommand(command: string | number | object) {
+  if (command === "delete") void removeIssue();
 }
 
 // ===== 关联产出物 =====
@@ -884,42 +892,26 @@ onBeforeUnmount(() => {
   window.removeEventListener("resize", onWindowResize);
   titleObserver?.disconnect();
   if (refreshTimer) window.clearTimeout(refreshTimer);
+  if (searchTimer) window.clearTimeout(searchTimer);
   clearSaveTimer();
   void flush();
 });
 </script>
 <template>
-  <!-- 空台账：整块留白比双栏空壳更清楚 -->
+  <!-- 空台账：只保留状态说明和唯一主操作 -->
   <div v-if="showFullEmpty" class="issue-empty">
     <div class="empty-ledger">
-      <span class="empty-kicker">问题记录</span>
-      <h2>先记下来，<br />再逐条解决。</h2>
-      <p>
-        分析、设计、开发和测试中的疑问都可以记录在这里。每条问题都有独立的描述、解决方案与关联产出物。
+      <span class="empty-icon" aria-hidden="true">
+        <el-icon :size="22"><BugOutlined /></el-icon>
+      </span>
+      <p class="empty-title">暂无问题记录</p>
+      <p class="empty-copy">
+        记录分析、设计、开发与测试中的疑问，后续可补充结论和关联产出物。
       </p>
       <button class="issue-primary" type="button" @click="openCreate()">
         <el-icon aria-hidden="true" :size="14"><PlusOutlined /></el-icon>
         新增第一个问题
       </button>
-    </div>
-    <div class="empty-side" aria-hidden="true">
-      <div class="empty-legend">
-        <span
-          v-for="status in issueStatuses"
-          :key="status"
-          class="empty-chip"
-          :class="statusTone(status)"
-          >{{ issueStatusLabels[status] }} <b>0</b></span
-        >
-      </div>
-      <div class="empty-rule"></div>
-      <div class="empty-lines">
-        <span class="empty-line" style="width: 88%"></span>
-        <span class="empty-line" style="width: 62%"></span>
-        <span class="empty-line" style="width: 76%"></span>
-        <span class="empty-line" style="width: 48%"></span>
-      </div>
-      <span class="empty-caption">每条疑问，都有落点</span>
     </div>
   </div>
 
@@ -928,77 +920,69 @@ onBeforeUnmount(() => {
     class="issue-app"
     :class="{ 'detail-open': mobileDetailOpen && detail }"
   >
+    <!-- ===== 顶部：搜索、筛选与新增 ===== -->
+    <header class="issue-toolbar">
+      <button
+        class="issue-primary issue-primary--small"
+        type="button"
+        @click="openCreate()"
+      >
+        <el-icon aria-hidden="true" :size="12"><PlusOutlined /></el-icon>
+        新增
+      </button>
+      <label class="search-box toolbar-search">
+        <el-icon aria-hidden="true" :size="13"><SearchOutlined /></el-icon>
+        <input
+          v-model="keyword"
+          type="search"
+          placeholder="搜索标题或描述"
+          aria-label="搜索问题标题或描述"
+          @keydown.enter="runSearchNow()"
+        />
+        <button
+          v-if="keyword"
+          class="search-clear"
+          type="button"
+          aria-label="清空搜索"
+          @click="keyword = ''"
+        >
+          ×
+        </button>
+      </label>
+      <div class="toolbar-filters">
+        <el-select
+          class="filter-select type-filter"
+          :model-value="typeFilter || 'all'"
+          aria-label="按问题类型筛选"
+          @change="onTypeFilterChange"
+        >
+          <el-option label="全部类型" value="all" />
+          <el-option
+            v-for="option in typeOptions"
+            :key="option.value"
+            :label="option.label"
+            :value="option.value"
+          />
+        </el-select>
+        <el-select
+          class="filter-select status-filter"
+          :model-value="statusFilter || 'all'"
+          aria-label="按问题状态筛选"
+          @change="onStatusFilterChange"
+        >
+          <el-option label="全部状态" value="all" />
+          <el-option
+            v-for="status in issueStatuses"
+            :key="status"
+            :label="issueStatusLabels[status]"
+            :value="status"
+          />
+        </el-select>
+      </div>
+    </header>
+
     <!-- ===== 左栏：台账 ===== -->
     <aside class="issue-rail">
-      <header class="rail-head">
-        <div class="filter-row filter-row--selects">
-          <el-select
-            class="filter-select type-filter"
-            :model-value="typeFilter || 'all'"
-            aria-label="按问题类型筛选"
-            @change="onTypeFilterChange"
-          >
-            <el-option label="全部类型" value="all" />
-            <el-option
-              v-for="option in typeOptions"
-              :key="option.value"
-              :label="option.label"
-              :value="option.value"
-            />
-          </el-select>
-          <el-select
-            class="filter-select status-filter"
-            :model-value="statusFilter || 'all'"
-            aria-label="按问题状态筛选"
-            @change="onStatusFilterChange"
-          >
-            <el-option label="全部状态" value="all" />
-            <el-option
-              v-for="status in issueStatuses"
-              :key="status"
-              :label="issueStatusLabels[status]"
-              :value="status"
-            />
-          </el-select>
-        </div>
-
-        <div class="filter-row filter-row--search">
-          <label class="search-box">
-            <el-icon aria-hidden="true" :size="13"><SearchOutlined /></el-icon>
-            <input
-              v-model="keyword"
-              type="search"
-              placeholder="搜索标题或描述"
-              aria-label="搜索问题标题或描述"
-              @keydown.enter="runSearchNow()"
-            />
-            <button
-              v-if="keyword"
-              class="search-clear"
-              type="button"
-              aria-label="清空搜索"
-              @click="
-                keyword = '';
-                runSearchNow();
-              "
-            >
-              ×
-            </button>
-          </label>
-          <button class="search-button" type="button" @click="runSearchNow()">
-            搜索
-          </button>
-          <button
-            class="issue-primary issue-primary--small"
-            type="button"
-            @click="openCreate()"
-          >
-            <el-icon aria-hidden="true" :size="12"><PlusOutlined /></el-icon>
-            新增
-          </button>
-        </div>
-      </header>
-
       <div
         class="rail-list"
         :class="{ 'is-refreshing': listLoading && issues.length }"
@@ -1015,37 +999,44 @@ onBeforeUnmount(() => {
           <span v-for="index in 5" :key="index" class="skeleton-row"></span>
         </div>
         <template v-else>
-          <button
+          <div
             v-for="issue in issues"
             :key="issue.id"
-            type="button"
             class="issue-row"
             :class="{ active: selectedId === issue.id && detail }"
-            @click="openIssue(issue.id)"
           >
-            <span class="type-tile" :class="typeTone(issue.type)">
-              <el-icon aria-hidden="true" :size="14"
-                ><component :is="typeIcon(issue.type)"
+            <button type="button" class="row-open" @click="openIssue(issue.id)">
+              <span class="row-main">
+                <span class="row-top">
+                  <strong class="row-title">{{ issue.title }}</strong>
+                  <span class="status-pill" :class="statusTone(issue.status)">{{
+                    issueStatusLabels[issue.status]
+                  }}</span>
+                </span>
+                <span class="row-meta">
+                  <span class="row-type" :class="typeTone(issue.type)">{{
+                    issue.type ? issueTypeLabels[issue.type] : "未分类"
+                  }}</span>
+                  <span class="meta-sep">·</span>
+                  <span>{{ stageLabels[issue.stage] }}</span>
+                  <span class="row-time">{{
+                    formatShort(issue.updatedAt)
+                  }}</span>
+                </span>
+                <span class="row-excerpt">{{ excerpt(issue) }}</span>
+              </span>
+            </button>
+            <button
+              class="row-delete"
+              type="button"
+              :aria-label="`删除问题「${issue.title}」`"
+              @click="removeIssue(issue.id)"
+            >
+              <el-icon aria-hidden="true" :size="13"
+                ><DeleteOutlined
               /></el-icon>
-            </span>
-            <span class="row-main">
-              <span class="row-top">
-                <strong class="row-title">{{ issue.title }}</strong>
-                <span class="status-pill" :class="statusTone(issue.status)">{{
-                  issueStatusLabels[issue.status]
-                }}</span>
-              </span>
-              <span class="row-meta">
-                <span>{{
-                  issue.type ? issueTypeLabels[issue.type] : "未分类"
-                }}</span>
-                <span class="meta-sep">·</span>
-                <span>{{ stageLabels[issue.stage] }}</span>
-                <span class="row-time">{{ formatShort(issue.updatedAt) }}</span>
-              </span>
-              <span class="row-excerpt">{{ excerpt(issue) }}</span>
-            </span>
-          </button>
+            </button>
+          </div>
           <div v-if="!issues.length" class="rail-empty">
             <template v-if="hasFilters">
               <p>没有符合条件的问题</p>
@@ -1078,19 +1069,66 @@ onBeforeUnmount(() => {
             列表
           </button>
 
-          <textarea
-            ref="titleEl"
-            v-model="titleDraft"
-            class="title-input"
-            :class="{ invalid: saveUi === 'failed' && !titleDraft.trim() }"
-            rows="1"
-            maxlength="200"
-            aria-label="问题标题"
-            placeholder="问题标题"
-            @input="onTitleInput"
-            @blur="onTitleBlur"
-            @keydown.enter.prevent="onTitleEnter()"
-          ></textarea>
+          <div class="detail-title-row">
+            <textarea
+              ref="titleEl"
+              v-model="titleDraft"
+              class="title-input"
+              :class="{ invalid: saveUi === 'failed' && !titleDraft.trim() }"
+              rows="1"
+              maxlength="200"
+              aria-label="问题标题"
+              placeholder="问题标题"
+              @input="onTitleInput"
+              @blur="onTitleBlur"
+              @keydown.enter.prevent="onTitleEnter()"
+            ></textarea>
+
+            <div class="detail-head-actions">
+              <span
+                class="save-state"
+                :class="`is-${saveUi}`"
+                :title="saveLabel"
+                role="status"
+                aria-live="polite"
+              >
+                <span class="save-dot" aria-hidden="true"></span>
+                <span class="save-text">{{ saveLabel }}</span>
+                <button
+                  v-if="saveUi === 'failed'"
+                  class="retry-button"
+                  type="button"
+                  @click="saveNow()"
+                >
+                  重试
+                </button>
+              </span>
+              <el-dropdown trigger="click" @command="onDetailCommand">
+                <button
+                  class="detail-more"
+                  type="button"
+                  aria-label="更多操作"
+                  title="更多操作"
+                >
+                  <el-icon aria-hidden="true" :size="15"
+                    ><MoreOutlined
+                  /></el-icon>
+                </button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item command="delete">
+                      <span class="danger-item">
+                        <el-icon aria-hidden="true" :size="12"
+                          ><DeleteOutlined
+                        /></el-icon>
+                        删除问题
+                      </span>
+                    </el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+            </div>
+          </div>
 
           <div class="meta-row">
             <div class="meta-field meta-field--type">
@@ -1161,16 +1199,6 @@ onBeforeUnmount(() => {
               <span v-if="detail.resolvedAt" class="resolved-time"
                 >解决 {{ formatFull(detail.resolvedAt) }}</span
               >
-              <button
-                class="ghost-danger meta-delete"
-                type="button"
-                @click="removeIssue()"
-              >
-                <el-icon aria-hidden="true" :size="11"
-                  ><DeleteOutlined
-                /></el-icon>
-                删除
-              </button>
             </div>
           </div>
         </header>
@@ -1179,7 +1207,7 @@ onBeforeUnmount(() => {
           <section class="detail-section">
             <div class="section-head">
               <h3 class="section-title">问题描述</h3>
-              <span class="section-note">支持粘贴或拖入图片 · 自动保存</span>
+              <span class="section-note">支持粘贴或拖入图片</span>
             </div>
             <InlineRichTextEditor
               ref="descEditor"
@@ -1270,29 +1298,10 @@ onBeforeUnmount(() => {
               </span>
             </div>
             <p v-else class="section-empty">
-              还没有关联产出物。把相关的设计稿、文档或文件链过来，方便追溯。
+              暂无关联产出物，可从设计稿、文档或文件中关联。
             </p>
           </section>
         </div>
-
-        <footer
-          class="save-bar"
-          :class="`is-${saveUi}`"
-          role="status"
-          aria-live="polite"
-        >
-          <span class="save-dot" aria-hidden="true"></span>
-          <span class="save-text">{{ saveLabel }}</span>
-          <button
-            v-if="saveUi === 'failed'"
-            class="retry-button"
-            type="button"
-            @click="saveNow()"
-          >
-            重试
-          </button>
-          <span class="save-note">自动保存</span>
-        </footer>
       </template>
 
       <div
@@ -1484,6 +1493,7 @@ onBeforeUnmount(() => {
 .issue-app {
   display: grid;
   grid-template-columns: 332px minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   height: 100%;
   min-height: 0;
   overflow: hidden;
@@ -1491,20 +1501,37 @@ onBeforeUnmount(() => {
   border-radius: var(--radius-md);
   background: var(--bg-surface);
 }
+.issue-toolbar {
+  display: flex;
+  grid-column: 1 / -1;
+  grid-row: 1;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border-base);
+  background: var(--bg-surface);
+}
+.toolbar-search {
+  flex: 1 1 auto;
+  max-width: 340px;
+}
+.toolbar-filters {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
 .issue-rail {
   display: flex;
+  grid-column: 1;
+  grid-row: 2;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
   border-right: 1px solid var(--border-base);
   background: var(--bg-subtle);
-}
-.rail-head {
-  display: grid;
-  flex: none;
-  gap: 8px;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--border-soft);
 }
 .issue-primary {
   display: inline-flex;
@@ -1537,18 +1564,17 @@ onBeforeUnmount(() => {
   outline-offset: 2px;
 }
 
-.filter-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
 .filter-select {
-  flex: 1 1 0;
-  min-width: 0;
+  flex: none;
+  width: 128px;
+  height: 30px;
+}
+.filter-select.status-filter {
+  width: 112px;
 }
 .filter-select :deep(.el-select__wrapper) {
   min-height: 30px;
+  height: 30px;
   border-radius: 7px;
   background: var(--bg-surface);
   box-shadow: 0 0 0 1px var(--border-base) inset;
@@ -1604,35 +1630,15 @@ onBeforeUnmount(() => {
 .search-clear:hover {
   color: var(--text-regular);
 }
-.search-button {
-  flex: none;
-  height: 30px;
-  padding: 0 10px;
-  border: 1px solid var(--border-base);
-  border-radius: 7px;
-  background: var(--bg-surface);
-  color: var(--text-secondary);
-  font: inherit;
-  font-size: 11.5px;
-  cursor: pointer;
-}
-.search-button:hover {
-  border-color: var(--border-brand);
-  color: var(--brand);
-}
-.search-button:focus-visible {
-  outline: 2px solid var(--brand-ring);
-  outline-offset: 1px;
-}
 
 .rail-list {
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
-  gap: 4px;
+  gap: 3px;
   min-height: 0;
   overflow-y: auto;
-  padding: 2px 9px 12px;
+  padding: 8px;
   transition: opacity 0.15s ease;
 }
 .rail-list.is-refreshing {
@@ -1641,17 +1647,16 @@ onBeforeUnmount(() => {
 .issue-row {
   position: relative;
   display: flex;
-  gap: 9px;
+  gap: 4px;
   width: 100%;
   flex: none;
-  padding: 10px 9px;
+  padding: 8px 7px 8px 9px;
   border: 1px solid transparent;
-  border-radius: 9px;
+  border-radius: 8px;
   background: transparent;
   color: inherit;
   font: inherit;
   text-align: left;
-  cursor: pointer;
 }
 .issue-row:hover {
   border-color: var(--border-soft);
@@ -1671,35 +1676,59 @@ onBeforeUnmount(() => {
   background: var(--brand);
   content: "";
 }
-.issue-row:focus-visible {
-  outline: 2px solid var(--brand-ring);
-  outline-offset: -1px;
+.row-open {
+  display: flex;
+  flex: 1 1 auto;
+  gap: 9px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
-.type-tile {
+.row-open:focus-visible,
+.row-delete:focus-visible {
+  outline: 2px solid var(--brand-ring);
+  outline-offset: 2px;
+}
+.row-delete {
   display: inline-flex;
   flex: none;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
-  margin-top: 1px;
-  border: 1px solid var(--border-soft);
-  border-radius: 7px;
-  background: var(--bg-surface);
-  color: var(--tone-fg, var(--text-muted));
+  align-self: flex-start;
+  width: 22px;
+  height: 22px;
+  margin-top: 2px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-faint);
+  cursor: pointer;
 }
-.issue-row:hover .type-tile {
-  background: var(--bg-subtle);
+.row-delete:hover {
+  background: var(--tone-red-bg);
+  color: var(--tone-red-fg);
 }
-.issue-row.active .type-tile {
-  border-color: var(--border-base);
-  background: var(--bg-subtle);
+@media (hover: hover) {
+  .row-delete {
+    opacity: 0;
+  }
+  .issue-row:hover .row-delete,
+  .issue-row:focus-within .row-delete {
+    opacity: 1;
+  }
 }
 .row-main {
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
-  gap: 3px;
+  gap: 2px;
   min-width: 0;
 }
 .row-top {
@@ -1742,6 +1771,11 @@ onBeforeUnmount(() => {
   line-height: 1.4;
   white-space: nowrap;
 }
+.row-type {
+  flex: none;
+  color: var(--tone-fg, var(--text-muted));
+  font-weight: 600;
+}
 .meta-sep {
   color: var(--border-line);
 }
@@ -1756,10 +1790,10 @@ onBeforeUnmount(() => {
   overflow: hidden;
   color: var(--text-muted);
   font-size: 10.8px;
-  line-height: 1.55;
+  line-height: 1.5;
   overflow-wrap: anywhere;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 1;
 }
 .rail-empty {
   display: grid;
@@ -1817,6 +1851,8 @@ onBeforeUnmount(() => {
 /* 右栏：白色纸面，标题、字段、正文按阅读顺序排列 */
 .detail-pane {
   display: flex;
+  grid-column: 2;
+  grid-row: 2;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
@@ -1825,8 +1861,8 @@ onBeforeUnmount(() => {
 .detail-head {
   display: grid;
   flex: none;
-  gap: 8px;
-  padding: 14px 24px 12px;
+  gap: 7px;
+  padding: 12px 18px 10px;
   border-bottom: 1px solid var(--border-soft);
 }
 .back-button {
@@ -1843,26 +1879,77 @@ onBeforeUnmount(() => {
   font-size: 11px;
   cursor: pointer;
 }
-.ghost-danger {
+.detail-title-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+.detail-head-actions {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+}
+.save-state {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px 8px;
-  border: 1px solid var(--border-base);
+  gap: 5px;
+  max-width: 240px;
+  height: 24px;
+  padding: 0 7px;
   border-radius: 6px;
-  background: var(--bg-surface);
+  background: var(--bg-subtle);
+  color: var(--text-faint);
+  font-size: 9.5px;
+  white-space: nowrap;
+}
+.save-state.is-pending {
+  color: var(--tone-amber-fg);
+}
+.save-state.is-failed {
+  background: var(--tone-red-bg);
+  color: var(--danger-text);
+}
+.save-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.detail-more {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
   color: var(--text-muted);
-  font: inherit;
-  font-size: 10.5px;
   cursor: pointer;
 }
-.ghost-danger:hover {
-  border-color: var(--tone-red-bd);
-  background: var(--tone-red-bg);
-  color: var(--tone-red-fg);
+.detail-more:hover {
+  border-color: var(--border-base);
+  background: var(--bg-subtle);
+  color: var(--text-regular);
+}
+.detail-more:focus-visible {
+  outline: 2px solid var(--brand-ring);
+  outline-offset: 1px;
+}
+.danger-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--danger-text);
 }
 .title-input {
-  width: 100%;
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
   margin: 0;
   padding: 2px 5px;
   overflow: hidden;
@@ -1872,10 +1959,10 @@ onBeforeUnmount(() => {
   background: transparent;
   color: var(--text-heading);
   font: inherit;
-  font-size: 21px;
+  font-size: 19px;
   font-weight: 650;
   line-height: 1.38;
-  letter-spacing: -0.35px;
+  letter-spacing: -0.3px;
   resize: none;
 }
 .title-input:hover {
@@ -1972,21 +2059,15 @@ onBeforeUnmount(() => {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.meta-delete {
-  margin-left: 2px;
-  padding: 2px 6px;
-  font-size: 10px;
-  line-height: 1.5;
-}
 
 .detail-body {
   display: grid;
   flex: 1 1 auto;
   align-content: start;
-  gap: 18px;
+  gap: 16px;
   min-height: 0;
   overflow-y: auto;
-  padding: 16px 20px 22px;
+  padding: 14px 18px 20px;
 }
 .detail-section {
   display: grid;
@@ -2096,18 +2177,6 @@ onBeforeUnmount(() => {
   color: var(--tone-red-fg);
 }
 
-.save-bar {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: 7px;
-  min-height: 36px;
-  padding: 8px 24px;
-  border-top: 1px solid var(--border-base);
-  background: var(--bg-subtle);
-  color: var(--text-muted);
-  font-size: 10.5px;
-}
 .save-dot {
   width: 6px;
   height: 6px;
@@ -2115,40 +2184,26 @@ onBeforeUnmount(() => {
   border-radius: 50%;
   background: var(--tone-green-fg);
 }
-.save-bar.is-pending .save-dot {
+.save-state.is-pending .save-dot {
   background: var(--tone-amber-fg);
 }
-.save-bar.is-saving .save-dot {
+.save-state.is-saving .save-dot {
   background: var(--brand);
   animation: save-pulse 1s ease-in-out infinite;
 }
-.save-bar.is-failed {
-  color: var(--danger-text);
-}
-.save-bar.is-failed .save-dot {
+.save-state.is-failed .save-dot {
   background: var(--danger-text);
-}
-.save-text {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.save-note {
-  flex: none;
-  margin-left: auto;
-  color: var(--text-faint);
-  font-size: 9.5px;
 }
 .retry-button {
   flex: none;
-  padding: 2px 8px;
+  padding: 1px 6px;
   border: 1px solid var(--tone-red-bd);
   border-radius: 5px;
-  background: var(--tone-red-bg);
+  background: var(--bg-surface);
   color: var(--danger-text);
   font: inherit;
-  font-size: 10px;
+  font-size: 9.5px;
+  line-height: 1.5;
   cursor: pointer;
 }
 
@@ -2203,92 +2258,47 @@ onBeforeUnmount(() => {
 /* 空台账 */
 .issue-empty {
   display: grid;
-  grid-template-columns: minmax(0, 1.08fr) minmax(0, 0.92fr);
+  place-items: center;
   height: 100%;
   min-height: 0;
   overflow: hidden;
   border: 1px solid var(--border-base);
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   background: var(--bg-surface);
 }
 .empty-ledger {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  justify-content: center;
-  padding: 52px 48px;
+  display: grid;
+  justify-items: center;
+  gap: 7px;
+  max-width: 380px;
+  padding: 40px 24px;
+  text-align: center;
 }
-.empty-kicker {
-  color: var(--brand);
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.12em;
-}
-.empty-ledger h2 {
-  margin: 13px 0 12px;
-  color: var(--text-heading);
-  font-size: 31px;
-  font-weight: 650;
-  line-height: 1.28;
-  letter-spacing: -0.7px;
-}
-.empty-ledger p {
-  max-width: 390px;
-  margin: 0 0 23px;
-  color: var(--text-muted);
-  font-size: 12px;
-  line-height: 1.85;
-}
-.empty-ledger .issue-primary {
-  padding: 10px 15px;
-  font-size: 12px;
-}
-.empty-side {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 17px;
-  padding: 52px 42px;
-  border-left: 1px solid var(--border-soft);
-  background: var(--bg-subtle);
-}
-.empty-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-}
-.empty-chip {
+.empty-icon {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 3px 7px;
-  border: 1px solid var(--tone-bd, var(--border-base));
-  border-radius: 5px;
-  background: var(--tone-bg, var(--bg-surface));
-  color: var(--tone-fg, var(--text-muted));
-  font-size: 10px;
-}
-.empty-chip b {
-  font-weight: 500;
-  opacity: 0.6;
-}
-.empty-rule {
-  height: 1px;
-  background: var(--border-base);
-}
-.empty-lines {
-  display: grid;
-  gap: 10px;
-}
-.empty-line {
-  height: 7px;
-  border-radius: 4px;
-  background: var(--border-soft);
-}
-.empty-caption {
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  margin-bottom: 3px;
+  border: 1px solid var(--border-base);
+  border-radius: 10px;
+  background: var(--bg-subtle);
   color: var(--text-faint);
-  font-size: 9.5px;
-  letter-spacing: 0.08em;
+}
+.empty-title {
+  margin: 0;
+  color: var(--text-title);
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.5;
+}
+.empty-copy {
+  max-width: 320px;
+  margin: 0 0 8px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.7;
 }
 
 /* 关联弹窗 */
@@ -2382,7 +2392,7 @@ onBeforeUnmount(() => {
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .save-bar.is-saving .save-dot,
+  .save-state.is-saving .save-dot,
   .skeleton-row,
   .skeleton-line,
   .skeleton-block {
@@ -2410,10 +2420,30 @@ onBeforeUnmount(() => {
   .issue-app {
     grid-template-columns: minmax(0, 1fr);
   }
+  .issue-toolbar {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .toolbar-search {
+    max-width: none;
+  }
+  .toolbar-filters {
+    grid-column: 1 / -1;
+    margin-left: 0;
+  }
+  .filter-select,
+  .filter-select.status-filter {
+    flex: 1 1 0;
+    width: auto;
+  }
   .issue-rail {
+    grid-column: 1;
+    grid-row: 2;
     border-right: 0;
   }
   .detail-pane {
+    grid-column: 1;
+    grid-row: 2;
     display: none;
   }
   .issue-app.detail-open .issue-rail {
@@ -2425,52 +2455,42 @@ onBeforeUnmount(() => {
   .back-button {
     display: inline-flex;
   }
-  .rail-head {
-    padding: 14px 13px 10px;
-  }
   .detail-head {
-    padding: 13px 15px 12px;
+    padding: 10px 14px 10px;
   }
   .detail-body {
-    padding: 16px 15px 20px;
-  }
-  .save-bar {
-    padding: 8px 15px;
-  }
-  .issue-empty {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .empty-side {
-    display: none;
-  }
-  .empty-ledger {
-    padding: 40px 28px;
+    padding: 14px 14px 18px;
   }
 }
 @media (max-width: 640px) {
   .title-input {
-    font-size: 19px;
+    font-size: 17px;
+    letter-spacing: -0.2px;
+  }
+  .save-text {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+  .save-state {
+    height: 22px;
+    padding: 0 5px;
   }
   .meta-field {
-    flex: 1 1 calc(50% - 7px);
+    flex: 1 1 0;
+    min-width: 0;
   }
   .meta-field :deep(.el-select) {
     width: 100%;
   }
-  .meta-field--status {
-    flex-basis: 100%;
-  }
   .section-note {
     display: none;
   }
-  .save-note {
-    display: none;
-  }
-  .empty-ledger {
-    padding: 32px 22px;
-  }
-  .empty-ledger h2 {
-    font-size: 26px;
+  .detail-body {
+    padding: 12px 12px 16px;
   }
   .create-row {
     grid-template-columns: minmax(0, 1fr);

@@ -476,8 +476,7 @@ export async function createApp(
         return reply.status(403).send({
           error: {
             code: "FORBIDDEN",
-            message:
-              "本地程序打开功能未启用（需设置 SUPERPM_ALLOW_SYSTEM_OPEN=1）",
+            message: "本地程序打开功能已关闭（SUPERPM_ALLOW_SYSTEM_OPEN=0）",
           },
         });
       fileService.openAsset(

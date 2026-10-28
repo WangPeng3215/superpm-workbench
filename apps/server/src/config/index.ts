@@ -84,8 +84,15 @@ export const homePath = appHome ?? projectRoot;
 export const legacyRoot = resolve(
   process.env.SUPERPM_LEGACY_ROOT || projectRoot,
 );
-// 本地默认程序打开总开关（补充文档 5.4）：默认关闭，SUPERPM_ALLOW_SYSTEM_OPEN=1 显式开启
-export const allowSystemOpen = process.env.SUPERPM_ALLOW_SYSTEM_OPEN === "1";
+// 本地默认程序打开（补充文档 5.4）：服务仅监听 127.0.0.1，默认开启；
+// 在远程/共享部署等不希望触发本机程序的场景可显式设为 0、false 或 off 关闭。
+export function resolveAllowSystemOpen(value?: string): boolean {
+  const normalized = value?.trim().toLowerCase();
+  return normalized !== "0" && normalized !== "false" && normalized !== "off";
+}
+export const allowSystemOpen = resolveAllowSystemOpen(
+  process.env.SUPERPM_ALLOW_SYSTEM_OPEN,
+);
 function readAppVersion(): string {
   try {
     const manifest = JSON.parse(

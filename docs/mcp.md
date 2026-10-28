@@ -802,7 +802,7 @@ CI 流水线位于 `.github/workflows/ci.yml`（与模板 `docs/ci/ci.yml` 一�
 | ----------- | ---------------------------------------------- | ----------------------------------------------------------------------------- |
 | Node.js     | `>=22.12.0 <25`                                | `better-sqlite3` 为原生模块，跨主版本需重装/重建                              |
 | MCP SDK     | `@modelcontextprotocol/sdk ^1.32.1`            | 使用 `McpServer.registerTool` + `StdioServerTransport`，协议版本由 SDK 协商   |
-| Server 标识 | name `superpm`，version `0.10.0`               | version 读取 `apps/server/package.json`，缺失时回退 `0.0.0`                   |
+| Server 标识 | name `superpm`，version `0.11.0`               | version 读取 `apps/server/package.json`，缺失时回退 `0.0.0`                   |
 | 数据库      | `SCHEMA_VERSION = 17`，迁移至 `0017_notes.sql` | 只向前、按 `schema_migrations` 幂等；MCP 与 HTTP 共用同一迁移                 |
 | 校验库      | `zod ^3.25.76`                                 | 工具入参 schema 与 HTTP 层同源；SDK 依赖 zod v3 shape，升级 zod v4 需同步适配 |
 | 传输        | 仅 `stdio`                                     | 不提供 HTTP/SSE，因此没有跨机器版本协商问题                                   |

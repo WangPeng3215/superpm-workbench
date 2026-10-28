@@ -17,7 +17,7 @@ import { requirementRootPath } from "./workspace-helper";
 
 // 真实 spawn 会弹出资源管理器，测试里拦截并断言命令拼装
 const { spawnMock } = vi.hoisted(() => ({
-  spawnMock: vi.fn(() => ({ unref: () => {} })),
+  spawnMock: vi.fn(() => ({ on: () => {}, unref: () => {} })),
 }));
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
@@ -26,11 +26,18 @@ vi.mock("node:child_process", async (importOriginal) => ({
 
 describe("buildSystemOpenCommand", () => {
   const path = "D:/workspace/requirements/REQ-0001/demo/a.txt";
+  const windowsOpenArgs = [
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command",
+    "Start-Process -FilePath $env:SUPERPM_TARGET_PATH",
+  ];
 
   it("opens a folder with the platform default handler", () => {
     expect(buildSystemOpenCommand(path, { platform: "win32" })).toEqual({
-      command: "cmd",
-      args: ["/c", "start", "", path],
+      command: "powershell.exe",
+      args: windowsOpenArgs,
+      env: { SUPERPM_TARGET_PATH: path },
     });
     expect(buildSystemOpenCommand(path, { platform: "darwin" })).toEqual({
       command: "open",
@@ -42,10 +49,17 @@ describe("buildSystemOpenCommand", () => {
     });
   });
 
+  it("keeps the Windows path out of the command line", () => {
+    const unsafe = "D:/workspace/a&b%PATH%.txt";
+    const command = buildSystemOpenCommand(unsafe, { platform: "win32" });
+    expect(command.args).not.toContain(unsafe);
+    expect(command.env).toEqual({ SUPERPM_TARGET_PATH: unsafe });
+  });
+
   it("reveals a file in its folder", () => {
     expect(
       buildSystemOpenCommand(path, { platform: "win32", reveal: true }),
-    ).toEqual({ command: "explorer.exe", args: ["/select,", path] });
+    ).toEqual({ command: "explorer.exe", args: [`/select,${path}`] });
     expect(
       buildSystemOpenCommand(path, { platform: "darwin", reveal: true }),
     ).toEqual({ command: "open", args: ["-R", path] });
@@ -59,8 +73,8 @@ describe("buildSystemOpenCommand", () => {
   });
 });
 
-// 总开关关闭时：打开目录与定位文件只做展示，应始终可用；仅文件默认程序打开被拒绝
-describe("physical folder open with SUPERPM_ALLOW_SYSTEM_OPEN unset", () => {
+// 显式关闭时：打开目录与定位文件只做展示，应始终可用；仅文件默认程序打开被拒绝
+describe("physical folder open with SUPERPM_ALLOW_SYSTEM_OPEN=0", () => {
   let app: FastifyInstance;
   let directory: string;
   let requirementId: number;
@@ -71,7 +85,7 @@ describe("physical folder open with SUPERPM_ALLOW_SYSTEM_OPEN unset", () => {
   let fileId: number;
 
   beforeAll(async () => {
-    delete process.env.SUPERPM_ALLOW_SYSTEM_OPEN;
+    vi.stubEnv("SUPERPM_ALLOW_SYSTEM_OPEN", "0");
     const { createApp } = await import("../src/app");
     directory = mkdtempSync(join(tmpdir(), "superpm-open-disabled-"));
     app = await createApp({
@@ -112,6 +126,7 @@ describe("physical folder open with SUPERPM_ALLOW_SYSTEM_OPEN unset", () => {
   beforeEach(() => spawnMock.mockClear());
 
   afterAll(async () => {
+    vi.unstubAllEnvs();
     await app.close();
     rmSync(directory, { recursive: true, force: true });
   });
@@ -122,13 +137,16 @@ describe("physical folder open with SUPERPM_ALLOW_SYSTEM_OPEN unset", () => {
       url: `/api/artifacts/nodes/${folderId}/open`,
     });
     expect(response.statusCode, response.body).toBe(204);
-    const [command, args] = spawnMock.mock.calls[0] as unknown as [
+    const [command, args, options] = spawnMock.mock.calls[0] as unknown as [
       string,
       string[],
+      { detached?: boolean; env?: NodeJS.ProcessEnv },
     ];
+    // Windows 下 detached 会导致启动的 GUI 程序不显示
+    expect(options.detached).not.toBe(true);
     if (process.platform === "win32") {
-      expect(command).toBe("cmd");
-      expect(args).toEqual(["/c", "start", "", folderPath]);
+      expect(command).toBe("powershell.exe");
+      expect(options.env?.SUPERPM_TARGET_PATH).toBe(folderPath);
     } else if (process.platform === "darwin") {
       expect(command).toBe("open");
       expect(args).toEqual([folderPath]);
@@ -150,7 +168,7 @@ describe("physical folder open with SUPERPM_ALLOW_SYSTEM_OPEN unset", () => {
     ];
     if (process.platform === "win32") {
       expect(command).toBe("explorer.exe");
-      expect(args).toEqual(["/select,", filePath]);
+      expect(args).toEqual([`/select,${filePath}`]);
     } else if (process.platform === "darwin") {
       expect(command).toBe("open");
       expect(args).toEqual(["-R", filePath]);
@@ -167,13 +185,17 @@ describe("physical folder open with SUPERPM_ALLOW_SYSTEM_OPEN unset", () => {
       payload: { relativePath: "" },
     });
     expect(response.statusCode, response.body).toBe(204);
-    const [command, args] = spawnMock.mock.calls[0] as unknown as [
+    const [command, args, options] = spawnMock.mock.calls[0] as unknown as [
       string,
       string[],
+      { env?: NodeJS.ProcessEnv },
     ];
-    const opened = process.platform === "win32" ? args[3] : args[0];
-    expect(opened).toBe(rootPath);
     expect(command).toBeTruthy();
+    if (process.platform === "win32") {
+      expect(options.env?.SUPERPM_TARGET_PATH).toBe(rootPath);
+    } else {
+      expect(args[0]).toBe(rootPath);
+    }
   });
 
   it("rejects opening a file with its default program", async () => {

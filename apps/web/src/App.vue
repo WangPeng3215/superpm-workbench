@@ -158,7 +158,19 @@ async function submitChangePassword() {
         @change-password="openPasswordDialog"
         @logout="confirmLogout"
       />
-      <main class="page-content"><RouterView /></main>
+      <main class="page-content">
+        <RouterView v-slot="{ Component, route: viewRoute }">
+          <!-- 需求详情按路由路径缓存：切换其他功能再返回时保留页签与已打开文档 -->
+          <KeepAlive :max="10">
+            <component
+              :is="Component"
+              v-if="viewRoute.meta.keepAlive"
+              :key="viewRoute.fullPath"
+            />
+          </KeepAlive>
+          <component :is="Component" v-if="!viewRoute.meta.keepAlive" />
+        </RouterView>
+      </main>
     </div>
     <GlobalToolbox />
   </div>

@@ -46,13 +46,12 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, extname, join } from "node:path";
-import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { DomainError, RequirementService } from "./requirements.js";
 import { RequirementDirectoryResolver } from "./requirement-directory.js";
 import { allowSystemOpen } from "../config/index.js";
 import { MIME_BY_EXTENSION } from "./requirement-files.js";
-import { buildSystemOpenCommand } from "./system-open.js";
+import { launchSystemOpen } from "./system-open.js";
 
 // 文件/目录索引行（snake_case，与迁移 0007 列名一致）
 export interface ArtifactNodeRow {
@@ -440,7 +439,8 @@ export class ArtifactService {
 
   createFile(requirementId: number, input: unknown): ArtifactNode {
     const data = artifactFileCreateSchema.parse(input);
-    const name = this.assertNodeName(data.name);
+    const requestedName = this.assertNodeName(data.name);
+    const name = extname(requestedName) ? requestedName : `${requestedName}.md`;
     const parent = this.requireParent(requirementId, data.parentId);
     this.assertParentOnDisk(parent);
     const relativePath = this.childPath(parent, name);
@@ -910,19 +910,12 @@ export class ArtifactService {
     if (node.nodeType === "file" && !options.reveal && !allowSystemOpen)
       throw new DomainError(
         "FORBIDDEN",
-        "本地程序打开功能未启用（需设置 SUPERPM_ALLOW_SYSTEM_OPEN=1）",
+        "本地程序打开功能已关闭（SUPERPM_ALLOW_SYSTEM_OPEN=0）",
         403,
       );
     const path = this.resolvePath(node.requirementId, node.relativePath, false);
     this.assertOnDisk(node, path);
-    const { command, args } = buildSystemOpenCommand(path, {
-      reveal: options.reveal,
-    });
-    const child = spawn(command, args, {
-      detached: true,
-      stdio: "ignore",
-    });
-    child.unref();
+    launchSystemOpen(path, { reveal: options.reveal });
   }
 
   /** 打开需求内物理目录（relativePath 为空表示需求根目录） */
@@ -933,12 +926,7 @@ export class ArtifactService {
       throw new DomainError("NOT_FOUND", "目录不存在，请重新初始化或刷新", 404);
     if (!statSync(path).isDirectory())
       throw new DomainError("VALIDATION_ERROR", "目标不是目录");
-    const { command, args } = buildSystemOpenCommand(path);
-    const child = spawn(command, args, {
-      detached: true,
-      stdio: "ignore",
-    });
-    child.unref();
+    launchSystemOpen(path);
   }
 
   // ===== 刷新与外部修改（文档 5）=====

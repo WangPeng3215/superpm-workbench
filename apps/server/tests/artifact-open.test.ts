@@ -16,14 +16,14 @@ import { requirementRootPath } from "./workspace-helper";
 
 // 真实 spawn 会弹出资源管理器，测试里拦截并断言命令拼装
 const { spawnMock } = vi.hoisted(() => ({
-  spawnMock: vi.fn(() => ({ unref: () => {} })),
+  spawnMock: vi.fn(() => ({ on: () => {}, unref: () => {} })),
 }));
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   spawn: spawnMock,
 }));
 
-describe("artifact open endpoint with SUPERPM_ALLOW_SYSTEM_OPEN=1", () => {
+describe("artifact open endpoint with default system open policy", () => {
   let app: FastifyInstance;
   let directory: string;
   let requirementId: number;
@@ -34,7 +34,7 @@ describe("artifact open endpoint with SUPERPM_ALLOW_SYSTEM_OPEN=1", () => {
   let fileId: number;
 
   beforeAll(async () => {
-    vi.stubEnv("SUPERPM_ALLOW_SYSTEM_OPEN", "1");
+    vi.stubEnv("SUPERPM_ALLOW_SYSTEM_OPEN", "");
     const { createApp } = await import("../src/app");
     directory = mkdtempSync(join(tmpdir(), "superpm-open-enabled-"));
     app = await createApp({
@@ -87,13 +87,14 @@ describe("artifact open endpoint with SUPERPM_ALLOW_SYSTEM_OPEN=1", () => {
     });
     expect(response.statusCode, response.body).toBe(204);
     expect(spawnMock).toHaveBeenCalledTimes(1);
-    const [command, args] = spawnMock.mock.calls[0] as unknown as [
+    const [command, args, options] = spawnMock.mock.calls[0] as unknown as [
       string,
       string[],
+      { env?: NodeJS.ProcessEnv },
     ];
     if (process.platform === "win32") {
-      expect(command).toBe("cmd");
-      expect(args).toEqual(["/c", "start", "", folderPath]);
+      expect(command).toBe("powershell.exe");
+      expect(options.env?.SUPERPM_TARGET_PATH).toBe(folderPath);
     } else if (process.platform === "darwin") {
       expect(command).toBe("open");
       expect(args).toEqual([folderPath]);
@@ -109,13 +110,16 @@ describe("artifact open endpoint with SUPERPM_ALLOW_SYSTEM_OPEN=1", () => {
       url: `/api/artifacts/nodes/${fileId}/open`,
     });
     expect(response.statusCode).toBe(204);
-    const [command, args] = spawnMock.mock.calls[0] as unknown as [
+    const [command, args, options] = spawnMock.mock.calls[0] as unknown as [
       string,
       string[],
+      { detached?: boolean; env?: NodeJS.ProcessEnv },
     ];
+    // Windows 下 detached 会导致启动的 GUI 程序不显示
+    expect(options.detached).not.toBe(true);
     if (process.platform === "win32") {
-      expect(command).toBe("cmd");
-      expect(args).toEqual(["/c", "start", "", filePath]);
+      expect(command).toBe("powershell.exe");
+      expect(options.env?.SUPERPM_TARGET_PATH).toBe(filePath);
     } else if (process.platform === "darwin") {
       expect(command).toBe("open");
       expect(args).toEqual([filePath]);
@@ -137,7 +141,7 @@ describe("artifact open endpoint with SUPERPM_ALLOW_SYSTEM_OPEN=1", () => {
     ];
     if (process.platform === "win32") {
       expect(command).toBe("explorer.exe");
-      expect(args).toEqual(["/select,", filePath]);
+      expect(args).toEqual([`/select,${filePath}`]);
     } else if (process.platform === "darwin") {
       expect(command).toBe("open");
       expect(args).toEqual(["-R", filePath]);

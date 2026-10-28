@@ -30,6 +30,7 @@ import {
 import { artifactApi } from "../../api/artifacts";
 import { ApiError, errorMessage, request } from "../../api/client";
 import FileTypeIcon from "../../components/FileTypeIcon.vue";
+import TruncatedText from "../../components/TruncatedText.vue";
 import { decorative } from "../../components/decorativeIcon";
 
 const FolderOpenIcon = decorative(FolderOpenOutlined);
@@ -71,7 +72,8 @@ const emptyText = computed(() =>
 const currentFolderName = computed(
   () => crumbs.value[crumbs.value.length - 1]?.name ?? props.requirementName,
 );
-// 打开策略（文档 2.6）：md→左栏编辑器；图片→页内预览；pdf→新窗口预览；其余→本地打开或下载，未知格式永不自动执行
+// 打开策略（文档 2.6）：md→左栏编辑器；图片→页内预览；其余→系统默认程序。
+// 系统打开不可用时，pdf 退回新窗口、其他格式退回 raw 网页预览。
 const imageExtensions = new Set([
   ".png",
   ".jpg",
@@ -131,6 +133,7 @@ function metaOf(node: ArtifactNode) {
 function sortNodes(list: ArtifactNode[]) {
   const direction = sortOrder.value === "asc" ? 1 : -1;
   return [...list].sort((a, b) => {
+    if (a.isFinal !== b.isFinal) return a.isFinal ? -1 : 1;
     if (a.nodeType !== b.nodeType) return a.nodeType === "folder" ? -1 : 1;
     if (sortKey.value === "time")
       return (
@@ -149,9 +152,10 @@ function sortNodes(list: ArtifactNode[]) {
 }
 function sortLinks(list: ArtifactLink[]) {
   const direction = sortOrder.value === "asc" ? 1 : -1;
-  return [...list].sort(
-    (a, b) => direction * a.name.localeCompare(b.name, "zh-Hans-CN"),
-  );
+  return [...list].sort((a, b) => {
+    if (a.isFinal !== b.isFinal) return a.isFinal ? -1 : 1;
+    return direction * a.name.localeCompare(b.name, "zh-Hans-CN");
+  });
 }
 const foldersView = computed(() => sortNodes(directory.value?.folders ?? []));
 const filesView = computed(() => sortNodes(directory.value?.files ?? []));
@@ -291,23 +295,20 @@ async function openFile(node: ArtifactNode) {
     emit("open-doc", node);
     return;
   }
+  // 图片始终在页内预览，不交给系统应用
   if (imageExtensions.has(extension)) {
     previewSrc.value = artifactApi.rawUrl(node.id);
     return;
   }
+  if (systemOpen.value) {
+    await openLocally(node);
+    return;
+  }
+  // 系统打开不可用（如远程部署）时退回网页预览
   if (extension === ".pdf") {
     window.open(artifactApi.rawUrl(node.id), "_blank", "noopener");
     return;
   }
-  if (systemOpen.value) {
-    try {
-      await artifactApi.openLocally(node.id);
-      return;
-    } catch (e) {
-      ElMessage.warning(errorMessage(e));
-    }
-  }
-  // 无本地打开通道时交由浏览器处理（未知格式不自动执行，仅展示或触发下载）
   window.open(artifactApi.rawUrl(node.id));
 }
 function openLink(link: ArtifactLink) {
@@ -709,7 +710,6 @@ function onFileCommand(command: string | number | object, node: ArtifactNode) {
   const action = String(command);
   if (action === "open") void openFile(node);
   else if (action === "download") void downloadFile(node);
-  else if (action === "open-locally") void openLocally(node);
   else if (action === "reveal") void openLocally(node, true);
   else if (action === "rename") void startRename(node);
   else if (action === "move") startMove(node);
@@ -891,8 +891,8 @@ function onLinkCommand(command: string | number | object, link: ArtifactLink) {
           @keydown.enter="enter(folder)"
         >
           <FileTypeIcon class="doc-card-icon folder" node-type="folder" />
-          <h3 class="doc-card-name" :title="folder.name">
-            <span class="name-text">{{ folder.name }}</span>
+          <h3 class="doc-card-name">
+            <TruncatedText class="name-text" :text="folder.name" />
             <el-tag
               v-if="isProtected(folder)"
               class="memory-tag"
@@ -945,7 +945,10 @@ function onLinkCommand(command: string | number | object, link: ArtifactLink) {
           v-for="file in filesView"
           :key="`n-${file.id}`"
           class="doc-card is-file"
-          :class="{ 'is-missing': file.status === 'missing' }"
+          :class="{
+            'is-missing': file.status === 'missing',
+            'is-final': file.isFinal,
+          }"
           :data-name="file.name"
           tabindex="0"
           @click="openFile(file)"
@@ -956,8 +959,8 @@ function onLinkCommand(command: string | number | object, link: ArtifactLink) {
             :name="file.name"
             node-type="file"
           />
-          <h3 class="doc-card-name" :title="file.name">
-            <span class="name-text">{{ file.name }}</span>
+          <h3 class="doc-card-name">
+            <TruncatedText class="name-text" :text="file.name" />
             <el-tag
               v-if="isMemory(file)"
               class="memory-tag"
@@ -1022,9 +1025,6 @@ function onLinkCommand(command: string | number | object, link: ArtifactLink) {
               <el-dropdown-menu>
                 <el-dropdown-item command="open">打开</el-dropdown-item>
                 <el-dropdown-item command="download">下载</el-dropdown-item>
-                <el-dropdown-item v-if="systemOpen" command="open-locally"
-                  >本地程序打开</el-dropdown-item
-                >
                 <el-dropdown-item command="reveal"
                   >在文件夹中显示</el-dropdown-item
                 >
@@ -1051,14 +1051,15 @@ function onLinkCommand(command: string | number | object, link: ArtifactLink) {
           v-for="link in linksView"
           :key="`l-${link.id}`"
           class="doc-card is-link"
+          :class="{ 'is-final': link.isFinal }"
           :data-name="link.name"
           tabindex="0"
           @click="openLink(link)"
           @keydown.enter="openLink(link)"
         >
           <FileTypeIcon class="doc-card-icon link" node-type="link" />
-          <h3 class="doc-card-name" :title="link.name">
-            <span class="name-text">{{ link.name }}</span>
+          <h3 class="doc-card-name">
+            <TruncatedText class="name-text" :text="link.name" />
             <el-tooltip
               :content="link.isFinal ? '取消最终版标记' : '标记为最终版'"
               placement="top"
@@ -1143,7 +1144,7 @@ function onLinkCommand(command: string | number | object, link: ArtifactLink) {
               createKind === 'folder'
                 ? '输入文件夹名称'
                 : createKind === 'file'
-                  ? '输入文件名称，可含扩展名，如 方案.md'
+                  ? '输入文件名称，省略扩展名时默认 .md'
                   : '输入链接名称'
             "
             maxlength="200"
@@ -1393,6 +1394,9 @@ function onLinkCommand(command: string | number | object, link: ArtifactLink) {
     border-color var(--duration-fast) var(--ease-standard),
     box-shadow var(--duration-fast) var(--ease-standard),
     transform var(--duration-fast) var(--ease-standard);
+}
+.doc-card.is-final {
+  order: -1;
 }
 .doc-card:hover,
 .doc-card:focus-visible {

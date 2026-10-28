@@ -1,4 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,8 +16,15 @@ import {
   resolveCategoryOpenAction,
   type CategoryOpenAction,
 } from "@superpm/shared";
-import { createApp } from "../src/app";
 import { authedInject } from "./auth-helper";
+
+// 本文件只验证“显式关闭”时的本地打开策略：在加载应用前设置，保证 403 分支可预期。
+let createApp!: (typeof import("../src/app"))["createApp"];
+beforeAll(async () => {
+  vi.stubEnv("SUPERPM_ALLOW_SYSTEM_OPEN", "0");
+  ({ createApp } = await import("../src/app"));
+});
+afterAll(() => vi.unstubAllEnvs());
 
 // 打开策略（补充文档 3.2）：空 / 单文件 / 唯一确认版 / 多确认或无确认 → 全部列表
 describe("resolveCategoryOpenAction", () => {
@@ -115,7 +131,7 @@ describe("external link protocol whitelist", () => {
   });
 });
 
-// 本地默认程序打开（补充文档 5.4）：默认关闭，未启用时一律 403
+// 本地默认程序打开（补充文档 5.4）：显式关闭时一律 403
 describe("local system open endpoint", () => {
   let app: FastifyInstance;
   let directory: string;
@@ -139,7 +155,7 @@ describe("local system open endpoint", () => {
     await app.close();
     rmSync(directory, { recursive: true, force: true });
   });
-  it("returns 403 when the switch is off (default)", async () => {
+  it("returns 403 when the switch is explicitly off", async () => {
     const created = await app.inject({
       method: "POST",
       url: `/api/requirements/${requirementId}/files`,

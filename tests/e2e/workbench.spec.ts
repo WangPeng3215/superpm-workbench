@@ -212,6 +212,100 @@ test("document editor keeps list item alignment in markdown", async ({
   await expect(reopened).toContainText("列表项也要保留对齐");
 });
 
+test("requirement detail keeps open document when switching features", async ({
+  page,
+  request,
+}) => {
+  const name = `详情状态-${Date.now()}`;
+  await page.goto("/requirements");
+  const row = await addRequirement(page, name);
+  await row.locator(".requirement-no").click();
+  await expect(page).toHaveURL(/\/requirements\/\d+$/);
+  const detailUrl = page.url();
+  const id = Number(new URL(detailUrl).pathname.split("/").pop());
+  // 打开文档管理中的需求记忆并留下可识别的 DOM 标记
+  await page.getByRole("tab", { name: "文档管理" }).click();
+  await page.locator('.doc-card[data-name="需求记忆.md"]').click();
+  const editor = page.getByLabel("文档内容");
+  await expect(editor).toBeVisible();
+  const surface = page.locator(".inline-rich").filter({ has: editor });
+  await surface.evaluate((el) => el.setAttribute("data-keep-alive-probe", "1"));
+  await editor.fill("切换功能后仍保留的文档内容");
+  await expect(page.getByText("已自动保存到本地文件")).toBeVisible();
+  // 切到其他功能
+  await page.getByRole("link", { name: "每日任务" }).click();
+  await expect(page).toHaveURL(/\/tasks$/);
+  // 服务端在此期间更新需求名称，返回时应刷新基础数据但不重置页面状态
+  const renamed = `${name}-已更新`;
+  await request.patch(`/api/requirements/${id}`, {
+    data: { name: renamed },
+  });
+  await page
+    .locator(".topbar-tab")
+    .filter({ hasText: name })
+    .locator(".tab-label")
+    .click();
+  await expect(page).toHaveURL(detailUrl);
+  await expect(page.locator(".head-title")).toHaveText(renamed);
+  const docTab = page.getByRole("tab", { name: "需求记忆.md" });
+  await expect(docTab).toBeVisible();
+  await expect(docTab).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByLabel("文档内容")).toContainText(
+    "切换功能后仍保留的文档内容",
+  );
+  // DOM 未被重建：同一编辑器节点被页面缓存保留下来
+  await expect(page.locator('[data-keep-alive-probe="1"]')).toHaveCount(1);
+  // 需求详情表单的未保存草稿同样跨功能保留
+  await page.getByRole("tab", { name: "需求详情" }).click();
+  const nameInput = page
+    .locator("label.field")
+    .filter({ hasText: "需求名称" })
+    .getByRole("textbox");
+  await nameInput.fill(`${renamed}-草稿`);
+  await expect(page.getByText("有未保存的修改")).toBeVisible();
+  await page.getByRole("link", { name: "每日任务" }).click();
+  await expect(page).toHaveURL(/\/tasks$/);
+  await page
+    .locator(".topbar-tab")
+    .filter({ hasText: name })
+    .locator(".tab-label")
+    .click();
+  await expect(page).toHaveURL(detailUrl);
+  await expect(nameInput).toHaveValue(`${renamed}-草稿`);
+  await expect(page.getByText("有未保存的修改")).toBeVisible();
+});
+
+test("cached requirement detail state is scoped per requirement", async ({
+  page,
+}) => {
+  const first = `缓存一-${Date.now()}`;
+  await page.goto("/requirements");
+  const firstRow = await addRequirement(page, first);
+  await firstRow.locator(".requirement-no").click();
+  await expect(page).toHaveURL(/\/requirements\/\d+$/);
+  await page.getByRole("tab", { name: "文档管理" }).click();
+  await page.locator('.doc-card[data-name="需求记忆.md"]').click();
+  await expect(page.getByRole("tab", { name: "需求记忆.md" })).toBeVisible();
+  // 切回列表并打开第二个需求：新详情页不应带有第一个需求的文档页签
+  await page.locator(".topbar-tab").filter({ hasText: "需求列表" }).click();
+  const second = `缓存二-${Date.now()}`;
+  const secondRow = await addRequirement(page, second);
+  await secondRow.locator(".requirement-no").click();
+  await expect(page).toHaveURL(/\/requirements\/\d+$/);
+  await expect(page.getByRole("tab", { name: "需求记忆.md" })).toHaveCount(0);
+  await expect(page.getByRole("tab", { name: "需求详情" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  // 切回第一个需求：其文档页签与编辑器仍在
+  await page.locator(".topbar-tab").filter({ hasText: first }).click();
+  await expect(page.getByRole("tab", { name: "需求记忆.md" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "需求记忆.md" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+});
+
 test("stage workspace persists analysis docs and issue resolution", async ({
   page,
   request,
