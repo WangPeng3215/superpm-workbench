@@ -69,6 +69,8 @@ export function createServiceContainer(
     requirements,
     directories,
   );
+  // 升级后清理历史遗留的 WPS/Office ~$ 临时文件索引（只删索引，不动磁盘）
+  artifacts.purgeTemporaryArtifacts();
   const dailyTasks = new DailyTaskService(db);
   let closed = false;
   return {

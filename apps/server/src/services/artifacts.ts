@@ -16,6 +16,7 @@ import {
   requirementImagesFolder,
   isSafeExternalUrl,
   isValidArtifactName,
+  isTemporaryArtifactName,
   requirementMemoryTemplate,
   type ArtifactBreadcrumbItem,
   type ArtifactDirectory,
@@ -52,6 +53,9 @@ import { RequirementDirectoryResolver } from "./requirement-directory.js";
 import { allowSystemOpen } from "../config/index.js";
 import { MIME_BY_EXTENSION } from "./requirement-files.js";
 import { launchSystemOpen, systemOpenFailureMessage } from "./system-open.js";
+
+const TEMPORARY_ARTIFACT_MESSAGE =
+  "以 ~$ 开头的文件是 WPS/Office 临时锁定文件，不能作为正式文档";
 
 // 文件/目录索引行（snake_case，与迁移 0007 列名一致）
 export interface ArtifactNodeRow {
@@ -771,6 +775,8 @@ export class ArtifactService {
     input: unknown,
   ): ArtifactImageUploadResult {
     const data = artifactImageUploadSchema.parse(input);
+    if (data.fileName && isTemporaryArtifactName(data.fileName))
+      throw new DomainError("VALIDATION_ERROR", TEMPORARY_ARTIFACT_MESSAGE);
     this.requirements.get(requirementId);
     const buffer = Buffer.from(data.data, "base64");
     if (!buffer.length || buffer.length > 5 * 1024 * 1024)
@@ -950,12 +956,47 @@ export class ArtifactService {
 
   // ===== 刷新与外部修改（文档 5）=====
 
+  /**
+   * 清理历史遗留的 ~$ 临时文件索引记录：只删数据库行，不触碰磁盘。
+   * 仅匹配 node_type='file' 且名称以 ~$ 开头的节点，可重复执行。
+   */
+  purgeTemporaryArtifacts(requirementId?: number): number {
+    const rows = this.db
+      .prepare(
+        `SELECT id FROM artifact_nodes WHERE node_type='file' AND substr(name, 1, 2)='~$'${requirementId === undefined ? "" : " AND requirement_id=?"}`,
+      )
+      .all(...(requirementId === undefined ? [] : [requirementId])) as {
+      id: number;
+    }[];
+    if (!rows.length) return 0;
+    const ids = rows.map((row) => row.id);
+    const placeholders = ids.map(() => "?").join(",");
+    this.db.transaction(() => {
+      this.db
+        .prepare(
+          `DELETE FROM issue_artifact_links WHERE artifact_id IN (${placeholders})`,
+        )
+        .run(...ids);
+      this.db
+        .prepare(
+          `DELETE FROM artifact_links WHERE folder_node_id IN (${placeholders})`,
+        )
+        .run(...ids);
+      this.db
+        .prepare(`DELETE FROM artifact_nodes WHERE id IN (${placeholders})`)
+        .run(...ids);
+    })();
+    return ids.length;
+  }
+
   /** 递归扫描目录（默认需求根目录）：新增拾取、外部删除标记 missing、外部修改刷新元数据并标记 */
   refreshDirectory(
     requirementId: number,
     input: unknown = {},
   ): ArtifactRefreshResult {
     const data = artifactRefreshSchema.parse(input);
+    // 历史遗留的 ~$ 临时文件记录先清理，避免被后续缺失检测当成正式文档
+    this.purgeTemporaryArtifacts(requirementId);
     // 普通刷新不得重建系统级资源（文档 §12.1/§12.3）：需求记忆缺失时按 missing 标记，
     // 由状态查询提示并交给显式「修复默认结构」补建，避免覆盖用户的整理结果。
     const relativePath = (data.relativePath ?? "").replace(/^\/+|\/+$/g, "");
@@ -1022,8 +1063,9 @@ export class ArtifactService {
       parentId: number | null,
     ) => {
       for (const entry of readdirSync(dirAbs, { withFileTypes: true })) {
-        // 不跟随、不登记符号链接
+        // 不跟随、不登记符号链接；WPS/Office 的 ~$ 临时锁定文件不算正式文档
         if (entry.isSymbolicLink()) continue;
+        if (entry.isFile() && isTemporaryArtifactName(entry.name)) continue;
         const rel = relPrefix + entry.name;
         seen.add(rel);
         const abs = join(dirAbs, entry.name);
@@ -1309,6 +1351,8 @@ export class ArtifactService {
   }
 
   private assertNodeName(name: string): string {
+    if (isTemporaryArtifactName(name))
+      throw new DomainError("VALIDATION_ERROR", TEMPORARY_ARTIFACT_MESSAGE);
     if (!isValidArtifactName(name))
       throw new DomainError(
         "VALIDATION_ERROR",
@@ -1923,6 +1967,7 @@ export class ArtifactService {
     const indexed = new Set(rows.map((row) => row.name));
     for (const entry of readdirSync(dirAbs, { withFileTypes: true })) {
       if (entry.isSymbolicLink() || indexed.has(entry.name)) continue;
+      if (entry.isFile() && isTemporaryArtifactName(entry.name)) continue;
       const rel = parentPath ? `${parentPath}/${entry.name}` : entry.name;
       const abs = join(dirAbs, entry.name);
       const stat = statSync(abs);

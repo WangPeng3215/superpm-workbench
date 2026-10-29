@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import Database from "better-sqlite3";
 import {
   existsSync,
   mkdtempSync,
@@ -92,6 +93,26 @@ describe("artifact service", () => {
       url: `/api/requirements/${requirementId}/artifacts/upload?${params.toString()}`,
       headers: { "content-type": "application/octet-stream" },
       payload: typeof content === "string" ? Buffer.from(content) : content,
+    });
+  }
+  // 测试直连数据库：模拟升级前已写入的历史 ~$ 索引记录
+  function withDatabase<T>(work: (db: Database.Database) => T): T {
+    const db = new Database(join(directory, "test.sqlite"));
+    try {
+      return work(db);
+    } finally {
+      db.close();
+    }
+  }
+  function insertLegacyTemporaryNode(name: string): number {
+    return withDatabase((db) => {
+      const now = new Date().toISOString();
+      const result = db
+        .prepare(
+          "INSERT INTO artifact_nodes(requirement_id, parent_id, node_type, name, relative_path, indexed_at, status, created_at, updated_at) VALUES (?, NULL, 'file', ?, ?, ?, 'normal', ?, ?)",
+        )
+        .run(requirementId, name, name, now, now, now);
+      return Number(result.lastInsertRowid);
     });
   }
 
@@ -276,6 +297,210 @@ describe("artifact service", () => {
     );
     expect(restored.status).toBe("external_changed");
     expect(restored.sizeBytes).toBeGreaterThan(2);
+  });
+
+  it("WPS 打开文档产生的 ~$ 临时文件不会登记为正式文档", async () => {
+    const formal = (await createFile("合同.md", null, "# 合同")).json();
+    const tempPath = join(requirementRoot(), "~$合同.docx");
+    writeFileSync(tempPath, "wps-lock");
+    // 进入目录触发轻量同步
+    const afterList = await list();
+    expect(
+      afterList.files.some((node: { name: string }) =>
+        node.name.startsWith("~$"),
+      ),
+    ).toBe(false);
+    expect(
+      afterList.files.find((node: { id: number }) => node.id === formal.id)
+        .status,
+    ).toBe("normal");
+    // 显式刷新递归扫描同样不登记
+    const refreshed = await app.inject({
+      method: "POST",
+      url: `/api/requirements/${requirementId}/artifacts/refresh`,
+    });
+    expect(refreshed.statusCode).toBe(200);
+    expect(
+      (await list()).files.some((node: { name: string }) =>
+        node.name.startsWith("~$"),
+      ),
+    ).toBe(false);
+    // 不删除磁盘上的真实临时文件（由 WPS 自己管理）
+    expect(existsSync(tempPath)).toBe(true);
+  });
+
+  it("WPS 关闭后临时文件删除，不产生缺失记录且正式文档保持正常", async () => {
+    const formal = (await createFile("方案.md", null, "# 方案")).json();
+    const tempPath = join(requirementRoot(), "~$方案.docx");
+    writeFileSync(tempPath, "wps-lock");
+    await list();
+    rmSync(tempPath);
+    const refreshed = await app.inject({
+      method: "POST",
+      url: `/api/requirements/${requirementId}/artifacts/refresh`,
+    });
+    expect(refreshed.statusCode).toBe(200);
+    const files = (await list()).files;
+    expect(
+      files.find((node: { id: number }) => node.id === formal.id).status,
+    ).toBe("normal");
+    expect(
+      files.some((node: { name: string }) => node.name.startsWith("~$")),
+    ).toBe(false);
+  });
+
+  it("显式创建或上传 ~$ 文件被拒绝", async () => {
+    const created = await createFile("~$合同.docx");
+    expect(created.statusCode).toBe(400);
+    expect(created.json().error.message).toContain("临时锁定文件");
+    expect(existsSync(join(requirementRoot(), "~$合同.docx"))).toBe(false);
+    const uploaded = await upload("~$合同.docx", "wps-lock");
+    expect(uploaded.statusCode).toBe(400);
+    expect(uploaded.json().error.message).toContain("临时锁定文件");
+    expect(existsSync(join(requirementRoot(), "~$合同.docx"))).toBe(false);
+  });
+
+  it("清理历史 ~$ 临时记录：可重复执行，正式文档与问题关联不受影响", async () => {
+    const formal = (await createFile("正式方案.md", null, "# 方案")).json();
+    const issue = (
+      await app.inject({
+        method: "POST",
+        url: `/api/requirements/${requirementId}/issues`,
+        payload: { stage: "design", title: "历史临时记录清理验证" },
+      })
+    ).json();
+    const linked = await app.inject({
+      method: "POST",
+      url: `/api/requirements/${requirementId}/issues/${issue.id}/assets`,
+      payload: { assetId: formal.id, relationType: "evidence" },
+    });
+    expect(linked.statusCode).toBe(201);
+    const tempName = "~$正式方案.docx";
+    const tempPath = join(requirementRoot(), tempName);
+    writeFileSync(tempPath, "wps-crash-leftover");
+    const tempId = insertLegacyTemporaryNode(tempName);
+    withDatabase((db) => {
+      db.prepare(
+        "INSERT INTO issue_artifact_links(issue_id, artifact_id, relation_type, created_at) VALUES (?, ?, 'reference', ?)",
+      ).run(issue.id, tempId, new Date().toISOString());
+    });
+    const first = await app.inject({
+      method: "POST",
+      url: `/api/requirements/${requirementId}/artifacts/refresh`,
+    });
+    expect(first.statusCode).toBe(200);
+    const stateAfterFirst = withDatabase((db) => ({
+      temp: db
+        .prepare("SELECT id FROM artifact_nodes WHERE id=?")
+        .get(tempId) as { id: number } | undefined,
+      formal: db
+        .prepare("SELECT id, status FROM artifact_nodes WHERE id=?")
+        .get(formal.id) as { id: number; status: string } | undefined,
+      formalLinks: db
+        .prepare(
+          "SELECT COUNT(*) AS total FROM issue_artifact_links WHERE artifact_id=?",
+        )
+        .get(formal.id) as { total: number },
+      tempLinks: db
+        .prepare(
+          "SELECT COUNT(*) AS total FROM issue_artifact_links WHERE artifact_id=?",
+        )
+        .get(tempId) as { total: number },
+    }));
+    expect(stateAfterFirst.temp).toBeUndefined();
+    expect(stateAfterFirst.formal).toMatchObject({
+      id: formal.id,
+      status: "normal",
+    });
+    expect(stateAfterFirst.formalLinks.total).toBe(1);
+    expect(stateAfterFirst.tempLinks.total).toBe(0);
+    // 只清理数据库记录，不删除磁盘文件
+    expect(existsSync(tempPath)).toBe(true);
+    // 再次刷新保持幂等，且不会把残留的 ~$ 文件重新登记
+    const second = await app.inject({
+      method: "POST",
+      url: `/api/requirements/${requirementId}/artifacts/refresh`,
+    });
+    expect(second.statusCode).toBe(200);
+    expect(
+      withDatabase(
+        (db) =>
+          db
+            .prepare("SELECT COUNT(*) AS total FROM artifact_nodes WHERE id=?")
+            .get(tempId) as { total: number },
+      ).total,
+    ).toBe(0);
+    expect(
+      (await list()).files.some((node: { name: string }) =>
+        node.name.startsWith("~$"),
+      ),
+    ).toBe(false);
+  });
+
+  it("服务启动时清理历史 ~$ 记录，重复启动保持幂等", async () => {
+    const formal = (await createFile("启动保留.md", null, "内容")).json();
+    const tempId = insertLegacyTemporaryNode("~$启动清理.docx");
+    const options = {
+      databasePath: join(directory, "test.sqlite"),
+      workspacePath: join(directory, "workspace"),
+      logger: false,
+    } as const;
+    await app.close();
+    app = await createApp(options);
+    await authedInject(app);
+    const afterFirstStart = withDatabase((db) => ({
+      temp: db
+        .prepare("SELECT id FROM artifact_nodes WHERE id=?")
+        .get(tempId) as { id: number } | undefined,
+      formal: db
+        .prepare("SELECT id FROM artifact_nodes WHERE id=?")
+        .get(formal.id) as { id: number } | undefined,
+    }));
+    expect(afterFirstStart.temp).toBeUndefined();
+    expect(afterFirstStart.formal).toBeDefined();
+    // 第二次启动不重复报错，正式文档仍在
+    await app.close();
+    app = await createApp(options);
+    await authedInject(app);
+    const afterSecondStart = withDatabase((db) => ({
+      temp: db
+        .prepare("SELECT id FROM artifact_nodes WHERE id=?")
+        .get(tempId) as { id: number } | undefined,
+      formal: db
+        .prepare("SELECT id FROM artifact_nodes WHERE id=?")
+        .get(formal.id) as { id: number } | undefined,
+    }));
+    expect(afterSecondStart.temp).toBeUndefined();
+    expect(afterSecondStart.formal).toBeDefined();
+  });
+
+  it("正式文档删除标记 missing、恢复后回到 normal，重命名保持正常", async () => {
+    const file = (await createFile("正式文档.md", null, "v1")).json();
+    const renamed = await app.inject({
+      method: "PATCH",
+      url: `/api/artifacts/nodes/${file.id}`,
+      payload: { name: "正式文档-v2.md" },
+    });
+    expect(renamed.statusCode).toBe(200);
+    expect(renamed.json().relativePath).toBe("正式文档-v2.md");
+    expect(existsSync(join(requirementRoot(), "正式文档-v2.md"))).toBe(true);
+    expect(existsSync(join(requirementRoot(), "正式文档.md"))).toBe(false);
+    // 外部删除 → missing
+    rmSync(join(requirementRoot(), "正式文档-v2.md"));
+    await app.inject({
+      method: "POST",
+      url: `/api/requirements/${requirementId}/artifacts/refresh`,
+    });
+    let node = (await list()).files.find(
+      (item: { id: number }) => item.id === file.id,
+    );
+    expect(node.status).toBe("missing");
+    // 磁盘恢复 → normal
+    writeFileSync(join(requirementRoot(), "正式文档-v2.md"), "v2");
+    node = (await list()).files.find(
+      (item: { id: number }) => item.id === file.id,
+    );
+    expect(node.status).toBe("normal");
   });
 
   it("编辑器按 nodeId 读写；外部修改后保存需 force 确认（不静默覆盖）", async () => {

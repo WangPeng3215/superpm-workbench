@@ -655,6 +655,10 @@ export function isValidArtifactName(name: string): boolean {
   if (/[. ]$/.test(trimmed)) return false;
   return artifactNamePattern.test(trimmed) && trimmed.length <= 200;
 }
+// WPS/Office 打开文档时生成的 ~$ 前缀临时锁定文件，不属于正式文档
+export function isTemporaryArtifactName(name: string): boolean {
+  return name.startsWith("~$");
+}
 // 需求记忆模板（文档 4.3）：区分事实/假设/决策/待确认/下一步/关联产出物
 export function requirementMemoryTemplate(requirementName: string): string {
   return [
