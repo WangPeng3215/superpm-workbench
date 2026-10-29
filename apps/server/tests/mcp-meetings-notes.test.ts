@@ -242,9 +242,9 @@ describe("MCP 会议与便签能力", () => {
     return { pinned, memo, archived, longContent };
   };
 
-  it("客户端发现 29 个工具，会议/便签删除标记为破坏性操作", async () => {
+  it("客户端发现 32 个工具，会议/便签删除标记为破坏性操作", async () => {
     const listed = await client.listTools();
-    expect(listed.tools).toHaveLength(29);
+    expect(listed.tools).toHaveLength(32);
     const names = listed.tools.map((tool) => tool.name);
     for (const name of [
       "meeting.list",

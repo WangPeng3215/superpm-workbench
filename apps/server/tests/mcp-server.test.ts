@@ -203,7 +203,7 @@ describe("MCP server（M2 只读）", () => {
     });
     try {
       const listed = await client.listTools();
-      expect(listed.tools).toHaveLength(29);
+      expect(listed.tools).toHaveLength(32);
       expect(
         listed.tools.find((tool) => tool.name === "issue.comment")?.annotations,
       ).toMatchObject({ readOnlyHint: false });

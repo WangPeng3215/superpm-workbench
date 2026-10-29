@@ -7,9 +7,12 @@ import {
   mcpWritePrepareInput,
   mcpWriteToolNames,
   type Issue,
+  type McpArtifactCreateTextInput,
   type McpArtifactDirectoryData,
   type McpArtifactGetInput,
   type McpArtifactListInput,
+  type McpArtifactTextWriteData,
+  type McpArtifactUpdateTextInput,
   type McpErrorCode,
   type McpIssueActivitiesInput,
   type McpIssueCommentInput,
@@ -30,6 +33,7 @@ import {
   type McpMeetingSearchInput,
   type McpMeetingUpdateInput,
   type McpMeetingWriteData,
+  type McpMemoryWriteData,
   type McpNoteArchiveData,
   type McpNoteArchiveInput,
   type McpNoteConvertData,
@@ -46,6 +50,7 @@ import {
   type McpRequirementGetInput,
   type McpRequirementListInput,
   type McpRequirementMemoryGetInput,
+  type McpRequirementMemoryUpdateInput,
   type McpRequirementProgressGetInput,
   type McpRequirementSummary,
   type McpToolKind,
@@ -144,6 +149,9 @@ interface McpToolInputs {
   "note.archive": McpNoteArchiveInput;
   "note.delete": McpNoteDeleteInput;
   "note.convertToTask": McpNoteConvertInput;
+  "requirement.memory.update": McpRequirementMemoryUpdateInput;
+  "artifact.createText": McpArtifactCreateTextInput;
+  "artifact.updateText": McpArtifactUpdateTextInput;
 }
 
 const ISSUE_PREVIEW_CHARS = 200;
@@ -252,6 +260,24 @@ function payloadTarget(
         targetType: "note",
         targetId: String(payload.noteId),
       };
+    case "requirement.memory.update":
+      return {
+        requirementId: Number(payload.requirementId),
+        targetType: "artifact",
+        targetId: "requirement-memory",
+      };
+    case "artifact.createText":
+      return {
+        requirementId: Number(payload.requirementId),
+        targetType: "artifact",
+        targetId: "new",
+      };
+    case "artifact.updateText":
+      return {
+        requirementId: Number(payload.requirementId),
+        targetType: "artifact",
+        targetId: String(payload.nodeId),
+      };
   }
 }
 
@@ -308,6 +334,12 @@ function writeSummary(
       return `删除便签 #${noteId}`;
     case "note.convertToTask":
       return `将便签 #${noteId} 转换为每日任务`;
+    case "requirement.memory.update":
+      return `更新需求记忆（${payload.mode === "append" ? "追加" : "替换"}）`;
+    case "artifact.createText":
+      return "创建文本文件";
+    case "artifact.updateText":
+      return `更新文本文件 #${Number(payload.nodeId)}`;
   }
 }
 
@@ -743,6 +775,65 @@ export function buildMcpTools(deps: McpGatewayDeps): McpGateway {
         () => deps.notes.convert(noteId),
       );
       return result satisfies McpNoteConvertData;
+    },
+    "requirement.memory.update": (input, options) => {
+      const { idempotencyKey, ...payload } = input;
+      const result = writes.executeAuto(
+        {
+          tool: "requirement.memory.update",
+          payload,
+          idempotencyKey,
+          target: payloadTarget("requirement.memory.update", payload),
+          actorName: actorFor(options).actorName,
+          summary: writeSummary("requirement.memory.update", payload),
+        },
+        () =>
+          deps.artifacts.updateMemory(payload.requirementId, {
+            mode: payload.mode,
+            content: payload.content,
+            expectedVersion: payload.expectedVersion,
+          }),
+      );
+      return result satisfies McpMemoryWriteData;
+    },
+    "artifact.createText": (input, options) => {
+      const { idempotencyKey, ...payload } = input;
+      const result = writes.executeAuto(
+        {
+          tool: "artifact.createText",
+          payload,
+          idempotencyKey,
+          target: payloadTarget("artifact.createText", payload),
+          actorName: actorFor(options).actorName,
+          summary: writeSummary("artifact.createText", payload),
+        },
+        () =>
+          deps.artifacts.createTextFile(payload.requirementId, {
+            parentId: payload.parentId,
+            name: payload.name,
+            content: payload.content,
+          }),
+      );
+      return result satisfies McpArtifactTextWriteData;
+    },
+    "artifact.updateText": (input, options) => {
+      const { idempotencyKey, ...payload } = input;
+      const result = writes.executeAuto(
+        {
+          tool: "artifact.updateText",
+          payload,
+          idempotencyKey,
+          target: payloadTarget("artifact.updateText", payload),
+          actorName: actorFor(options).actorName,
+          summary: writeSummary("artifact.updateText", payload),
+        },
+        () =>
+          deps.artifacts.updateTextFile(payload.requirementId, payload.nodeId, {
+            content: payload.content,
+            expectedVersion: payload.expectedVersion,
+          }),
+      );
+      return result satisfies McpArtifactTextWriteData;
     },
   };
 

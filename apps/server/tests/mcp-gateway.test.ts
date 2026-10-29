@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
 import Database from "better-sqlite3";
 import type {
   ArtifactMemoryReadResult,
@@ -29,9 +30,12 @@ import type {
 import {
   MCP_ERROR_CODES,
   MCP_UNTRUSTED_CONTENT_NOTICE,
+  mcpAutoWriteToolNames,
+  mcpConfirmedWriteToolNames,
   mcpMutatingToolNames,
   mcpReadonlyToolNames,
   mcpToolContracts,
+  mcpWritePayloadSchemas,
   mcpWriteToolNames,
 } from "@superpm/shared";
 import { migrate } from "../src/db/migrate";
@@ -148,12 +152,18 @@ describe("MCP 只读契约（M2）", () => {
       }
     ).total;
 
-  it("契约完整性：15 个只读 + 12 个写工具，写工具要求幂等键，错误码在白名单内", () => {
-    expect(mcpToolContracts).toHaveLength(27);
+  it("契约完整性：15 个只读 + 15 个写工具，写工具要求幂等键，错误码在白名单内", () => {
+    expect(mcpToolContracts).toHaveLength(30);
     expect(mcpReadonlyToolNames).toHaveLength(15);
-    expect(mcpMutatingToolNames).toHaveLength(12);
+    expect(mcpMutatingToolNames).toHaveLength(15);
+    expect(mcpConfirmedWriteToolNames).toHaveLength(12);
+    expect(mcpAutoWriteToolNames).toHaveLength(3);
     expect(mcpToolContracts.map((contract) => contract.name).sort()).toEqual(
       [...mcpReadonlyToolNames, ...mcpMutatingToolNames].sort(),
+    );
+    // 确认令牌只覆盖受确认写入，低风险自动写入不进入 prepare
+    expect(Object.keys(mcpWritePayloadSchemas).sort()).toEqual(
+      [...mcpConfirmedWriteToolNames].sort(),
     );
     for (const contract of mcpToolContracts) {
       expect(contract.kind).toBe(
@@ -183,9 +193,20 @@ describe("MCP 只读契约（M2）", () => {
     expect(names).not.toContain("issue.update");
     expect(names).not.toContain("issue.create");
     expect(names).not.toContain("issue.comment");
+    expect(names).not.toContain("requirement.memory.update");
+    expect(names).not.toContain("artifact.createText");
+    expect(names).not.toContain("artifact.updateText");
     expect(gateway.writeEnabled).toBe(false);
     expect(errorOf("issue.update", {}).error.code).toBe("FORBIDDEN");
     expect(errorOf("write.prepare", {}).error.code).toBe("FORBIDDEN");
+    expect(
+      errorOf("requirement.memory.update", {
+        requirementId: 1,
+        mode: "replace",
+        content: "x",
+        idempotencyKey: "idem-disabled-0001",
+      }).error.code,
+    ).toBe("FORBIDDEN");
   });
 
   it("requirement.list / requirement.get：摘要与树形关系，不返回完整正文", () => {
@@ -234,6 +255,11 @@ describe("MCP 只读契约（M2）", () => {
     expect(full.status).toBe("available");
     expect(full.exists).toBe(true);
     expect(full.content).toContain("已确认事实");
+    expect(full.version).toBe(
+      createHash("sha256")
+        .update("# 需求记忆\n已确认事实", "utf8")
+        .digest("hex"),
+    );
 
     const clipped = dataOf<McpMemoryData>("requirement.memory.get", {
       requirementId: requirement.id,
@@ -241,6 +267,8 @@ describe("MCP 只读契约（M2）", () => {
     });
     expect(clipped.content).toHaveLength(5);
     expect(clipped.truncated).toBe(true);
+    // 版本始终基于全文，不因截断而改变
+    expect(clipped.version).toBe(full.version);
   });
 
   it("requirement.memory.get：未初始化需求不创建目录、不写映射", () => {
@@ -422,6 +450,9 @@ describe("MCP 只读契约（M2）", () => {
     expect(textResult.kind).toBe("text");
     expect(textResult.content).toBe("0123");
     expect(textResult.truncated).toBe(true);
+    expect(textResult.version).toBe(
+      createHash("sha256").update("0123456789", "utf8").digest("hex"),
+    );
 
     const binaryResult = dataOf<ArtifactReadResult>("artifact.get", {
       requirementId: requirement.id,
@@ -429,6 +460,7 @@ describe("MCP 只读契约（M2）", () => {
     });
     expect(binaryResult.kind).toBe("binary");
     expect(binaryResult.content).toBeNull();
+    expect(binaryResult.version).toBeNull();
 
     const folderResult = dataOf<ArtifactReadResult>("artifact.get", {
       requirementId: requirement.id,
@@ -437,6 +469,7 @@ describe("MCP 只读契约（M2）", () => {
     expect(folderResult.kind).toBe("folder");
     expect(folderResult.content).toBeNull();
     expect(folderResult.descendantCount).toBe(0);
+    expect(folderResult.version).toBeNull();
   });
 
   it("需求作用域：跨需求的 issue / artifact 一律 NOT_FOUND", () => {
@@ -545,8 +578,10 @@ describe("MCP 只读契约（M2）", () => {
   it("安全边界：工具集快照固定，不含 SQL / 路径 / 文件系统 / 任意写工具", () => {
     const names = mcpToolContracts.map((contract) => contract.name).sort();
     expect(names).toEqual([
+      "artifact.createText",
       "artifact.get",
       "artifact.list",
+      "artifact.updateText",
       "issue.activities",
       "issue.comment",
       "issue.get",
@@ -571,6 +606,7 @@ describe("MCP 只读契约（M2）", () => {
       "requirement.get",
       "requirement.list",
       "requirement.memory.get",
+      "requirement.memory.update",
       "requirement.progress.get",
     ]);
     for (const name of names) {
@@ -585,8 +621,9 @@ describe("MCP 只读契约（M2）", () => {
       )
         expect(mcpWriteToolNames).toContain(name);
     }
-    // create/delete 仅限会议与便签这两类低风险业务实体，不提供通用删除能力
+    // create/delete 仅限低风险业务实体与受限文本文件；不提供通用删除能力
     expect(names.filter((name) => /create|delete/.test(name))).toEqual([
+      "artifact.createText",
       "meeting.create",
       "meeting.delete",
       "note.create",

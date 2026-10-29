@@ -1,6 +1,10 @@
 import type Database from "better-sqlite3";
 import { createHash, randomBytes } from "node:crypto";
-import type { McpWritePrepareData, McpWriteToolName } from "@superpm/shared";
+import type {
+  McpConfirmedWriteToolName,
+  McpWritePrepareData,
+  McpWriteToolName,
+} from "@superpm/shared";
 import { DomainError } from "./requirements.js";
 
 export interface McpWriteServiceOptions {
@@ -29,6 +33,12 @@ export interface McpWriteRequest {
   /** 不含正文的短摘要，用于审计与 prepare 返回 */
   summary: string;
 }
+
+/** 受确认写入的请求：工具必须属于受确认清单 */
+export type McpConfirmedWriteRequest = Omit<
+  McpWriteRequest,
+  "tool" | "confirmationToken"
+> & { tool: McpConfirmedWriteToolName };
 
 interface ConfirmationRow {
   id: number;
@@ -103,9 +113,7 @@ export class McpWriteService {
     return this.enabled;
   }
 
-  prepare(
-    request: Omit<McpWriteRequest, "confirmationToken">,
-  ): McpWritePrepareData {
+  prepare(request: McpConfirmedWriteRequest): McpWritePrepareData {
     this.ensureEnabled();
     if (
       this.db
@@ -278,6 +286,58 @@ export class McpWriteService {
     }
   }
 
+  /**
+   * 低风险自动写入：不需要确认令牌，但仍强制写开关、幂等键、业务服务与审计。
+   * 仅用于需求记忆与普通文本产出物；删除、跨项目与权限变更不得走此通道。
+   */
+  executeAuto<T>(
+    request: Omit<McpWriteRequest, "confirmationToken">,
+    run: () => T,
+  ): T {
+    this.ensureEnabled();
+    const nowIso = this.now().toISOString();
+    const duplicate = this.db
+      .prepare("SELECT 1 FROM mcp_audit WHERE idempotency_key=?")
+      .get(request.idempotencyKey);
+    if (duplicate)
+      throw new DomainError(
+        "CONFLICT",
+        "该 idempotencyKey 已完成过一次写入，请勿重复提交",
+        409,
+      );
+
+    const hash = paramsHash(
+      request.tool,
+      request.payload,
+      request.idempotencyKey,
+    );
+    try {
+      return this.db.transaction(() => {
+        const result = run();
+        this.writeAudit({
+          ...request,
+          paramsHash: hash,
+          idempotencyKey: request.idempotencyKey,
+          confirmationId: null,
+          outcome: "success",
+          createdAt: nowIso,
+        });
+        return result;
+      })();
+    } catch (error) {
+      this.writeAudit({
+        ...request,
+        paramsHash: hash,
+        idempotencyKey: null,
+        confirmationId: null,
+        outcome: "error",
+        errorCode: error instanceof DomainError ? error.code : "INTERNAL_ERROR",
+        createdAt: nowIso,
+      });
+      throw error;
+    }
+  }
+
   private ensureEnabled() {
     if (!this.enabled)
       throw new DomainError(
@@ -292,7 +352,7 @@ export class McpWriteService {
     target: McpWriteTarget;
     paramsHash: string;
     idempotencyKey: string | null;
-    confirmationId: number;
+    confirmationId: number | null;
     actorName: string;
     outcome: "prepared" | "success" | "error";
     errorCode?: string;

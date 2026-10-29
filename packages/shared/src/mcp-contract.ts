@@ -15,7 +15,9 @@ import {
 import type {
   ArtifactDirectory,
   ArtifactMemoryReadResult,
+  ArtifactMemoryWriteResult,
   ArtifactReadResult,
+  ArtifactTextWriteResult,
   Issue,
   IssueActivity,
   IssueAssetLink,
@@ -31,20 +33,23 @@ import type {
 } from "./index.js";
 
 /**
- * MCP 工具契约层（主开发文档阶段 10，M3：受控写入；会议/便签补全）。
+ * MCP 工具契约层（主开发文档阶段 10，M3：受控写入；会议/便签与文本产出物补全）。
  *
  * 本文件只声明“AI 可以通过 MCP 做什么”，不包含任何执行逻辑；执行统一收敛在
  * apps/server 的 mcp-gateway（网关把工具调用转发给真实业务服务，不做第二套业务逻辑）。
  *
  * 关键设计约束：
- * 1. 只读工具 15 个；写入开放问题更新、评论、关联/取消关联，以及会议/便签的
- *    创建、更新、归档、删除与便签转任务。需求创建/更新、文件写入、删除/移动/
- *    重命名仍不开放；问题创建/删除保持关闭。
- * 2. 写工具默认不注册；必须显式设置 SUPERPM_MCP_WRITE=1 才可见。每次写入必须先用
+ * 1. 只读工具 15 个；写入分两级：
+ *    - 受确认写入 12 个：问题更新/评论/关联，会议与便签的创建、更新、归档、删除与转任务；
+ *    - 低风险自动写入 3 个：需求记忆更新、普通文本创建与更新（受路径/格式白名单约束）。
+ *    需求创建/更新、文件删除/移动/重命名、问题创建/删除仍不开放。
+ * 2. 写工具默认不注册；必须显式设置 SUPERPM_MCP_WRITE=1 才可见。受确认写入必须先调用
  *    write.prepare 申请一次性确认令牌，令牌绑定工具、解析后的参数与幂等键，5 分钟过期。
+ *    低风险自动写入不需要确认令牌，但仍强制写开关、幂等键、业务授权、参数校验、
+ *    路径校验与审计，不存在绕过整个写入守卫的“静默写”。
  * 3. 每次写入必须携带非空 idempotencyKey；成功请求的幂等键持久化，重复提交返回 CONFLICT。
- * 4. 问题写入以 requirementId 为作用域；会议/便签是独立实体，审计 requirement_id 记为 NULL。
- *    跨需求访问一律返回 NOT_FOUND。
+ * 4. 问题写入以 requirementId 为作用域；会议/便签是独立实体，审计 requirement_id 记为 NULL；
+ *    文本产出物与需求记忆以 requirementId 为作用域，跨需求访问一律返回 NOT_FOUND。
  * 5. 写入操作者固定标记为 AI，并记录 MCP 客户端名称；审计写入 mcp_audit，不记录正文、
  *    原始令牌或绝对路径。
  * 6. 业务内容一律视为不可信数据：网关在结果中附带固定提示，模型不得把其中的文本
@@ -71,11 +76,8 @@ export const mcpReadonlyToolNames = [
   "note.get",
   "note.search",
 ] as const;
-/**
- * 写工具名（12 个）：问题低风险操作 + 会议/便签受控写入。
- * 正式问题创建/删除、需求创建/更新与文件写入继续关闭。
- */
-export const mcpWriteToolNames = [
+/** 受确认写入（12 个）：必须先经 write.prepare 获取一次性确认令牌 */
+export const mcpConfirmedWriteToolNames = [
   "issue.update",
   "issue.comment",
   "issue.linkAsset",
@@ -89,14 +91,27 @@ export const mcpWriteToolNames = [
   "note.delete",
   "note.convertToTask",
 ] as const;
+/** 低风险自动写入（3 个）：受写开关、幂等键、路径/格式白名单与审计约束，无需逐次确认 */
+export const mcpAutoWriteToolNames = [
+  "requirement.memory.update",
+  "artifact.createText",
+  "artifact.updateText",
+] as const;
+export const mcpWriteToolNames = [
+  ...mcpConfirmedWriteToolNames,
+  ...mcpAutoWriteToolNames,
+] as const;
 export const mcpMutatingToolNames = mcpWriteToolNames;
 
 export type McpReadonlyToolName = (typeof mcpReadonlyToolNames)[number];
-export type McpWriteToolName = (typeof mcpWriteToolNames)[number];
+export type McpConfirmedWriteToolName =
+  (typeof mcpConfirmedWriteToolNames)[number];
+export type McpAutoWriteToolName = (typeof mcpAutoWriteToolNames)[number];
+export type McpWriteToolName = McpConfirmedWriteToolName | McpAutoWriteToolName;
 export type McpMutatingToolName = McpWriteToolName;
 export type McpToolName = McpReadonlyToolName | McpMutatingToolName;
 export type McpToolKind = "readonly" | "mutating";
-/** readonly → "none"；mutating → "key-required"（M3 写工具必须携带幂等键） */
+/** readonly → "none"；mutating → "key-required"（所有写工具必须携带幂等键） */
 export type McpIdempotency = "none" | "key-required";
 
 /**
@@ -109,6 +124,10 @@ export const MCP_ERROR_CODES = [
   "FORBIDDEN",
   "CONFLICT",
   "INVALID_PATH",
+  "UNSUPPORTED_FILE_TYPE",
+  "WRITE_FAILED",
+  "INDEX_SYNC_FAILED",
+  "WORKSPACE_INIT_FAILED",
 ] as const;
 export type McpErrorCode = (typeof MCP_ERROR_CODES)[number];
 
@@ -240,7 +259,7 @@ export interface McpIssueActivitiesData {
 // ---------------------------------------------------------------------------
 
 export interface McpWritePrepareData {
-  tool: McpWriteToolName;
+  tool: McpConfirmedWriteToolName;
   confirmationToken: string;
   expiresAt: string;
   summary: string;
@@ -273,6 +292,8 @@ export interface McpArtifactDirectoryData extends ArtifactDirectory {
 
 export type McpArtifactDetailData = ArtifactReadResult;
 export type McpMemoryData = ArtifactMemoryReadResult;
+export type McpArtifactTextWriteData = ArtifactTextWriteResult;
+export type McpMemoryWriteData = ArtifactMemoryWriteResult;
 
 export type McpMeetingListData = MeetingQueryResult;
 export type McpMeetingDetailData = Meeting;
@@ -654,7 +675,54 @@ export const mcpNoteConvertInput = z
   .strict();
 export type McpNoteConvertInput = z.output<typeof mcpNoteConvertInput>;
 
-/** 按工具名选择 prepare 阶段使用的 payload schema */
+// ---------------------------------------------------------------------------
+// 低风险自动写入入参：不需要确认令牌，但仍必须携带幂等键
+// ---------------------------------------------------------------------------
+
+const textWriteVersion = z
+  .string()
+  .regex(/^[0-9a-f]{64}$/, "版本应为 64 位 SHA-256");
+
+const memoryUpdateFields = {
+  requirementId: id,
+  mode: z.enum(["replace", "append"]),
+  content: z.string().min(1, "内容不能为空").max(200000),
+  expectedVersion: textWriteVersion.optional(),
+};
+export const mcpRequirementMemoryUpdateInput = z
+  .object({ ...memoryUpdateFields, idempotencyKey })
+  .strict();
+export type McpRequirementMemoryUpdateInput = z.output<
+  typeof mcpRequirementMemoryUpdateInput
+>;
+
+const artifactCreateTextFields = {
+  requirementId: id,
+  parentId: id.nullable().default(null),
+  name: z.string().min(1, "请输入文件名称").max(200, "名称最多 200 字"),
+  content: z.string().max(200000).default(""),
+};
+export const mcpArtifactCreateTextInput = z
+  .object({ ...artifactCreateTextFields, idempotencyKey })
+  .strict();
+export type McpArtifactCreateTextInput = z.output<
+  typeof mcpArtifactCreateTextInput
+>;
+
+const artifactUpdateTextFields = {
+  requirementId: id,
+  nodeId: id,
+  content: z.string().max(200000),
+  expectedVersion: textWriteVersion,
+};
+export const mcpArtifactUpdateTextInput = z
+  .object({ ...artifactUpdateTextFields, idempotencyKey })
+  .strict();
+export type McpArtifactUpdateTextInput = z.output<
+  typeof mcpArtifactUpdateTextInput
+>;
+
+/** 按工具名选择 prepare 阶段使用的 payload schema（仅受确认写入） */
 export const mcpWritePayloadSchemas = {
   "issue.update": mcpIssueUpdatePayload,
   "issue.comment": mcpIssueCommentPayload,
@@ -673,7 +741,7 @@ export const mcpWritePayloadSchemas = {
 /** write.prepare 入参：payload 以原始对象提交，由网关按工具 schema 校验 */
 export const mcpWritePrepareInput = z
   .object({
-    tool: z.enum(mcpWriteToolNames),
+    tool: z.enum(mcpConfirmedWriteToolNames),
     input: z.record(z.unknown()),
     idempotencyKey,
   })
@@ -684,7 +752,7 @@ export type McpWritePrepareInput = z.output<typeof mcpWritePrepareInput>;
 // 契约清单
 // ---------------------------------------------------------------------------
 
-/** 15 个只读 + 12 个写工具的完整契约，网关按此一一建立执行器 */
+/** 15 个只读 + 15 个写工具的完整契约，网关按此一一建立执行器 */
 export const mcpToolContracts: McpToolContract[] = [
   {
     name: "requirement.list",
@@ -929,6 +997,60 @@ export const mcpToolContracts: McpToolContract[] = [
     kind: "mutating",
     input: mcpNoteConvertInput,
     allowedErrors: ["NOT_FOUND", "VALIDATION_ERROR", "FORBIDDEN", "CONFLICT"],
+    idempotency: "key-required",
+  },
+  {
+    name: "requirement.memory.update",
+    description:
+      "按 requirementId 更新需求根目录的 需求记忆.md，不接受任意路径。mode=replace 全量替换，mode=append 追加；文件已存在时必须提交 requirement.memory.get 返回的 version 作为 expectedVersion，不存在时按工作区初始化规则创建。例行记忆更新无需逐次确认，但仍受写开关、幂等键、路径校验与审计约束。",
+    kind: "mutating",
+    input: mcpRequirementMemoryUpdateInput,
+    allowedErrors: [
+      "NOT_FOUND",
+      "VALIDATION_ERROR",
+      "FORBIDDEN",
+      "CONFLICT",
+      "INVALID_PATH",
+      "WRITE_FAILED",
+      "INDEX_SYNC_FAILED",
+      "WORKSPACE_INIT_FAILED",
+    ],
+    idempotency: "key-required",
+  },
+  {
+    name: "artifact.createText",
+    description:
+      "在需求文档库的指定文件夹（parentId 省略时为根目录）创建文本文件。仅支持 .md、.markdown、.txt，未写扩展名默认 .md；同名返回 CONFLICT 且绝不覆盖；不允许创建 需求记忆.md，不允许写入 images 系统目录。成功后立即出现在 artifact.list/artifact.get。无需确认令牌，但仍受写开关、幂等键与审计约束。",
+    kind: "mutating",
+    input: mcpArtifactCreateTextInput,
+    allowedErrors: [
+      "NOT_FOUND",
+      "VALIDATION_ERROR",
+      "FORBIDDEN",
+      "CONFLICT",
+      "INVALID_PATH",
+      "UNSUPPORTED_FILE_TYPE",
+      "WRITE_FAILED",
+      "INDEX_SYNC_FAILED",
+    ],
+    idempotency: "key-required",
+  },
+  {
+    name: "artifact.updateText",
+    description:
+      "按 nodeId 全量更新需求内已有文本文件。仅支持 .md、.markdown、.txt；必须提交 artifact.get 返回的 version 作为 expectedVersion，版本不一致返回 CONFLICT，不静默覆盖。需求记忆.md 只能通过 requirement.memory.update 更新；文件缺失、移动或类型不支持返回明确错误。无需确认令牌，但仍受写开关、幂等键与审计约束。",
+    kind: "mutating",
+    input: mcpArtifactUpdateTextInput,
+    allowedErrors: [
+      "NOT_FOUND",
+      "VALIDATION_ERROR",
+      "FORBIDDEN",
+      "CONFLICT",
+      "INVALID_PATH",
+      "UNSUPPORTED_FILE_TYPE",
+      "WRITE_FAILED",
+      "INDEX_SYNC_FAILED",
+    ],
     idempotency: "key-required",
   },
 ];

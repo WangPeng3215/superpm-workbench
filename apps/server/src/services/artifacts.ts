@@ -6,9 +6,12 @@ import {
   artifactLinkCreateSchema,
   artifactLinkUpdateSchema,
   artifactFinalSchema,
+  artifactMemoryUpdateSchema,
   artifactMoveSchema,
   artifactRefreshSchema,
   artifactRenameSchema,
+  artifactTextCreateSchema,
+  artifactTextUpdateSchema,
   artifactImageUploadSchema,
   artifactUploadMaxBytes,
   artifactUploadMaxLabel,
@@ -17,6 +20,7 @@ import {
   isSafeExternalUrl,
   isValidArtifactName,
   isTemporaryArtifactName,
+  isWritableTextExtension,
   requirementMemoryTemplate,
   type ArtifactBreadcrumbItem,
   type ArtifactDirectory,
@@ -24,6 +28,7 @@ import {
   type ArtifactLink,
   type ArtifactMemoryReadResult,
   type ArtifactMemoryStatus,
+  type ArtifactMemoryWriteResult,
   type ArtifactNode,
   type ArtifactNodeDetails,
   type ArtifactNodeType,
@@ -31,6 +36,7 @@ import {
   type ArtifactRefreshResult,
   type ArtifactStats,
   type ArtifactStatus,
+  type ArtifactTextWriteResult,
 } from "@superpm/shared";
 import {
   closeSync,
@@ -322,6 +328,7 @@ export class ArtifactService {
         content: null,
         truncated: false,
         maxChars: cap,
+        version: null,
       };
     if (!isTextReadable(node.extension))
       return {
@@ -330,6 +337,7 @@ export class ArtifactService {
         content: null,
         truncated: false,
         maxChars: cap,
+        version: null,
       };
     const path = this.resolvePathReadOnly(requirementId, node.relativePath);
     // 只读读取不标记 missing：文件缺失时明确报错，由用户刷新目录处理
@@ -342,6 +350,7 @@ export class ArtifactService {
       content: text.content,
       truncated: text.truncated,
       maxChars: cap,
+      version: this.hashOf(readFileSync(path)),
     };
   }
 
@@ -363,6 +372,7 @@ export class ArtifactService {
       content: "",
       truncated: false,
       maxChars: cap,
+      version: null,
     });
     const rootAbs = this.directories.tryResolveReadOnly(requirementId, "");
     if (!rootAbs) return empty("not_initialized", null);
@@ -380,6 +390,7 @@ export class ArtifactService {
       content: text.content,
       truncated: text.truncated,
       maxChars: cap,
+      version: this.hashOf(readFileSync(fileAbs)),
     };
   }
 
@@ -473,6 +484,86 @@ export class ArtifactService {
         contentHash: this.hashOf(content),
       },
     );
+  }
+
+  /**
+   * 创建文本产出物（MCP 使用）：仅允许白名单文本扩展名，未写扩展名默认 .md。
+   * 同名冲突不覆盖；磁盘写入成功后登记索引，索引失败时回滚新建文件。
+   */
+  createTextFile(
+    requirementId: number,
+    input: unknown,
+  ): ArtifactTextWriteResult {
+    const data = artifactTextCreateSchema.parse(input);
+    const requestedName = this.assertNodeName(data.name);
+    const name = extname(requestedName) ? requestedName : `${requestedName}.md`;
+    const extension = extensionOf(name);
+    if (!isWritableTextExtension(extension))
+      throw new DomainError(
+        "UNSUPPORTED_FILE_TYPE",
+        "仅支持创建 .md、.markdown 或 .txt 文本文件",
+        400,
+      );
+    if (name === artifactMemoryName)
+      throw new DomainError(
+        "CONFLICT",
+        "需求记忆只能通过 requirement.memory.update 更新",
+        409,
+      );
+    const parent = this.requireParent(requirementId, data.parentId);
+    if (
+      parent &&
+      (parent.relativePath === requirementImagesFolder ||
+        parent.relativePath.startsWith(`${requirementImagesFolder}/`))
+    )
+      throw new DomainError(
+        "CONFLICT",
+        "images 目录仅用于存放系统图片资源",
+        409,
+      );
+    this.assertParentOnDisk(parent);
+    const relativePath = this.childPath(parent, name);
+    const target = this.resolvePath(requirementId, relativePath, false);
+    this.assertNoSibling(requirementId, data.parentId, name);
+    if (existsSync(target))
+      throw new DomainError("CONFLICT", "磁盘上已存在同名文件或目录", 409);
+    try {
+      writeFileSync(target, data.content, { flag: "wx", encoding: "utf8" });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST")
+        throw new DomainError("CONFLICT", "磁盘上已存在同名文件或目录", 409);
+      throw new DomainError("WRITE_FAILED", "写入文件失败，请稍后重试", 500);
+    }
+    const stat = statSync(target);
+    const version = this.hashOf(readFileSync(target));
+    try {
+      const node = this.insertNode(
+        requirementId,
+        data.parentId,
+        "file",
+        name,
+        relativePath,
+        {
+          extension,
+          mimeType: extension
+            ? (MIME_BY_EXTENSION[extension.slice(1)] ?? null)
+            : null,
+          sizeBytes: stat.size,
+          modifiedAt: stat.mtime.toISOString(),
+          contentHash: version,
+        },
+      );
+      return { node, version, indexSync: "synced" };
+    } catch (error) {
+      const rolledBack = this.rollbackCreatedFile(target);
+      throw new DomainError(
+        "INDEX_SYNC_FAILED",
+        rolledBack
+          ? "文件索引登记失败，已回滚本次创建，请稍后重试"
+          : "文件索引登记失败且回滚未完成，请刷新目录后检查文件",
+        500,
+      );
+    }
   }
 
   /**
@@ -746,6 +837,73 @@ export class ArtifactService {
       stat.mtime.toISOString(),
       this.hashOf(data.content),
     );
+  }
+
+  /**
+   * 更新文本产出物（MCP 使用）：按节点 ID 定位，只允许白名单文本文件；
+   * 必须匹配读取时返回的 expectedVersion，全量替换，不静默覆盖外部修改。
+   */
+  updateTextFile(
+    requirementId: number,
+    nodeId: number,
+    input: unknown,
+  ): ArtifactTextWriteResult {
+    const data = artifactTextUpdateSchema.parse(input);
+    this.requirements.get(requirementId);
+    const row = this.nodeRow(nodeId);
+    if (row.requirement_id !== requirementId)
+      throw new DomainError("NOT_FOUND", "文件或目录不存在", 404);
+    const node = toNode(row);
+    if (node.nodeType !== "file")
+      throw new DomainError("VALIDATION_ERROR", "文件夹没有文件内容");
+    if (node.relativePath === artifactMemoryName)
+      throw new DomainError(
+        "CONFLICT",
+        "需求记忆只能通过 requirement.memory.update 更新",
+        409,
+      );
+    if (!isWritableTextExtension(node.extension))
+      throw new DomainError(
+        "UNSUPPORTED_FILE_TYPE",
+        "仅支持更新 .md、.markdown 或 .txt 文本文件",
+        400,
+      );
+    const path = this.resolvePath(requirementId, node.relativePath, false);
+    if (!existsSync(path) || lstatSync(path).isSymbolicLink())
+      throw new DomainError(
+        "NOT_FOUND",
+        "文件不存在或已被移动，请刷新目录后重试",
+        404,
+      );
+    const previous = readFileSync(path);
+    if (this.hashOf(previous) !== data.expectedVersion)
+      throw new DomainError(
+        "CONFLICT",
+        "文件内容已变化，请重新读取最新版本后再提交",
+        409,
+      );
+    this.atomicReplaceText(path, data.content, data.expectedVersion);
+    const stat = statSync(path);
+    const version = this.hashOf(readFileSync(path));
+    let updated: ArtifactNode;
+    try {
+      updated = this.syncMetadata(
+        node,
+        stat.size,
+        stat.mtime.toISOString(),
+        version,
+      );
+    } catch (error) {
+      const restored = this.rollbackReplacedFile(path, previous);
+      throw new DomainError(
+        "INDEX_SYNC_FAILED",
+        restored
+          ? "文件索引更新失败，已恢复原内容，请稍后重试"
+          : "文件索引更新失败且原内容恢复失败，请立即刷新目录并检查文件",
+        500,
+      );
+    }
+    return { node: updated, version, indexSync: "synced" };
   }
 
   /** 二进制读取（图片预览 / PDF / 下载）：按扩展名推断 MIME */
@@ -1323,6 +1481,119 @@ export class ArtifactService {
       );
     }
     return toNode(existing);
+  }
+
+  /**
+   * 更新需求记忆（MCP 使用）：仅按需求 ID 定位根目录的 需求记忆.md。
+   * - 文件已存在时必须匹配 expectedVersion；不存在时按初始化规则创建；
+   * - replace 全量替换，append 追加（缺失时先补齐模板）；
+   * - 写入后同步索引，索引失败时回滚磁盘内容，避免出现索引不可见的成功结果。
+   */
+  updateMemory(
+    requirementId: number,
+    input: unknown,
+  ): ArtifactMemoryWriteResult {
+    const data = artifactMemoryUpdateSchema.parse(input);
+    const requirement = this.requirements.get(requirementId);
+    const hadMapping = Boolean(this.directories.row(requirementId));
+    // 未初始化但磁盘已有旧目录/记忆文件时，仍视为“已存在”，避免初始化后被无版本覆盖
+    const previousRoot = this.directories.tryResolveReadOnly(requirementId, "");
+    const existedBefore = previousRoot
+      ? existsSync(join(previousRoot, artifactMemoryName))
+      : false;
+    if (!hadMapping) this.directories.initialize(requirementId);
+    const rootAbs = this.resolvePath(requirementId, "", false);
+    if (!existsSync(rootAbs)) mkdirSync(rootAbs, { recursive: true });
+    const fileAbs = join(rootAbs, artifactMemoryName);
+    if (existsSync(fileAbs) && lstatSync(fileAbs).isSymbolicLink())
+      throw new DomainError("INVALID_PATH", "需求记忆文件不能是符号链接");
+    const baseline = existsSync(fileAbs) ? readFileSync(fileAbs) : null;
+    const baselineVersion = baseline ? this.hashOf(baseline) : null;
+    // 工作区未初始化且此前没有记忆文件时由初始化流程生成模板，对调用方而言属于“首次创建”
+    const existedForCaller = baseline !== null && (hadMapping || existedBefore);
+    if (existedForCaller) {
+      if (!data.expectedVersion)
+        throw new DomainError(
+          "VALIDATION_ERROR",
+          "需求记忆已存在，更新时必须提供 expectedVersion",
+          400,
+        );
+      if (data.expectedVersion !== baselineVersion)
+        throw new DomainError(
+          "CONFLICT",
+          "需求记忆已变化，请重新读取最新版本后再提交",
+          409,
+        );
+    } else if (data.expectedVersion) {
+      throw new DomainError(
+        "CONFLICT",
+        "需求记忆当前不存在或已重建，请重新读取后再提交",
+        409,
+      );
+    }
+    const baseText =
+      baseline?.toString("utf8") ?? requirementMemoryTemplate(requirement.name);
+    const nextContent =
+      data.mode === "append"
+        ? this.appendText(baseText, data.content)
+        : data.content;
+    if (baseline === null) this.createTextExclusive(fileAbs, nextContent);
+    else
+      this.atomicReplaceText(
+        fileAbs,
+        nextContent,
+        existedForCaller ? (baselineVersion as string) : null,
+      );
+    const stat = statSync(fileAbs);
+    const version = this.hashOf(readFileSync(fileAbs));
+    const existing = this.db
+      .prepare(
+        "SELECT * FROM artifact_nodes WHERE requirement_id=? AND relative_path=?",
+      )
+      .get(requirementId, artifactMemoryName) as ArtifactNodeRow | undefined;
+    let node: ArtifactNode;
+    try {
+      node = existing
+        ? this.syncMetadata(
+            toNode(existing),
+            stat.size,
+            stat.mtime.toISOString(),
+            version,
+          )
+        : this.insertNode(
+            requirementId,
+            null,
+            "file",
+            artifactMemoryName,
+            artifactMemoryName,
+            {
+              extension: ".md",
+              mimeType: "text/markdown; charset=utf-8",
+              sizeBytes: stat.size,
+              modifiedAt: stat.mtime.toISOString(),
+              contentHash: version,
+            },
+          );
+    } catch (error) {
+      const restored =
+        baseline === null
+          ? this.rollbackCreatedFile(fileAbs)
+          : this.rollbackReplacedFile(fileAbs, baseline);
+      throw new DomainError(
+        "INDEX_SYNC_FAILED",
+        restored
+          ? "需求记忆索引更新失败，已回滚磁盘内容，请稍后重试"
+          : "需求记忆索引更新失败且磁盘回滚未完成，请立即刷新目录并检查文件",
+        500,
+      );
+    }
+    return {
+      node,
+      version,
+      indexSync: "synced",
+      mode: data.mode,
+      created: !existedForCaller,
+    };
   }
 
   /** 刷新需求记忆：外部修改后重新登记大小与修改时间（文件缺失时明确报错，不静默重建） */
@@ -2079,6 +2350,103 @@ export class ArtifactService {
       cursor = toNode(this.nodeRow(cursor)).parentId;
     }
     return chain;
+  }
+
+  private appendText(base: string, addition: string): string {
+    const head = base.endsWith("\n") ? base : `${base}\n`;
+    return `${head}\n${addition}`;
+  }
+
+  private createTextExclusive(path: string, content: string) {
+    try {
+      writeFileSync(path, content, { flag: "wx", encoding: "utf8" });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST")
+        throw new DomainError(
+          "CONFLICT",
+          "文件在写入前已被其他操作创建，请重新读取后再提交",
+          409,
+        );
+      throw new DomainError("WRITE_FAILED", "写入文件失败，请稍后重试", 500);
+    }
+  }
+
+  // 临时文件使用 ~$ 前缀，崩溃遗留时会被扫描过滤，不会被登记为正式文档
+  private tempPathFor(path: string): string {
+    return join(dirname(path), `~$superpm-${randomUUID()}.tmp`);
+  }
+
+  private atomicReplaceText(
+    path: string,
+    content: string,
+    expectedVersion: string | null,
+  ) {
+    const temp = this.tempPathFor(path);
+    try {
+      writeFileSync(temp, content, { flag: "wx", encoding: "utf8" });
+    } catch {
+      throw new DomainError(
+        "WRITE_FAILED",
+        "写入临时文件失败，请稍后重试",
+        500,
+      );
+    }
+    try {
+      if (!existsSync(path) || lstatSync(path).isSymbolicLink())
+        throw new DomainError(
+          "CONFLICT",
+          "文件在更新过程中被移动或删除，请重新读取后重试",
+          409,
+        );
+      if (
+        expectedVersion !== null &&
+        this.hashOf(readFileSync(path)) !== expectedVersion
+      )
+        throw new DomainError(
+          "CONFLICT",
+          "文件在更新过程中被其他操作修改，请重新读取后重试",
+          409,
+        );
+      renameSync(temp, path);
+    } catch (error) {
+      try {
+        rmSync(temp, { force: true });
+      } catch {
+        /* 临时文件清理失败不影响主流程 */
+      }
+      if (error instanceof DomainError) throw error;
+      throw new DomainError("WRITE_FAILED", "写入文件失败，请稍后重试", 500);
+    }
+  }
+
+  private rollbackCreatedFile(path: string): boolean {
+    try {
+      rmSync(path, { force: true });
+      return !existsSync(path);
+    } catch {
+      return false;
+    }
+  }
+
+  private rollbackReplacedFile(path: string, previous: Buffer): boolean {
+    const temp = this.tempPathFor(path);
+    try {
+      writeFileSync(temp, previous, { flag: "wx" });
+      renameSync(temp, path);
+      return true;
+    } catch {
+      try {
+        rmSync(temp, { force: true });
+      } catch {
+        /* 临时文件清理失败不影响回滚结果 */
+      }
+      try {
+        writeFileSync(path, previous);
+        return true;
+      } catch {
+        return false;
+      }
+    }
   }
 
   private hashOf(content: string | Buffer): string {

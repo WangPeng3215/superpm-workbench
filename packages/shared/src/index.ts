@@ -734,6 +734,49 @@ export const artifactContentSaveSchema = z
     force: z.boolean().default(false),
   })
   .strict();
+// MCP 文本产出物只允许写入明确支持的文本格式；未写扩展名时默认 .md
+export const artifactTextWriteExtensions = [
+  ".md",
+  ".markdown",
+  ".txt",
+] as const;
+export function isWritableTextExtension(
+  extension: string | null,
+): extension is (typeof artifactTextWriteExtensions)[number] {
+  return (
+    extension !== null &&
+    (artifactTextWriteExtensions as readonly string[]).includes(
+      extension.toLowerCase(),
+    )
+  );
+}
+export const artifactTextCreateSchema = z
+  .object({
+    parentId: z.number().int().positive().nullable().default(null),
+    name: z.string().min(1, "请输入文件名称").max(200, "名称最多 200 字"),
+    content: z.string().max(200000).default(""),
+  })
+  .strict();
+export const artifactTextUpdateSchema = z
+  .object({
+    content: z.string().max(200000),
+    // 全量替换必须附带读取时得到的内容版本，避免静默覆盖他人修改
+    expectedVersion: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/, "expectedVersion 应为 64 位 SHA-256"),
+  })
+  .strict();
+export const artifactMemoryUpdateSchema = z
+  .object({
+    mode: z.enum(["replace", "append"]),
+    content: z.string().min(1, "内容不能为空").max(200000),
+    // 文件已存在时必填；不存在（首次创建）时可省略
+    expectedVersion: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/, "expectedVersion 应为 64 位 SHA-256")
+      .optional(),
+  })
+  .strict();
 export const artifactLinkCreateSchema = z
   .object({
     folderNodeId: z.number().int().positive().nullable().default(null),
@@ -829,6 +872,8 @@ export interface ArtifactReadResult {
   content: string | null;
   truncated: boolean;
   maxChars: number;
+  // 文本文件全文的 SHA-256；文件夹/二进制为 null。更新时作为 expectedVersion
+  version: string | null;
 }
 export const artifactMemoryStatuses = [
   "available",
@@ -844,6 +889,18 @@ export interface ArtifactMemoryReadResult {
   content: string;
   truncated: boolean;
   maxChars: number;
+  // 文件存在时为全文 SHA-256，用于 update 的 expectedVersion
+  version: string | null;
+}
+// 文本写入统一结果：version 为写入后全文 SHA-256；indexSync 明确索引状态
+export interface ArtifactTextWriteResult {
+  node: ArtifactNode;
+  version: string;
+  indexSync: "synced";
+}
+export interface ArtifactMemoryWriteResult extends ArtifactTextWriteResult {
+  mode: "replace" | "append";
+  created: boolean;
 }
 export interface ArtifactStats {
   folders: number;

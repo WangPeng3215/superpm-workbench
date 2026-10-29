@@ -131,7 +131,7 @@ async function main() {
   try {
     await server.connect(transport);
     log(
-      `stdio 服务已启动，schema ${SCHEMA_VERSION}，写入${writeEnabled ? "已启用（需确认令牌）" : "未启用"}`,
+      `stdio 服务已启动，schema ${SCHEMA_VERSION}，写入${writeEnabled ? "已启用（受确认写入需令牌，低风险文本写入自动审计）" : "未启用"}`,
     );
   } catch (error) {
     log("启动失败", error);
