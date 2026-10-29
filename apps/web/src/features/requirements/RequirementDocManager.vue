@@ -54,7 +54,7 @@ const keyword = ref("");
 const sortKey = ref<"name" | "time" | "type">("name");
 const sortOrder = ref<"asc" | "desc">("asc");
 const previewSrc = ref("");
-const systemOpen = ref(false);
+const systemOpenWarned = ref(false);
 const searching = computed(() => Boolean(directory.value?.search));
 const crumbs = computed(() => directory.value?.breadcrumb ?? []);
 const isEmpty = computed(
@@ -300,11 +300,18 @@ async function openFile(node: ArtifactNode) {
     previewSrc.value = artifactApi.rawUrl(node.id);
     return;
   }
-  if (systemOpen.value) {
+  // 每次点击前重新确认能力：更新或重启服务后无需刷新页面即可生效
+  if (await refreshSystemOpen()) {
     await openLocally(node);
     return;
   }
-  // 系统打开不可用（如远程部署）时退回网页预览
+  if (!systemOpenWarned.value) {
+    systemOpenWarned.value = true;
+    ElMessage.warning(
+      "系统默认程序打开不可用，已改为网页预览。请确认服务运行在本机，且数据根 .env 未设置 SUPERPM_ALLOW_SYSTEM_OPEN=0。",
+    );
+  }
+  // 系统打开不可用（如远程部署或显式关闭）时退回网页预览
   if (extension === ".pdf") {
     window.open(artifactApi.rawUrl(node.id), "_blank", "noopener");
     return;
@@ -314,13 +321,16 @@ async function openFile(node: ArtifactNode) {
 function openLink(link: ArtifactLink) {
   window.open(link.url, "_blank", "noopener,noreferrer");
 }
-onMounted(async () => {
+async function refreshSystemOpen() {
   try {
     const system = await request<{ systemOpenAvailable?: boolean }>("/system");
-    systemOpen.value = system.systemOpenAvailable === true;
+    return system.systemOpenAvailable === true;
   } catch {
-    systemOpen.value = false;
+    return false;
   }
+}
+onMounted(() => {
+  void refreshSystemOpen();
 });
 // ===== 新建 / 重命名 / 移动 / 删除 =====
 const createDialogVisible = ref(false);

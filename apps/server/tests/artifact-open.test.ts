@@ -15,9 +15,25 @@ import { authedInject } from "./auth-helper";
 import { requirementRootPath } from "./workspace-helper";
 
 // 真实 spawn 会弹出资源管理器，测试里拦截并断言命令拼装
-const { spawnMock } = vi.hoisted(() => ({
-  spawnMock: vi.fn(() => ({ on: () => {}, unref: () => {} })),
-}));
+const { spawnMock, fakeChild } = vi.hoisted(() => {
+  interface FakeChild {
+    once: (event: string, handler: (...args: unknown[]) => void) => FakeChild;
+    on: () => FakeChild;
+    unref: () => void;
+  }
+  const fakeChild = (event: string, payload?: unknown): FakeChild => {
+    const child: FakeChild = {
+      once: (name, handler) => {
+        if (name === event) queueMicrotask(() => handler(payload));
+        return child;
+      },
+      on: () => child,
+      unref: () => {},
+    };
+    return child;
+  };
+  return { spawnMock: vi.fn(() => fakeChild("spawn")), fakeChild };
+});
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   spawn: spawnMock,
@@ -87,14 +103,13 @@ describe("artifact open endpoint with default system open policy", () => {
     });
     expect(response.statusCode, response.body).toBe(204);
     expect(spawnMock).toHaveBeenCalledTimes(1);
-    const [command, args, options] = spawnMock.mock.calls[0] as unknown as [
+    const [command, args] = spawnMock.mock.calls[0] as unknown as [
       string,
       string[],
-      { env?: NodeJS.ProcessEnv },
     ];
     if (process.platform === "win32") {
-      expect(command).toBe("powershell.exe");
-      expect(options.env?.SUPERPM_TARGET_PATH).toBe(folderPath);
+      expect(command).toBe("explorer.exe");
+      expect(args).toEqual([folderPath]);
     } else if (process.platform === "darwin") {
       expect(command).toBe("open");
       expect(args).toEqual([folderPath]);
@@ -118,8 +133,8 @@ describe("artifact open endpoint with default system open policy", () => {
     // Windows 下 detached 会导致启动的 GUI 程序不显示
     expect(options.detached).not.toBe(true);
     if (process.platform === "win32") {
-      expect(command).toBe("powershell.exe");
-      expect(options.env?.SUPERPM_TARGET_PATH).toBe(filePath);
+      expect(command).toBe("explorer.exe");
+      expect(args).toEqual([filePath]);
     } else if (process.platform === "darwin") {
       expect(command).toBe("open");
       expect(args).toEqual([filePath]);
@@ -149,6 +164,19 @@ describe("artifact open endpoint with default system open policy", () => {
       expect(command).toBe("xdg-open");
       expect(args).toEqual([dirname(filePath)]);
     }
+  });
+
+  it("reports a clear error when the launcher cannot start", async () => {
+    spawnMock.mockImplementationOnce(() =>
+      fakeChild("error", new Error("spawn ENOENT")),
+    );
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/artifacts/nodes/${fileId}/open`,
+    });
+    expect(response.statusCode).toBe(500);
+    expect(response.json().error.code).toBe("SYSTEM_OPEN_FAILED");
+    expect(response.json().error.message).toContain("无法启动系统默认程序");
   });
 
   it("rejects reveal on a folder", async () => {

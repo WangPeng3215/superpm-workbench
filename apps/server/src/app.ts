@@ -479,7 +479,7 @@ export async function createApp(
             message: "本地程序打开功能已关闭（SUPERPM_ALLOW_SYSTEM_OPEN=0）",
           },
         });
-      fileService.openAsset(
+      await fileService.openAsset(
         parseId(request.params.id),
         parseId(request.params.fileId),
       );
@@ -945,7 +945,7 @@ export async function createApp(
   app.post<{ Params: { nodeId: string }; Querystring: { reveal?: string } }>(
     "/api/artifacts/nodes/:nodeId/open",
     async (request, reply) => {
-      artifactService.openSystem(parseId(request.params.nodeId), {
+      await artifactService.openSystem(parseId(request.params.nodeId), {
         reveal: request.query.reveal === "1",
       });
       return reply.status(204).send();
@@ -982,7 +982,7 @@ export async function createApp(
     Params: { id: string };
     Body: { relativePath?: string } | undefined;
   }>("/api/requirements/:id/directory/open", async (request, reply) => {
-    artifactService.openDirectory(
+    await artifactService.openDirectory(
       parseId(request.params.id),
       request.body?.relativePath ?? "",
     );

@@ -16,9 +16,25 @@ import { authedInject } from "./auth-helper";
 import { requirementRootPath } from "./workspace-helper";
 
 // 真实 spawn 会弹出资源管理器，测试里拦截并断言命令拼装
-const { spawnMock } = vi.hoisted(() => ({
-  spawnMock: vi.fn(() => ({ on: () => {}, unref: () => {} })),
-}));
+const { spawnMock } = vi.hoisted(() => {
+  interface FakeChild {
+    once: (event: string, handler: (...args: unknown[]) => void) => FakeChild;
+    on: () => FakeChild;
+    unref: () => void;
+  }
+  const fakeChild = (event: string, payload?: unknown): FakeChild => {
+    const child: FakeChild = {
+      once: (name, handler) => {
+        if (name === event) queueMicrotask(() => handler(payload));
+        return child;
+      },
+      on: () => child,
+      unref: () => {},
+    };
+    return child;
+  };
+  return { spawnMock: vi.fn(() => fakeChild("spawn")) };
+});
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   spawn: spawnMock,
@@ -26,18 +42,11 @@ vi.mock("node:child_process", async (importOriginal) => ({
 
 describe("buildSystemOpenCommand", () => {
   const path = "D:/workspace/requirements/REQ-0001/demo/a.txt";
-  const windowsOpenArgs = [
-    "-NoProfile",
-    "-NonInteractive",
-    "-Command",
-    "Start-Process -FilePath $env:SUPERPM_TARGET_PATH",
-  ];
 
   it("opens a folder with the platform default handler", () => {
     expect(buildSystemOpenCommand(path, { platform: "win32" })).toEqual({
-      command: "powershell.exe",
-      args: windowsOpenArgs,
-      env: { SUPERPM_TARGET_PATH: path },
+      command: "explorer.exe",
+      args: [path],
     });
     expect(buildSystemOpenCommand(path, { platform: "darwin" })).toEqual({
       command: "open",
@@ -49,11 +58,11 @@ describe("buildSystemOpenCommand", () => {
     });
   });
 
-  it("keeps the Windows path out of the command line", () => {
+  it("passes the Windows path as a single argument", () => {
     const unsafe = "D:/workspace/a&b%PATH%.txt";
     const command = buildSystemOpenCommand(unsafe, { platform: "win32" });
-    expect(command.args).not.toContain(unsafe);
-    expect(command.env).toEqual({ SUPERPM_TARGET_PATH: unsafe });
+    expect(command.command).toBe("explorer.exe");
+    expect(command.args).toEqual([unsafe]);
   });
 
   it("reveals a file in its folder", () => {
@@ -145,8 +154,8 @@ describe("physical folder open with SUPERPM_ALLOW_SYSTEM_OPEN=0", () => {
     // Windows 下 detached 会导致启动的 GUI 程序不显示
     expect(options.detached).not.toBe(true);
     if (process.platform === "win32") {
-      expect(command).toBe("powershell.exe");
-      expect(options.env?.SUPERPM_TARGET_PATH).toBe(folderPath);
+      expect(command).toBe("explorer.exe");
+      expect(args).toEqual([folderPath]);
     } else if (process.platform === "darwin") {
       expect(command).toBe("open");
       expect(args).toEqual([folderPath]);
@@ -185,17 +194,12 @@ describe("physical folder open with SUPERPM_ALLOW_SYSTEM_OPEN=0", () => {
       payload: { relativePath: "" },
     });
     expect(response.statusCode, response.body).toBe(204);
-    const [command, args, options] = spawnMock.mock.calls[0] as unknown as [
+    const [command, args] = spawnMock.mock.calls[0] as unknown as [
       string,
       string[],
-      { env?: NodeJS.ProcessEnv },
     ];
     expect(command).toBeTruthy();
-    if (process.platform === "win32") {
-      expect(options.env?.SUPERPM_TARGET_PATH).toBe(rootPath);
-    } else {
-      expect(args[0]).toBe(rootPath);
-    }
+    expect(args[0]).toBe(rootPath);
   });
 
   it("rejects opening a file with its default program", async () => {

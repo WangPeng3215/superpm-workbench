@@ -47,7 +47,7 @@ import {
 import { inspectDatabase } from "../db/inspect.js";
 import { activeUpdateLock, listMcpProcesses } from "../runtime/state.js";
 import { DomainError } from "./requirements.js";
-import { buildSystemOpenCommand } from "./system-open.js";
+import { launchSystemOpen, systemOpenFailureMessage } from "./system-open.js";
 import { walkWorkspace } from "./workspace-scan.js";
 
 const SPACE_FACTOR = 1.15;
@@ -347,18 +347,22 @@ export class DataRootService {
     return { home: this.home, source: this.homeSource };
   }
 
-  openHome(): void {
+  async openHome(): Promise<void> {
     if (!isDirectory(this.home))
       throw new DomainError(
         "HOME_OPEN_FAILED",
         `数据根目录不存在：${this.home}`,
         404,
       );
-    const { command, args } = buildSystemOpenCommand(this.home, {
-      platform: this.platform,
-    });
-    const child = spawn(command, args, { detached: true, stdio: "ignore" });
-    child.unref();
+    try {
+      await launchSystemOpen(this.home);
+    } catch (error) {
+      throw new DomainError(
+        "HOME_OPEN_FAILED",
+        systemOpenFailureMessage(error),
+        500,
+      );
+    }
   }
 
   lockedReason(): DataRootLockedReason | undefined {

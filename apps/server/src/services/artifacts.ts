@@ -51,7 +51,7 @@ import { DomainError, RequirementService } from "./requirements.js";
 import { RequirementDirectoryResolver } from "./requirement-directory.js";
 import { allowSystemOpen } from "../config/index.js";
 import { MIME_BY_EXTENSION } from "./requirement-files.js";
-import { launchSystemOpen } from "./system-open.js";
+import { launchSystemOpen, systemOpenFailureMessage } from "./system-open.js";
 
 // 文件/目录索引行（snake_case，与迁移 0007 列名一致）
 export interface ArtifactNodeRow {
@@ -902,7 +902,10 @@ export class ArtifactService {
   }
 
   /** 打开物理位置：目录进入资源管理器；文件默认程序打开，reveal 时定位并选中 */
-  openSystem(nodeId: number, options: { reveal?: boolean } = {}): void {
+  async openSystem(
+    nodeId: number,
+    options: { reveal?: boolean } = {},
+  ): Promise<void> {
     const node = toNode(this.nodeRow(nodeId));
     if (node.nodeType === "folder" && options.reveal)
       throw new DomainError("VALIDATION_ERROR", "目录不支持定位文件");
@@ -915,18 +918,34 @@ export class ArtifactService {
       );
     const path = this.resolvePath(node.requirementId, node.relativePath, false);
     this.assertOnDisk(node, path);
-    launchSystemOpen(path, { reveal: options.reveal });
+    try {
+      await launchSystemOpen(path, { reveal: options.reveal });
+    } catch (error) {
+      throw new DomainError(
+        "SYSTEM_OPEN_FAILED",
+        systemOpenFailureMessage(error),
+        500,
+      );
+    }
   }
 
   /** 打开需求内物理目录（relativePath 为空表示需求根目录） */
-  openDirectory(requirementId: number, relativePath = ""): void {
+  async openDirectory(requirementId: number, relativePath = ""): Promise<void> {
     this.requirements.get(requirementId);
     const path = this.resolvePath(requirementId, relativePath, false);
     if (!existsSync(path))
       throw new DomainError("NOT_FOUND", "目录不存在，请重新初始化或刷新", 404);
     if (!statSync(path).isDirectory())
       throw new DomainError("VALIDATION_ERROR", "目标不是目录");
-    launchSystemOpen(path);
+    try {
+      await launchSystemOpen(path);
+    } catch (error) {
+      throw new DomainError(
+        "SYSTEM_OPEN_FAILED",
+        systemOpenFailureMessage(error),
+        500,
+      );
+    }
   }
 
   // ===== 刷新与外部修改（文档 5）=====

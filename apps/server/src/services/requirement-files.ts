@@ -32,7 +32,7 @@ import { DomainError, RequirementService } from "./requirements.js";
 import { RequirementDirectoryResolver } from "./requirement-directory.js";
 import { resolveWorkspacePath } from "../storage/workspace.js";
 import { allowSystemOpen } from "../config/index.js";
-import { launchSystemOpen } from "./system-open.js";
+import { launchSystemOpen, systemOpenFailureMessage } from "./system-open.js";
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 // 导出供知识库（artifacts）等服务复用统一的扩展名 → MIME 推断
@@ -368,7 +368,7 @@ export class RequirementFileService {
     };
   }
   // 本地默认程序打开（补充文档 5.4）：默认开启，可显式关闭；仅文件资源可触发
-  openAsset(id: number, fileId: number) {
+  async openAsset(id: number, fileId: number): Promise<void> {
     if (!allowSystemOpen)
       throw new DomainError(
         "FORBIDDEN",
@@ -382,7 +382,15 @@ export class RequirementFileService {
       );
     const path = this.resolveLocalPath(file);
     this.assertLocalFile(file, path);
-    launchSystemOpen(path);
+    try {
+      await launchSystemOpen(path);
+    } catch (error) {
+      throw new DomainError(
+        "SYSTEM_OPEN_FAILED",
+        systemOpenFailureMessage(error),
+        500,
+      );
+    }
   }
   // 链接条目没有文件体，正文/二进制/保存类操作一律拒绝
   private assertContentable(file: RequirementFile) {
