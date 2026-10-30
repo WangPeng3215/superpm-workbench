@@ -16,3 +16,6 @@ backups/
 test-results/
 playwright-report/
 .m5-harness/
+.pinme-home/
+.tmp-*
+/updates/
