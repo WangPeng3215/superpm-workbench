@@ -120,15 +120,13 @@ MCP 与 HTTP 服务共用数据根，由客户端以 stdio 拉起：
 
 ### AI 客户端 Skill 包（可选）
 
-0.15.0 起，每个 Release 附带 `superpm-skill-<version>.zip`，与安装包同版本，但不参与更新清单，按需手动下载。包内是主入口 Skill 与安装版说明：
+0.15.0 起，每个 Release 附带 `superpm-skill-<version>.zip`，与安装包同版本，但不参与更新清单，按需手动下载。包内是 superPM 使用入口：能力概览、MCP 与安装版启停：
 
 ```text
 superpm/
   SKILL.md
-  references/              安装版模式、MCP、原型与任务路由
+  references/              安装版启停、MCP 能力
   docs/mcp.md
-  docs/install-update.md
-  docs/deployment-update-strategy.md
   INSTALL.txt
 ```
 
@@ -138,7 +136,7 @@ superpm/
 - Claude Code：`%USERPROFILE%\.claude\skills\superpm`
 - 其他客户端：放入其支持的 skills 目录，或让 AI 直接读取 `SKILL.md`
 
-Skill 会先区分源码仓库与安装版：安装版读取 `references/install-mode.md`，使用本页的 `SuperPM.cmd` / `Stop.cmd` 与 MCP 配置。Skill 不代替 MCP 配置，也不包含源码仓库脚本；开发任务请使用 Git 仓库中的 `.agents/skills/superpm`。
+Skill 面向安装版使用：读取 `references/install-mode.md`，用本页的 `SuperPM.cmd` / `Stop.cmd` 启停，用 `references/mcp-guide.md` 了解 MCP 能力。Skill 不包含源码、开发脚本或安装包，不负责源码开发与原型管理；开发任务按仓库 `AGENTS.md` 执行，原型任务按原型项目自身规则执行。
 
 应用内更新与 `Update.cmd` 只更新 superPM 程序，不会安装或替换 AI 客户端的 Skill。每台设备升级应用后，如需同步文档与规则，请关闭 AI 客户端，下载与应用同版本的 Skill 包，解压后替换 `%USERPROFILE%\.qoder\skills\superpm`（Qoder）或 `%USERPROFILE%\.claude\skills\superpm`（Claude Code），再重新打开客户端；旧目录可先改名备份。多个客户端需要分别替换。
 
@@ -249,7 +247,11 @@ Skill 会先区分源码仓库与安装版：安装版读取 `references/install
 
 应用内更新会自动停止并重启服务，无需手动操作；如果改用命令行或手工覆盖安装，请先运行安装目录下的 `Stop.cmd` 停止服务，覆盖完成后双击 `SuperPM.cmd` 启动。增量包只替换 `app/`，不会补装 `Stop.cmd` 与 `Stop.ps1`；已安装 0.5.0 或更早版本且缺少停止脚本时，请用 0.15.0 完整包覆盖一次。0.3.3 或更早版本仍需先按上一节用 0.4.0 完整包完成 bootstrap。Skill 的下载与替换步骤见 §4「AI 客户端 Skill 包（可选）」。
 
-### 命令行更新（备用）
+### 0.15.0 → 0.15.1
+
+0.15.1 将主入口 Skill 收缩为**安装版使用入口**：只保留 superPM 能力概览、MCP 工具能力与安装版 `SuperPM.cmd` / `Stop.cmd` 启停说明；Skill 包同步精简，移除源码开发脚本、服务排障、发布更新与原型管理内容，原型任务改为一句指针，指向原型项目自身的 `AGENTS.md` 与 `prototype-management` Skill。属于**开发工具与文档**更新，数据根、数据库结构、MCP 工具集与运行时行为均无变化，schema 保持 17，启动器与更新器不变（仍为 1.1.0）；安装版用户可留在 0.15.0 不升级，已安装 0.15.0 及更早版本的用户可在「系统设置 → 版本与更新」直接增量升级。
+
+应用内更新会自动停止并重启服务，无需手动操作；如果改用命令行或手工覆盖安装，请先运行安装目录下的 `Stop.cmd` 停止服务，覆盖完成后双击 `SuperPM.cmd` 启动。Skill 包需要到 Release Assets 下载同版本的 `superpm-skill-0.15.1.zip` 手动替换，应用内更新不会更新它；详情见 §4「AI 客户端 Skill 包（可选）」。
 
 ```powershell
 Update.cmd --manifest https://github.com/WangPeng3215/superpm-workbench/releases/latest/download/update-manifest.json

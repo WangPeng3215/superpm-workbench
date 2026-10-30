@@ -1,6 +1,6 @@
 # GEMINI.md
 
-本仓库的统一规则入口是 `AGENTS.md`，主路由是 `.agents/skills/superpm/SKILL.md`。
+本仓库的统一规则入口是 `AGENTS.md`；superPM 使用入口（能力概览、MCP、安装版启停）是 `.agents/skills/superpm/SKILL.md`。
 
 开始任何任务前必须先读这两处。涉及原型项目时（默认 `workspace/prototype-workbench/`，实际以 `SUPERPM_PROTOTYPE_DIR` 解析结果为准），还必须读：
 

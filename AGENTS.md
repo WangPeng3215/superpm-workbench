@@ -6,7 +6,7 @@
 
 - superPM 主应用：`apps/`、`packages/`、`tests/`、`docs/`、`scripts/`。
 - 原型项目：默认 `workspace/prototype-workbench/`，可由 `SUPERPM_PROTOTYPE_DIR` 覆盖；独立 Vue 3 + TypeScript + Vite 本地项目。本地缺失或目录为空时从公共模板仓库 Clone 初始化，已有项目只复用、不覆盖。个人原型不做 Git 版本管理，也不提交到公共模板仓库。
-- 主入口 Skill：`.agents/skills/superpm/SKILL.md`。Qoder 会自动发现；其他 harness 直接读取该文件作为主路由。
+- 主入口 Skill：`.agents/skills/superpm/SKILL.md`。覆盖 superPM 能力概览、MCP 与安装版启停；源码开发、发布与原型规则仍以本文件和各项目自身规则为准。Qoder 会自动发现，其他 harness 可直接读取。
 - 原型规则源头：`<prototypeRoot>/AGENTS.md` 和 `<prototypeRoot>/.agents/skills/prototype-management/SKILL.md`，其中 `<prototypeRoot>` 为 `SUPERPM_PROTOTYPE_DIR` 解析后的实际路径。
 - 仓库根与原型根的 `CLAUDE.md`、`GEMINI.md`、`.cursor/rules`、`.github/copilot-instructions.md` 只是其他 harness 的薄指针，不是规则源头。
 
@@ -32,7 +32,7 @@
 - 双击或在终端执行 `Start-All.cmd` 启动 superPM 与原型；`Stop-All.cmd` 停止两者。
 - 只操作一个项目：`.agents/skills/superpm/scripts/start-services.ps1 -Target superpm|prototype`；检查用 `check-services.ps1 -Target all`。
 - 原型缺失或为空时，启动脚本会从 `SUPERPM_PROTOTYPE_REPOSITORY` 配置的公共模板 Clone 并安装依赖；已有项目只校验复用，不 Pull、不重置。单独初始化用 `prototype-init.ps1`。
-- 端口、健康检查、日志、独立停止与故障处理见 `.agents/skills/superpm/references/service-management.md`。
+- 脚本会校验进程身份，不按进程名批量结束；启动失败先看 `runtime/skill/logs/`。
 
 ## 发布与更新
 

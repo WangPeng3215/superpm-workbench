@@ -1,125 +1,93 @@
 ---
 name: superpm
-description: superPM Workbench 主入口 Skill。用于 superPM 主应用开发、MCP 工具使用、superPM 与 prototype-workbench 双项目本地服务启停检查，以及原型任务转交；同时支持源码仓库与 Release 安装版。
+description: superPM Workbench 使用入口。用于了解 superPM 的产品能力与 MCP 工具能力，并在本机安装版中启动、停止和确认服务状态。
 ---
 
-# superPM Workbench 主入口
+# superPM Workbench 使用入口
+
+本 Skill 面向已部署的 Release 安装版，只覆盖三件事：superPM 能做什么、MCP 能做什么、如何启动服务。
 
 ## 何时使用
 
-在 superPM 源码仓库或已部署的 superPM Workbench 安装环境中处理以下任一任务时使用本 Skill：
+- 需要了解 superPM 的产品能力、数据位置或更新方式。
+- 需要了解或使用 superPM 的 MCP 工具。
+- 需要启动、停止或确认本机 superPM 是否在运行。
 
-- superPM 主应用的需求、后端、前端、数据库、测试、文档或发布。
-- 使用或说明 superPM 的 MCP 能力。
-- 启动、检查或停止 superPM 开发服务与 prototype-workbench 原型服务。
-- 做原型页面任务，需要先找到并加载原型管理规范。
-- 需要决定任务由主流程直接完成，还是交给后续的专业 Agent。
+不适用于修改 superPM 源码（`apps/`、`packages/`、`tests/`）；源码开发按仓库 `AGENTS.md`、`README.md` 与 `docs/` 执行。
 
-仅查询与仓库无关的通用知识时，不需要使用。
+## superPM 能做什么
 
-## 先识别运行环境
+- 需求管理：新增、查看、编辑与软删除；两级主子需求；编号/名称搜索，类型、优先级、状态与阶段筛选；阶段工作区与变更历史。
+- 需求文档知识库：多层级文件夹、Markdown 文件与外部链接；支持本地上传、最终版标记、外部修改刷新；Markdown 应用内编辑，图片页内预览，其他文件用系统默认程序打开。
+- 问题跟踪：问题、活动记录与文件关联。
+- 每日任务：按日计划与拖拽排序、关联需求、计划时段、状态筛选、月度日历；单活动计时、自动结束、工时校正与每日工作总结。
+- 会议记录：按类型与标题检索，关联多个需求；正文支持文本颜色、高亮与可跳转的需求引用。
+- 便签：卡片内编辑与自动保存，搜索、置顶、筛选、归档、删除，可转为每日任务。
+- 工具箱：维护常用工具的名称、地址、图标与分类；全局悬浮入口可拖动，快捷弹窗按收藏搜索并打开。
+- 富文本：需求描述、需求文档与会议正文共用 Tiptap 编辑器，支持颜色、高亮、需求引用、表格与文本对齐/缩进。
+- 本地数据：SQLite 数据库与 `workspace/` 文件目录，数据根可配置；更新在应用内完成，升级前自动备份，失败可回滚。
 
-| 环境         | 判断依据                                                                 | 使用方式                                                         |
-| ------------ | ------------------------------------------------------------------------ | ---------------------------------------------------------------- |
-| 源码仓库     | 仓库根存在 `package.json`（name 为 `superpm-workbench`）、`apps/`、`scripts/` | 按下方路由表执行，可使用 `scripts/` 内 PowerShell 脚本           |
-| 发布安装版   | 安装目录存在 `SuperPM.cmd`、`runtime/node.exe`、`app/apps/server/dist/mcp/stdio.js`、`install.json` | 读 `references/install-mode.md`；用 `SuperPM.cmd` / `Stop.cmd`，不要运行仓库脚本 |
-| 无法确认     | 两者都不满足，或找不到安装目录                                           | 先询问用户仓库路径或安装目录；不要猜路径，不要启停服务           |
+MCP 提供需求、问题、文档、会议与便签的只读查询，以及默认关闭的受控写入。
 
-安装版没有 `apps/`、`scripts/` 和仓库 `docs/`；独立 Skill 包已附带所需文档（见文末参考索引）。
+## 启动与停止（安装版）
 
-## 开始前：先定位任务类型
+### 找到安装目录
 
-| 任务类型         | 必读                                                                 | 执行边界                                                       |
-| ---------------- | -------------------------------------------------------------------- | -------------------------------------------------------------- |
-| superPM 业务开发 | 根 `README.md`、`docs/` 中对应模块文档、真实代码与测试                | 只改 `apps/`、`packages/`、`tests/`、`scripts/`、`docs/` 中相关文件 |
-| 原型页面任务     | 实际原型路径下的 `AGENTS.md`（默认 `workspace/prototype-workbench/AGENTS.md`），再读其中的 Skill 与 references | 只改目标需求目录；不修改 superPM 业务与数据                    |
-| 本地服务管理     | 源码仓库读 `references/service-management.md`；安装版读 `references/install-mode.md` | 源码用仓库脚本；安装版只用 `SuperPM.cmd` / `Stop.cmd`           |
-| 安装版使用与排障 | `references/install-mode.md` 与包内 `docs/install-update.md`          | 不改程序目录；不直接操作数据库或需求文件                       |
-| MCP 使用         | `docs/mcp.md` 与 `references/mcp-guide.md`                           | 写入默认关闭；正式写入必须获得用户明确授权                     |
-| 发布与更新       | `docs/install-update.md`、`docs/deployment-update-strategy.md`       | 发布/合并/推送需单独授权；更新不得包含或删除原型项目           |
-| 专业 Agent 调度  | `references/agent-routing.md`                                        | V1.0 只预留路由契约，不创建或宣称已有专业 Agent                 |
+安装目录同时包含 `SuperPM.cmd`、`Stop.cmd`、`runtime/node.exe`、`app/apps/server/dist/mcp/stdio.js`、`install.json`。
 
-优先级：用户当前对话的明确指令 > 目标项目自身的 `AGENTS.md` 与 Skill > 本 Skill > 一般文档。发生冲突时先说明，不要静默扩大改动范围。
+不知道路径时先询问用户；也可只读取用户提供的 MCP 客户端配置中 `superpm` 条目的 `command` / `args` 推断。不要扫描磁盘，不要读取同一文件中的其他凭据。
 
-## 本地服务入口（仅源码仓库）
-
-以下脚本只适用于源码仓库；安装版请使用安装目录的 `SuperPM.cmd` / `Stop.cmd`，说明见 `references/install-mode.md`。
-
-根目录 `Start-All.cmd` / `Stop-All.cmd` 是双击快捷入口，固定操作两个项目。命令行与单项目操作仍使用 `scripts/`，默认后台启动并把日志写入 `runtime/skill/logs/`：
+### 命令
 
 ```powershell
-# 启动（默认两个项目；可 -Target superpm / prototype）
-powershell -NoProfile -ExecutionPolicy Bypass -File .agents/skills/superpm/scripts/start-services.ps1 -Target all
-
-# 检查（只读，不启停）
-powershell -NoProfile -ExecutionPolicy Bypass -File .agents/skills/superpm/scripts/check-services.ps1 -Target all
-
-# 停止（按项目独立停止）
-powershell -NoProfile -ExecutionPolicy Bypass -File .agents/skills/superpm/scripts/stop-services.ps1 -Target prototype
+SuperPM.cmd                       # 启动，默认 http://127.0.0.1:3001
+SuperPM.cmd --version
+SuperPM.cmd --home
+Stop.cmd                          # 优雅停止
+Stop.cmd -Home D:\data\superPM    # 显式指定数据根
+Stop.cmd -Force                   # 优雅停止失败时强制结束
 ```
 
-默认地址：
+- 服务只监听本机，浏览器打开 `http://127.0.0.1:3001`；打开页面先登录。
+- 不要用 `taskkill` 或其他通用进程工具代替 `Stop.cmd`。
+- 应用更新在「系统设置 → 版本与更新」；更新后重启 MCP 客户端以加载新工具。
 
-- superPM 开发态：前端 `http://127.0.0.1:5173`，API `http://127.0.0.1:3001/api/health`。
-- prototype-workbench：`http://localhost:5199`（通过 CLI 覆盖端口，避免与 superPM 的 5173 冲突）。
-- 端口不是写死的配置：脚本会读取 `PORT`、`.env`、Vite 配置；原型端口可用 `-PrototypePort` 覆盖。详见 `references/service-management.md`。
+### 数据根
 
-原型项目路径默认 `workspace/prototype-workbench`，可用 `SUPERPM_PROTOTYPE_DIR` 覆盖。本地缺失或目录为空时，启动器按 `SUPERPM_PROTOTYPE_REPOSITORY` 从公共模板 Clone，写入本地 `prototype.config.json`，并按项目锁文件安装依赖；已存在且完整的项目只校验和复用，不 Pull、不重置、不覆盖。也可单独运行 `scripts/prototype-init.ps1`。模板升级不属于 V1.0，必须另行授权和设计。
+优先级：`SUPERPM_HOME` 环境变量 > `%APPDATA%\superPM\config.json` 指针 > 默认 `%LOCALAPPDATA%\superPM`。
 
-启动脚本会复用已健康运行的本仓库实例，不会杀掉无关 Node 进程。停止脚本只处理经进程命令行和端口校验属于这两个项目的实例；安装版请使用安装目录的 `Stop.cmd`，不要用本 Skill 的脚本。
+数据根包含 `data/`（SQLite）、`workspace/`（需求文件、图片、产出物）、`logs/`、`backups/`、`runtime/`、`updates/` 与可选 `.env`。查看当前数据根用 `SuperPM.cmd --home`。
 
-## 原型任务闸门
+## MCP 能力
 
-1. 确认 superPM 需求 ID 与本次目标；没有需求 ID 时先停下询问，不创建无归属页面。
-2. 确认原型项目存在且完整。缺失或为空时，可运行 `start-services.ps1 -Target prototype` 或 `prototype-init.ps1` 初始化；不完整、路径冲突或初始化失败时停下并给出诊断，不删除目录、不重建、不覆盖。
-3. 读取实际原型路径下的 `AGENTS.md`（`SUPERPM_PROTOTYPE_DIR` 解析结果，默认 `workspace/prototype-workbench/AGENTS.md`）。
-4. 读 `.agents/skills/prototype-management/SKILL.md`，再按任务读取它的 `references/`，不要凭记忆复述规则。
-5. 读目标需求的 `requirement.json` 和现有页面，再动手。
-6. 只修改目标需求目录；不删除、移动、重命名已有原型，除非用户明确确认。
-7. 完成后运行该项目的 `npm run build`，在真实浏览器验证，并报告“未发布”。
-8. 未经当前对话明确授权，不执行 `npm run deploy`，不覆盖 PinMe 域名，不回写 superPM 正式数据。
+- 独立 stdio 进程，与 HTTP 服务共用数据根，不监听端口；由 AI 客户端拉起。
+- 默认 16 个只读工具：`system.info` + 需求、问题、文档、会议、便签的只读查询。
+- 设置 `SUPERPM_MCP_WRITE=1` 并重启后为 32 个：`system.info` + 15 只读 + 12 受确认写 + 3 低风险自动写 + `write.prepare`。
+- 受确认写：问题更新/评论/关联、会议创建/更新/删除、便签创建/更新/归档/删除/转任务。先调用 `write.prepare` 取得 5 分钟有效、一次性、绑定参数的令牌，再用同一份参数执行。
+- 自动写：需求记忆更新、白名单文本文件创建与更新。不需要令牌，但仍需写开关、幂等键、路径/格式校验与审计；更新已有文件必须带 `expectedVersion`。
+- 写入默认关闭，模型不能自行开启；正式写入必须获得用户明确授权。
+- 工具是否真的可用，以实际 MCP 客户端调用 `system.info` 或工具列表为准，不要凭仓库或文档假定已连接。
+- 工具分组与完整入参、返回、错误码见 `references/mcp-guide.md` 与 `docs/mcp.md`。
 
-从父仓库根目录工作时，原型项目自己的 Skill 不会被自动发现，必须显式读取上述文件。仓库根与原型根已提供 `CLAUDE.md`、`GEMINI.md`、`.cursor/rules`、`.github/copilot-instructions.md` 薄指针，供其他 harness 读取；规则源头仍是原型 `AGENTS.md` 与 `prototype-management` Skill。更多边界见 `references/prototype-integration.md`。
+## 原型任务
 
-## MCP 使用
+原型不属于本 Skill 范围。涉及原型时，先读 `<prototypeRoot>/AGENTS.md` 与 `<prototypeRoot>/.agents/skills/prototype-management/SKILL.md`，再读目标需求的 `requirement.json`；本 Skill 不初始化、不启停、不修改原型。
 
-- superPM 的 MCP 是独立 stdio 进程，不等同于当前会话已连接的 MCP 客户端。不要假定工具一定可用；先通过实际客户端调用 `system.info` 或查看工具列表确认。
-- 默认只有 16 个只读工具（`system.info` + 15 个业务只读）。设置 `SUPERPM_MCP_WRITE=1` 重启后才有 32 个；写入分 12 个受确认写和 3 个低风险自动写。
-- 12 个受确认写必须先 `write.prepare` 取得一次性令牌；3 个自动写仍需写开关、幂等键、路径/格式校验与审计。
-- 模型不能自行开启写开关，也不能绕过业务服务、直接操作 SQLite、使用任意 SQL/文件工具，或访问需求根目录之外的文件。
-- 正式问题创建与需求创建仍只能由用户操作；AI 不得未经明确授权创建正式问题或修改正式数据。
-- 完整工具参数、返回与错误码以 `docs/mcp.md` 为准；本 Skill 只做路由和边界说明，不复制契约。
+## 安全边界
 
-## 专业 Agent 与 MCP 调度预留
-
-V1.0 不创建专业 Agent，也不实现复杂编排或 PinMe 自动发布。当前只保留任务路由契约：未来新增 Agent 时，必须声明目标、输入、可写路径、可用工具、验证方式和交接条件，并继续服从本 Skill 的边界。详见 `references/agent-routing.md`。不得声称某个 Agent 或调度器“已实现”。
-
-## 硬约束
-
-- 已存在的原型项目只校验和复用：不删除/移动/重建 `<prototypeRoot>`，不覆盖它的页面、配置或依赖，不把它纳入发布包。初始化只允许发生在目标缺失或为空时。
-- 允许从配置的公共模板仓库 Clone；V1.0 不自动 Pull。禁止向模板仓库 Push、Commit、创建远程分支或 PR，禁止把个人原型、组件或本地配置复制进模板仓库。
-- 不对已有原型目录执行覆盖式 Clone、`git reset --hard`、`git clean -fd` / `git clean -fdx`，也不因项目异常而自动删除后重建。
-- 数据根迁移、备份恢复会整体复制或替换 `workspace/`，默认路径下的原型目录也会被包含；这些是显式高风险操作，未获当前对话明确授权不得执行，执行前必须确认原型的保留方式。
-- 不执行 `git clean -fdx` 等可能清除未跟踪 `workspace/` 的命令；个人原型未提交到远程，删除后不可恢复。
-- 个人原型不做 Git 版本管理：不建版本目录、标签或变更日志；模板 Clone 产生的 `.git` 只用于来源识别，不用于提交个人原型。
-- 不把本地服务暴露到公网；superPM 仅监听 `127.0.0.1`，原型 Vite 仅本机访问。
-- 不停止或杀死未通过命令行、端口与健康检查确认身份的进程。
-- 不暴露或复制 `~/.claude/settings.json` 中的 `ANTHROPIC_AUTH_TOKEN`、`~/.codex/config.toml` 中的 `experimental_bearer_token`、服务端 `runtime/server.json` 中的 `shutdownToken` 或其他令牌原文。
-- 不提交、推送、打标签、发布 Release 或执行 PinMe 部署，除非用户在当前对话中明确要求。
+- superPM 服务是唯一业务入口：不直接读写 SQLite，不绕过服务修改 `workspace/` 文件。
+- 不访问需求根目录之外的文件，不使用 `..`、绝对路径或符号链接绕过限制。
+- 不开放通用 SQL、任意文件写入、删除或移动能力。
+- 不把本地服务暴露到公网；服务只监听本机。
+- 不输出或复制 `runtime/server.json` 的 `shutdownToken`、MCP 客户端配置中的令牌或其他凭据。
+- 不未经用户明确授权创建正式问题或修改正式数据。
 
 ## 参考索引
 
-| 文件                                 | 内容                                                         |
-| ------------------------------------ | ------------------------------------------------------------ |
-| `references/install-mode.md`         | 安装版识别、数据根、启停更新、MCP 配置、原型与安全边界       |
-| `references/service-management.md`   | 真实启动拓扑、端口、健康检查、状态文件、启停与故障处理（仅源码仓库） |
-| `references/prototype-integration.md`| 原型规范位置、强制读取顺序、允许与禁止的操作、隔离规则       |
-| `references/mcp-guide.md`            | 32 个 MCP 工具分组、写入分级、授权与安全边界、排错           |
-| `references/agent-routing.md`        | 任务路由表、未来专业 Agent 与 MCP 调度的预留契约             |
-| `scripts/start-services.ps1`         | 统一启动入口，支持 `-Target all/superpm/prototype`（仅源码仓库） |
-| `scripts/prototype-init.ps1`         | 原型项目初始化；仅在缺失/空目录 Clone，已存在项目只校验复用（仅源码仓库） |
-| `scripts/check-services.ps1`         | 只读检查，支持 `-Json` 输出（仅源码仓库）                    |
-| `scripts/stop-services.ps1`          | 独立停止，带进程身份校验（仅源码仓库）                       |
-| `Start-All.cmd` / `Stop-All.cmd`     | 根目录双击快捷入口，固定启停两个项目（仅源码仓库）           |
+| 文件                        | 内容                                             |
+| --------------------------- | ------------------------------------------------ |
+| `references/install-mode.md` | 安装目录识别、数据根、启停、MCP 配置与安全边界   |
+| `references/mcp-guide.md`    | MCP 工具分组、写入分级、授权与安全边界           |
+| `docs/mcp.md`               | 完整 MCP 工具契约、参数、返回与错误码            |
 
-独立 Skill 包（Release 资产 `superpm-skill-<version>.zip`）包含本文件、`references/` 与 `docs/mcp.md`、`docs/install-update.md`、`docs/deployment-update-strategy.md`，不包含 `scripts/` 与 `Start-All.cmd` / `Stop-All.cmd`。
+独立 Skill 包（Release 资产 `superpm-skill-<version>.zip`）包含本文件、`references/`、`docs/mcp.md` 与 `INSTALL.txt`，不包含源码、开发脚本或安装包。

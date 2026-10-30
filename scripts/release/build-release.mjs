@@ -302,17 +302,11 @@ function stageSkill(work, version) {
   copy(".agents/skills/superpm/SKILL.md", skill, "SKILL.md");
   copy(".agents/skills/superpm/references", skill, "references");
   copy("docs/mcp.md", skill, "docs/mcp.md");
-  copy("docs/install-update.md", skill, "docs/install-update.md");
-  copy(
-    "docs/deployment-update-strategy.md",
-    skill,
-    "docs/deployment-update-strategy.md",
-  );
   writeFileSync(
     join(skill, "INSTALL.txt"),
     `superPM Workbench Skill v${version}
 
-适用：superPM 源码仓库与 Release 安装版。
+适用：从 GitHub Release 安装包部署的 superPM Workbench。
 
 安装：把 superpm 目录复制到 AI 客户端的用户级 skills 目录，例如：
   Qoder        %USERPROFILE%\\.qoder\\skills\\superpm
@@ -320,9 +314,10 @@ function stageSkill(work, version) {
 其他客户端：放入其支持的 skills 目录，或让 AI 直接读取 SKILL.md。
 
 说明：
-- 安装版请先读 references/install-mode.md，使用 SuperPM.cmd / Stop.cmd。
-- 本包不包含源码仓库脚本；开发任务请在 Git 仓库中使用 Skill。
-- docs/ 内为本版本对应的 MCP 与安装更新文档。
+- 先读 references/install-mode.md，用安装目录的 SuperPM.cmd / Stop.cmd 启停。
+- MCP 能力见 references/mcp-guide.md，完整契约见 docs/mcp.md。
+- 本包不包含源码、开发脚本或安装包；源码开发按仓库 AGENTS.md 执行。
+- 原型任务按原型项目自身的 AGENTS.md 与 prototype-management Skill 执行。
 `,
   );
   return skill;
