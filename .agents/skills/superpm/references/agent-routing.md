@@ -12,8 +12,10 @@
 | -------------------------------------- | --------------------------------------------------- | ------------------------------------------------ |
 | superPM 需求/后端/前端/数据库/测试     | 主流程直接执行，读取对应文档与代码                  | `apps/`、`packages/`、`tests/`、`scripts/`、`docs/` |
 | `<prototypeRoot>` 原型页 | 先读原型 `AGENTS.md` 与 Skill，再在目标需求目录执行 | 仅目标 `REQ-XXXX 需求名称/` 目录                 |
-| 原型缺失或空目录初始化                 | 调用 `scripts/prototype-init.ps1` 或启动脚本        | 只写 `runtime/skill/`、`prototype.config.json` 与 `node_modules`；不覆盖已有项目 |
-| 启动、检查、停止本地服务               | 调用本 Skill 的 `scripts/`                          | 只写 `runtime/skill/`，不改业务与原型文件         |
+| 原型缺失或空目录初始化（仅源码仓库）   | 调用 `scripts/prototype-init.ps1` 或启动脚本        | 只写 `runtime/skill/`、`prototype.config.json` 与 `node_modules`；不覆盖已有项目 |
+| 启动、检查、停止本地服务（源码仓库）   | 调用本 Skill 的 `scripts/`                          | 只写 `runtime/skill/`，不改业务与原型文件         |
+| 启动、检查、停止本地服务（安装版）     | 使用安装目录的 `SuperPM.cmd` / `Stop.cmd`           | 不改程序目录与数据根文件                         |
+| 安装版 MCP 配置与排障                  | 读 `references/install-mode.md` 与包内 `docs/`      | 只读配置；修改客户端配置需用户确认               |
 | MCP 只读查询                           | 调用实际已连接的 MCP 工具                           | 无写入                                           |
 | MCP 正式写入                           | 先说明变更并取得用户明确授权                        | 经 MCP 业务服务与审计                            |
 | 发布、更新、合并、推送                 | 停下并取得当前对话的明确授权                        | 按发布/更新流程执行                              |

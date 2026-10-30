@@ -118,6 +118,30 @@ MCP 与 HTTP 服务共用数据根，由客户端以 stdio 拉起：
 
 自定义数据根时额外设置 `SUPERPM_HOME`。默认只开放只读工具；写入能力与安全边界见 [`mcp.md`](mcp.md)。
 
+### AI 客户端 Skill 包（可选）
+
+0.15.0 起，每个 Release 附带 `superpm-skill-<version>.zip`，与安装包同版本，但不参与更新清单，按需手动下载。包内是主入口 Skill 与安装版说明：
+
+```text
+superpm/
+  SKILL.md
+  references/              安装版模式、MCP、原型与任务路由
+  docs/mcp.md
+  docs/install-update.md
+  docs/deployment-update-strategy.md
+  INSTALL.txt
+```
+
+安装：解压后把 `superpm` 目录放入客户端用户级 skills 目录。
+
+- Qoder：`%USERPROFILE%\.qoder\skills\superpm`
+- Claude Code：`%USERPROFILE%\.claude\skills\superpm`
+- 其他客户端：放入其支持的 skills 目录，或让 AI 直接读取 `SKILL.md`
+
+Skill 会先区分源码仓库与安装版：安装版读取 `references/install-mode.md`，使用本页的 `SuperPM.cmd` / `Stop.cmd` 与 MCP 配置。Skill 不代替 MCP 配置，也不包含源码仓库脚本；开发任务请使用 Git 仓库中的 `.agents/skills/superpm`。
+
+应用内更新与 `Update.cmd` 只更新 superPM 程序，不会安装或替换 AI 客户端的 Skill。每台设备升级应用后，如需同步文档与规则，请关闭 AI 客户端，下载与应用同版本的 Skill 包，解压后替换 `%USERPROFILE%\.qoder\skills\superpm`（Qoder）或 `%USERPROFILE%\.claude\skills\superpm`（Claude Code），再重新打开客户端；旧目录可先改名备份。多个客户端需要分别替换。
+
 ## 5. 更新
 
 发布版优先使用应用内更新：登录后进入「系统设置 → 版本与更新」。安装包内仍保留 `Update.cmd`，用于页面不可用或需要离线更新的场景。
@@ -218,6 +242,12 @@ MCP 与 HTTP 服务共用数据根，由客户端以 stdio 拉起：
 0.14.0 新增原型项目公共模板的本地初始化机制，属于**仓库开发工具**更新：主入口 Skill 与 `prototype-init.ps1` 会在原型目录缺失或为空时，从公共模板仓库 `https://github.com/WangPeng3215/prototype-workbench-template.git` 自动 Clone 并安装依赖；已有本地原型只复用，不覆盖、不重置、不自动 Pull 或升级。数据根、数据库结构与 MCP 工具集均无变化。发布包只包含 `app/`、`apps/server/dist` 等运行时产物，**不包含 `.agents/`、`.cursor/`、`AGENTS.md` 等仓库级开发文件**，因此安装版用户升级后运行时行为与 0.13.0 完全一致，可留在 0.13.0 不升级。数据库 schema 保持 17，无需迁移，启动器与更新器不变（仍为 1.1.0）；已安装 0.13.0、0.12.1、0.12.0、0.11.0、0.10.0、0.9.0、0.8.0、0.7.0、0.6.0、0.5.1、0.5.0 或 0.4.0 的用户可在「系统设置 → 版本与更新」直接增量升级。从 0.4.0 升级仍会依次执行 schema 14–17。
 
 应用内更新会自动停止并重启服务，无需手动操作；如果改用命令行或手工覆盖安装，请先运行安装目录下的 `Stop.cmd` 停止服务，覆盖完成后双击 `SuperPM.cmd` 启动。增量包只替换 `app/`，不会补装 `Stop.cmd` 与 `Stop.ps1`；已安装 0.5.0 或更早版本且缺少停止脚本时，请用 0.14.0 完整包覆盖一次。0.3.3 或更早版本仍需先按上一节用 0.4.0 完整包完成 bootstrap。原型模板初始化只在源码仓库中使用，安装版不提供该能力。
+
+### 0.14.0 → 0.15.0
+
+0.15.0 新增 AI 客户端 Skill 包（`superpm-skill-<version>.zip`）与安装版模式说明，属于**开发工具与文档**更新：主入口 Skill 现在同时支持源码仓库和 Release 安装版，Release 附带独立 Skill 包，可解压到 Qoder、Claude Code 等客户端的用户级 skills 目录。Skill 包不进入 `update-manifest.json`，应用内更新与 `Update.cmd` 不会安装或替换它，需要时从 Release Assets 手动下载；Skill 版本应与应用版本保持一致。数据根、数据库结构、MCP 工具集与运行时行为均无变化，schema 保持 17，启动器与更新器不变（仍为 1.1.0）；安装版用户可留在 0.14.0 不升级，已安装 0.14.0 及更早版本的用户可在「系统设置 → 版本与更新」直接增量升级。
+
+应用内更新会自动停止并重启服务，无需手动操作；如果改用命令行或手工覆盖安装，请先运行安装目录下的 `Stop.cmd` 停止服务，覆盖完成后双击 `SuperPM.cmd` 启动。增量包只替换 `app/`，不会补装 `Stop.cmd` 与 `Stop.ps1`；已安装 0.5.0 或更早版本且缺少停止脚本时，请用 0.15.0 完整包覆盖一次。0.3.3 或更早版本仍需先按上一节用 0.4.0 完整包完成 bootstrap。Skill 的下载与替换步骤见 §4「AI 客户端 Skill 包（可选）」。
 
 ### 命令行更新（备用）
 

@@ -51,6 +51,7 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             "release/superpm-workbench-${version}-win-x64.zip" \
             "release/superpm-workbench-${version}-update-win-x64.zip" \
+            "release/superpm-skill-${version}.zip" \
             "release/update-manifest.json" \
             --title "superPM Workbench $GITHUB_REF_NAME" \
             --generate-notes

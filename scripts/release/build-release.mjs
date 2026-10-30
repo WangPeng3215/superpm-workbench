@@ -40,6 +40,7 @@ function parseArgs(argv) {
     notes: "",
     smoke: true,
     skipBuild: false,
+    skillOnly: false,
   };
   for (let index = 0; index < argv.length; index++) {
     const item = argv[index];
@@ -54,6 +55,7 @@ function parseArgs(argv) {
       options.notes = readFileSync(argv[++index], "utf8");
     else if (item === "--no-smoke") options.smoke = false;
     else if (item === "--skip-build") options.skipBuild = true;
+    else if (item === "--skill-only") options.skillOnly = true;
     else if (item === "--help" || item === "-h") options.help = true;
     else throw new Error(`未知参数：${item}`);
   }
@@ -293,6 +295,39 @@ function stageApp(work, version) {
   return { app, schema };
 }
 
+function stageSkill(work, version) {
+  const root = join(work, "skill");
+  const skill = join(root, "superpm");
+  mkdirSync(skill, { recursive: true });
+  copy(".agents/skills/superpm/SKILL.md", skill, "SKILL.md");
+  copy(".agents/skills/superpm/references", skill, "references");
+  copy("docs/mcp.md", skill, "docs/mcp.md");
+  copy("docs/install-update.md", skill, "docs/install-update.md");
+  copy(
+    "docs/deployment-update-strategy.md",
+    skill,
+    "docs/deployment-update-strategy.md",
+  );
+  writeFileSync(
+    join(skill, "INSTALL.txt"),
+    `superPM Workbench Skill v${version}
+
+适用：superPM 源码仓库与 Release 安装版。
+
+安装：把 superpm 目录复制到 AI 客户端的用户级 skills 目录，例如：
+  Qoder        %USERPROFILE%\\.qoder\\skills\\superpm
+  Claude Code  %USERPROFILE%\\.claude\\skills\\superpm
+其他客户端：放入其支持的 skills 目录，或让 AI 直接读取 SKILL.md。
+
+说明：
+- 安装版请先读 references/install-mode.md，使用 SuperPM.cmd / Stop.cmd。
+- 本包不包含源码仓库脚本；开发任务请在 Git 仓库中使用 Skill。
+- docs/ 内为本版本对应的 MCP 与安装更新文档。
+`,
+  );
+  return skill;
+}
+
 async function stageInstall(work, options, appStage, runtime) {
   const install = join(work, "install");
   mkdirSync(join(install, "bin"), { recursive: true });
@@ -473,7 +508,8 @@ async function main() {
   --repo <owner/repo>     GitHub 仓库
   --tag <标签>            Release 标签（默认 v<版本>）
   --notes <说明>          更新说明
-  --no-smoke              跳过安装包冒烟测试`);
+  --no-smoke              跳过安装包冒烟测试
+  --skill-only            只生成 AI Skill 包，不构建安装包`);
     return;
   }
   options.tag = options.tag ?? `v${options.version}`;
@@ -485,6 +521,22 @@ async function main() {
   );
   console.log(`[release] 暂存目录 ${work}`);
   mkdirSync(out, { recursive: true });
+
+  if (options.skillOnly) {
+    const skillFile = `superpm-skill-${options.version}.zip`;
+    const skillPath = join(out, skillFile);
+    console.log("[release] 生成 AI Skill 包…");
+    const skill = await createZip(
+      skillPath,
+      stageSkill(work, options.version),
+      "superpm/",
+    );
+    rmSync(work, { recursive: true, force: true });
+    console.log(
+      `\n[release] 完成：\n  Skill 包 ${skillPath}（${skill.size} 字节）`,
+    );
+    return;
+  }
 
   if (!options.skipBuild) {
     console.log(`[release] 构建 v${options.version}…`);
@@ -511,6 +563,14 @@ async function main() {
   const full = await createZip(fullPath, install, `${folder}/`);
   console.log("[release] 生成增量更新包…");
   const update = await createZip(updatePath, join(install, "app"), "app/");
+  const skillFile = `superpm-skill-${options.version}.zip`;
+  const skillPath = join(out, skillFile);
+  console.log("[release] 生成 AI Skill 包…");
+  const skill = await createZip(
+    skillPath,
+    stageSkill(work, options.version),
+    "superpm/",
+  );
   const manifest = writeManifest(
     out,
     options,
@@ -538,7 +598,7 @@ async function main() {
 
   rmSync(work, { recursive: true, force: true });
   console.log(
-    `\n[release] 完成：\n  完整包 ${fullPath}（${full.size} 字节）\n  更新包 ${updatePath}（${update.size} 字节）\n  清单   ${manifest.path}`,
+    `\n[release] 完成：\n  完整包 ${fullPath}（${full.size} 字节）\n  更新包 ${updatePath}（${update.size} 字节）\n  Skill 包 ${skillPath}（${skill.size} 字节）\n  清单   ${manifest.path}`,
   );
 }
 

@@ -112,6 +112,8 @@ npm run mcp -w @superpm/server
 
 默认注册 15 个业务只读工具（`requirement.*`、`issue.*`、`artifact.*`、`meeting.*`、`note.*`）与 `system.info`；显式设置 `SUPERPM_MCP_WRITE=1` 后，额外开放 15 个写入工具（问题 4 个、会议 3 个、便签 5 个的受确认写入，以及需求记忆更新与文本文件创建/更新 3 个低风险自动写入）与 `write.prepare`。受确认写入必须先取得 5 分钟有效、一次性、绑定参数与幂等键的确认令牌；自动写入不需要令牌，但仍受写开关、幂等键、路径/格式白名单与审计约束。调用来源记为 `mcp:<客户端名>` 并写入 `mcp_audit`。便签转每日任务复用现有任务服务，重复转换返回原任务；归档只切换标记，删除与会议删除标注为破坏性操作。需求创建、问题创建/删除、通用每日任务写入、文件删除/移动/重命名、SQL 与任意路径能力仍不开放。M4 安全用例覆盖非法参数、SQL/提示注入、路径穿越、符号链接、敏感信息泄露、数据库/文件系统异常与未授权写入。运行环境、Harness 配置、逐工具入参与返回、错误码、自动化测试与版本兼容性见 `docs/mcp.md`。
 
+0.15.0 起，每个 Release 还附带 `superpm-skill-<version>.zip`，可解压到 Qoder、Claude Code 等客户端的用户级 skills 目录，让 AI 按安装版模式使用 superPM。Skill 包不参与自动更新，下载、替换与多设备同步步骤见 [`docs/install-update.md`](docs/install-update.md)。
+
 ## 检查
 
 ```powershell
@@ -124,7 +126,7 @@ npm run test:e2e
 
 集成与浏览器测试各使用临时 SQLite 和 Workspace，与默认业务数据隔离。浏览器验收需先构建前端；`npm run test:e2e` 会自动构建并启动隔离服务。
 
-CI 流水线位于 `.github/workflows/ci.yml`（与模板 `docs/ci/ci.yml` 一致），在 Windows runner 上执行安装、类型检查、单元测试、构建与 Playwright 浏览器验收。推送 `v*` 标签时，`.github/workflows/release.yml` 会重新测试、构建完整包与增量包、执行安装冒烟测试并创建 GitHub Release。推送含 workflows 目录改动的提交需要 GitHub 凭证具备 `workflow` scope，缺失时整个提交会被远端拒收；可用 `gh auth refresh --hostname github.com -s workflow` 补齐。
+CI 流水线位于 `.github/workflows/ci.yml`（与模板 `docs/ci/ci.yml` 一致），在 Windows runner 上执行安装、类型检查、单元测试、构建与 Playwright 浏览器验收。推送 `v*` 标签时，`.github/workflows/release.yml` 会重新测试、构建完整包、增量包与 AI Skill 包、执行安装冒烟测试并创建 GitHub Release。推送含 workflows 目录改动的提交需要 GitHub 凭证具备 `workflow` scope，缺失时整个提交会被远端拒收；可用 `gh auth refresh --hostname github.com -s workflow` 补齐。
 
 ## 版本管理
 
@@ -185,7 +187,7 @@ npm run backup -- restore <备份ID>
 发布构建、安装包冒烟测试、真实版本升级演练与数据根迁移演练：
 
 ```powershell
-node scripts/release/build-release.mjs --version 0.14.0 --notes "更新说明"
+node scripts/release/build-release.mjs --version 0.15.0 --notes "更新说明"
 node scripts/release/rehearse-update.mjs --from release/0.2.0/superpm-workbench-0.2.0-win-x64.zip --manifest release/0.3.0/update-manifest.json
 node scripts/release/rehearse-move-home.mjs
 ```

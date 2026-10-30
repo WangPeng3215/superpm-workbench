@@ -1,13 +1,13 @@
 ---
 name: superpm
-description: superPM Workbench 主入口 Skill。用于 superPM 主应用开发、MCP 工具使用、superPM 与 prototype-workbench 双项目本地服务启停检查，以及原型任务转交；先路由到真实项目规范再执行。
+description: superPM Workbench 主入口 Skill。用于 superPM 主应用开发、MCP 工具使用、superPM 与 prototype-workbench 双项目本地服务启停检查，以及原型任务转交；同时支持源码仓库与 Release 安装版。
 ---
 
 # superPM Workbench 主入口
 
 ## 何时使用
 
-在 `superPMWorkbench` 仓库内处理以下任一任务时使用本 Skill：
+在 superPM 源码仓库或已部署的 superPM Workbench 安装环境中处理以下任一任务时使用本 Skill：
 
 - superPM 主应用的需求、后端、前端、数据库、测试、文档或发布。
 - 使用或说明 superPM 的 MCP 能力。
@@ -17,20 +17,33 @@ description: superPM Workbench 主入口 Skill。用于 superPM 主应用开发�
 
 仅查询与仓库无关的通用知识时，不需要使用。
 
+## 先识别运行环境
+
+| 环境         | 判断依据                                                                 | 使用方式                                                         |
+| ------------ | ------------------------------------------------------------------------ | ---------------------------------------------------------------- |
+| 源码仓库     | 仓库根存在 `package.json`（name 为 `superpm-workbench`）、`apps/`、`scripts/` | 按下方路由表执行，可使用 `scripts/` 内 PowerShell 脚本           |
+| 发布安装版   | 安装目录存在 `SuperPM.cmd`、`runtime/node.exe`、`app/apps/server/dist/mcp/stdio.js`、`install.json` | 读 `references/install-mode.md`；用 `SuperPM.cmd` / `Stop.cmd`，不要运行仓库脚本 |
+| 无法确认     | 两者都不满足，或找不到安装目录                                           | 先询问用户仓库路径或安装目录；不要猜路径，不要启停服务           |
+
+安装版没有 `apps/`、`scripts/` 和仓库 `docs/`；独立 Skill 包已附带所需文档（见文末参考索引）。
+
 ## 开始前：先定位任务类型
 
 | 任务类型         | 必读                                                                 | 执行边界                                                       |
 | ---------------- | -------------------------------------------------------------------- | -------------------------------------------------------------- |
 | superPM 业务开发 | 根 `README.md`、`docs/` 中对应模块文档、真实代码与测试                | 只改 `apps/`、`packages/`、`tests/`、`scripts/`、`docs/` 中相关文件 |
 | 原型页面任务     | 实际原型路径下的 `AGENTS.md`（默认 `workspace/prototype-workbench/AGENTS.md`），再读其中的 Skill 与 references | 只改目标需求目录；不修改 superPM 业务与数据                    |
-| 本地服务管理     | `references/service-management.md`                                   | 只启停本仓库服务；原型缺失时按配置初始化，不覆盖已有项目       |
+| 本地服务管理     | 源码仓库读 `references/service-management.md`；安装版读 `references/install-mode.md` | 源码用仓库脚本；安装版只用 `SuperPM.cmd` / `Stop.cmd`           |
+| 安装版使用与排障 | `references/install-mode.md` 与包内 `docs/install-update.md`          | 不改程序目录；不直接操作数据库或需求文件                       |
 | MCP 使用         | `docs/mcp.md` 与 `references/mcp-guide.md`                           | 写入默认关闭；正式写入必须获得用户明确授权                     |
 | 发布与更新       | `docs/install-update.md`、`docs/deployment-update-strategy.md`       | 发布/合并/推送需单独授权；更新不得包含或删除原型项目           |
 | 专业 Agent 调度  | `references/agent-routing.md`                                        | V1.0 只预留路由契约，不创建或宣称已有专业 Agent                 |
 
 优先级：用户当前对话的明确指令 > 目标项目自身的 `AGENTS.md` 与 Skill > 本 Skill > 一般文档。发生冲突时先说明，不要静默扩大改动范围。
 
-## 本地服务入口
+## 本地服务入口（仅源码仓库）
+
+以下脚本只适用于源码仓库；安装版请使用安装目录的 `SuperPM.cmd` / `Stop.cmd`，说明见 `references/install-mode.md`。
 
 根目录 `Start-All.cmd` / `Stop-All.cmd` 是双击快捷入口，固定操作两个项目。命令行与单项目操作仍使用 `scripts/`，默认后台启动并把日志写入 `runtime/skill/logs/`：
 
@@ -98,12 +111,15 @@ V1.0 不创建专业 Agent，也不实现复杂编排或 PinMe 自动发布。�
 
 | 文件                                 | 内容                                                         |
 | ------------------------------------ | ------------------------------------------------------------ |
-| `references/service-management.md`   | 真实启动拓扑、端口、健康检查、状态文件、启停与故障处理       |
+| `references/install-mode.md`         | 安装版识别、数据根、启停更新、MCP 配置、原型与安全边界       |
+| `references/service-management.md`   | 真实启动拓扑、端口、健康检查、状态文件、启停与故障处理（仅源码仓库） |
 | `references/prototype-integration.md`| 原型规范位置、强制读取顺序、允许与禁止的操作、隔离规则       |
 | `references/mcp-guide.md`            | 32 个 MCP 工具分组、写入分级、授权与安全边界、排错           |
 | `references/agent-routing.md`        | 任务路由表、未来专业 Agent 与 MCP 调度的预留契约             |
-| `scripts/start-services.ps1`         | 统一启动入口，支持 `-Target all/superpm/prototype`           |
-| `scripts/prototype-init.ps1`         | 原型项目初始化；仅在缺失/空目录 Clone，已存在项目只校验复用   |
-| `scripts/check-services.ps1`         | 只读检查，支持 `-Json` 输出                                  |
-| `scripts/stop-services.ps1`          | 独立停止，带进程身份校验                                     |
-| `Start-All.cmd` / `Stop-All.cmd`     | 根目录双击快捷入口，固定启停两个项目                         |
+| `scripts/start-services.ps1`         | 统一启动入口，支持 `-Target all/superpm/prototype`（仅源码仓库） |
+| `scripts/prototype-init.ps1`         | 原型项目初始化；仅在缺失/空目录 Clone，已存在项目只校验复用（仅源码仓库） |
+| `scripts/check-services.ps1`         | 只读检查，支持 `-Json` 输出（仅源码仓库）                    |
+| `scripts/stop-services.ps1`          | 独立停止，带进程身份校验（仅源码仓库）                       |
+| `Start-All.cmd` / `Stop-All.cmd`     | 根目录双击快捷入口，固定启停两个项目（仅源码仓库）           |
+
+独立 Skill 包（Release 资产 `superpm-skill-<version>.zip`）包含本文件、`references/` 与 `docs/mcp.md`、`docs/install-update.md`、`docs/deployment-update-strategy.md`，不包含 `scripts/` 与 `Start-All.cmd` / `Stop-All.cmd`。
