@@ -253,6 +253,12 @@ Skill 面向安装版使用：读取 `references/install-mode.md`，用本页的
 
 应用内更新会自动停止并重启服务，无需手动操作；如果改用命令行或手工覆盖安装，请先运行安装目录下的 `Stop.cmd` 停止服务，覆盖完成后双击 `SuperPM.cmd` 启动。Skill 包需要到 Release Assets 下载同版本的 `superpm-skill-0.15.1.zip` 手动替换，应用内更新不会更新它；详情见 §4「AI 客户端 Skill 包（可选）」。
 
+### 0.15.1 → 0.15.2
+
+0.15.2 修复文档管理「在资源管理器中打开」失效：0.12.0 把 Windows 打开方式从 PowerShell 改为直连 `explorer.exe` 后，启动参数里的 `windowsHide` 会给子进程带上 `SW_HIDE`，资源管理器把这个显示状态传给新建窗口，导致接口返回成功、进程也已启动，但文件夹窗口不显示，看起来像“点了没反应”。本次去掉该参数（不再隐藏 GUI 程序的窗口），并把 Windows 路径统一转换为反斜杠，避免 `explorer.exe` 不认正斜杠时静默打开「文档」。属于**运行时缺陷修复**，只涉及打开本地文件夹与在文件夹中定位文件，数据根、数据库结构、MCP 工具集与接口均无变化，schema 保持 17，启动器与更新器不变（仍为 1.1.0）；已安装 0.15.1 及更早版本的用户可在「系统设置 → 版本与更新」直接增量升级。
+
+应用内更新会自动停止并重启服务，无需手动操作；如果改用命令行或手工覆盖安装，请先运行安装目录下的 `Stop.cmd` 停止服务，覆盖完成后双击 `SuperPM.cmd` 启动。Skill 包需要到 Release Assets 下载同版本的 `superpm-skill-0.15.2.zip` 手动替换，应用内更新不会更新它；详情见 §4「AI 客户端 Skill 包（可选）」。
+
 ```powershell
 Update.cmd --manifest https://github.com/WangPeng3215/superpm-workbench/releases/latest/download/update-manifest.json
 ```

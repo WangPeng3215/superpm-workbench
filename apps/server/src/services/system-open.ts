@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { dirname } from "node:path";
+import { dirname, win32 } from "node:path";
 
 export interface SystemOpenCommand {
   command: string;
@@ -17,17 +17,21 @@ export interface SystemOpenCommand {
  * 也不依赖 PowerShell（部分环境 PATH 或执行策略受限）。
  * explorer.exe 只接收一个路径参数，由 ShellExecute 按文件关联打开，
  * 路径作为独立 argv 传递，不经过 shell 解释。
+ * explorer.exe 不认正斜杠：传 `D:/a/b` 时不会报错，而是静默打开“文档”，
+ * 所以 Windows 下统一转换为反斜杠。
  */
 export function buildSystemOpenCommand(
   path: string,
   options: { reveal?: boolean; platform?: NodeJS.Platform } = {},
 ): SystemOpenCommand {
   const platform = options.platform ?? process.platform;
-  if (platform === "win32")
+  if (platform === "win32") {
+    const native = win32.normalize(path);
     return {
       command: "explorer.exe",
-      args: [options.reveal ? `/select,${path}` : path],
+      args: [options.reveal ? `/select,${native}` : native],
     };
+  }
   if (platform === "darwin")
     return options.reveal
       ? { command: "open", args: ["-R", path] }
@@ -46,10 +50,12 @@ export function launchSystemOpen(
   const { command, args, env } = buildSystemOpenCommand(path, options);
   // 不要使用 detached：Windows 下 detached 的启动器再拉起 GUI 程序时，
   // 窗口不会出现在当前桌面（实测 WPS/记事本均无窗口）。
+  // 也不要用 windowsHide：它会给子进程带上 SW_HIDE，explorer.exe 会把该
+  // 显示状态传给新建的资源管理器窗口，结果进程起来了但窗口不显示，
+  // 用户看到的现象就是“点了没反应”。explorer.exe 本身是 GUI 程序，不会弹控制台。
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       stdio: "ignore",
-      windowsHide: true,
       env: env ? { ...process.env, ...env } : process.env,
     });
     let settled = false;

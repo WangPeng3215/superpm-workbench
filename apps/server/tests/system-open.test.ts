@@ -42,11 +42,13 @@ vi.mock("node:child_process", async (importOriginal) => ({
 
 describe("buildSystemOpenCommand", () => {
   const path = "D:/workspace/requirements/REQ-0001/demo/a.txt";
+  // explorer.exe 只认反斜杠，Windows 分支统一转换（正斜杠会被静默改成打开“文档”）
+  const winPath = "D:\\workspace\\requirements\\REQ-0001\\demo\\a.txt";
 
   it("opens a folder with the platform default handler", () => {
     expect(buildSystemOpenCommand(path, { platform: "win32" })).toEqual({
       command: "explorer.exe",
-      args: [path],
+      args: [winPath],
     });
     expect(buildSystemOpenCommand(path, { platform: "darwin" })).toEqual({
       command: "open",
@@ -58,17 +60,24 @@ describe("buildSystemOpenCommand", () => {
     });
   });
 
+  it("normalizes Windows paths to backslashes", () => {
+    expect(buildSystemOpenCommand(winPath, { platform: "win32" })).toEqual({
+      command: "explorer.exe",
+      args: [winPath],
+    });
+  });
+
   it("passes the Windows path as a single argument", () => {
     const unsafe = "D:/workspace/a&b%PATH%.txt";
     const command = buildSystemOpenCommand(unsafe, { platform: "win32" });
     expect(command.command).toBe("explorer.exe");
-    expect(command.args).toEqual([unsafe]);
+    expect(command.args).toEqual(["D:\\workspace\\a&b%PATH%.txt"]);
   });
 
   it("reveals a file in its folder", () => {
     expect(
       buildSystemOpenCommand(path, { platform: "win32", reveal: true }),
-    ).toEqual({ command: "explorer.exe", args: [`/select,${path}`] });
+    ).toEqual({ command: "explorer.exe", args: [`/select,${winPath}`] });
     expect(
       buildSystemOpenCommand(path, { platform: "darwin", reveal: true }),
     ).toEqual({ command: "open", args: ["-R", path] });
@@ -149,10 +158,12 @@ describe("physical folder open with SUPERPM_ALLOW_SYSTEM_OPEN=0", () => {
     const [command, args, options] = spawnMock.mock.calls[0] as unknown as [
       string,
       string[],
-      { detached?: boolean; env?: NodeJS.ProcessEnv },
+      { detached?: boolean; windowsHide?: boolean; env?: NodeJS.ProcessEnv },
     ];
     // Windows 下 detached 会导致启动的 GUI 程序不显示
     expect(options.detached).not.toBe(true);
+    // windowsHide 会把 SW_HIDE 传给 explorer，窗口不可见（“点了没反应”）
+    expect(options.windowsHide).not.toBe(true);
     if (process.platform === "win32") {
       expect(command).toBe("explorer.exe");
       expect(args).toEqual([folderPath]);
