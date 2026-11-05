@@ -22,11 +22,13 @@ import { decorative } from "../../components/decorativeIcon";
 import NoteQuickDialog from "../notes/NoteQuickDialog.vue";
 import { categoryTone, onlineToolIcon } from "./icons";
 import {
-  clampToolboxPosition,
-  loadToolboxPosition,
-  saveToolboxPosition,
+  clampToolboxPlacement,
+  loadToolboxPlacement,
+  resolveToolboxPlacement,
+  saveToolboxPlacement,
+  toolboxButtonRect,
   toolboxButtonSize,
-  type ToolboxPoint,
+  type ToolboxPlacement,
 } from "./position";
 import { refreshToolbox, toolboxStore } from "./toolboxStore";
 
@@ -38,7 +40,7 @@ const router = useRouter();
 const open = ref(false);
 const quickNoteOpen = ref(false);
 const keyword = ref("");
-const position = ref<ToolboxPoint>(loadToolboxPosition());
+const placement = ref<ToolboxPlacement>(loadToolboxPlacement());
 const dragging = ref(false);
 const panelStyle = ref<Record<string, string>>({});
 const buttonRef = ref<HTMLButtonElement>();
@@ -78,9 +80,10 @@ const showNoMatch = computed(
     filteredTools.value.length === 0,
 );
 
-const fabStyle = computed(() => ({
-  transform: `translate3d(${position.value.x}px, ${position.value.y}px, 0)`,
-}));
+const fabStyle = computed(() => {
+  const rect = toolboxButtonRect(placement.value);
+  return { transform: `translate3d(${rect.x}px, ${rect.y}px, 0)` };
+});
 
 function estimatePanelHeight() {
   const rows = Math.ceil(Math.max(filteredTools.value.length, 1) / 3);
@@ -93,10 +96,13 @@ function updatePanelStyle() {
   const width = Math.min(348, viewportWidth - 24);
   const gap = 14;
   const margin = 12;
-  const buttonCenterX = position.value.x + toolboxButtonSize / 2;
-  const buttonCenterY = position.value.y + toolboxButtonSize / 2;
-  const rightLeft = position.value.x + toolboxButtonSize + gap;
-  const leftLeft = position.value.x - gap - width;
+  const button =
+    buttonRef.value?.getBoundingClientRect() ??
+    toolboxButtonRect(placement.value);
+  const buttonCenterX = button.x + button.width / 2;
+  const buttonCenterY = button.y + button.height / 2;
+  const rightLeft = button.x + button.width + gap;
+  const leftLeft = button.x - gap - width;
   let left: number;
   if (rightLeft + width <= viewportWidth - margin) left = rightLeft;
   else if (leftLeft >= margin) left = leftLeft;
@@ -203,6 +209,7 @@ let dragOrigin: {
   pointerY: number;
   x: number;
   y: number;
+  dockedSide: "left" | "right" | null;
 } | null = null;
 let moved = false;
 let ignoreClick = false;
@@ -221,12 +228,20 @@ function stopDragListeners() {
 
 function onFabPointerDown(event: PointerEvent) {
   if (event.button !== 0) return;
+  const rect = toolboxButtonRect(placement.value);
   dragPointer = event.pointerId;
   dragOrigin = {
     pointerX: event.clientX,
     pointerY: event.clientY,
-    x: position.value.x,
-    y: position.value.y,
+    x:
+      placement.value.mode === "float"
+        ? placement.value.x
+        : rect.x + rect.width / 2 - toolboxButtonSize / 2,
+    y:
+      placement.value.mode === "float"
+        ? placement.value.y
+        : rect.y + rect.height / 2 - toolboxButtonSize / 2,
+    dockedSide: placement.value.mode === "docked" ? placement.value.side : null,
   };
   moved = false;
   startDragListeners();
@@ -242,13 +257,19 @@ function onFabPointerMove(event: PointerEvent) {
   const dx = event.clientX - dragOrigin.pointerX;
   const dy = event.clientY - dragOrigin.pointerY;
   if (!moved) {
-    if (Math.hypot(dx, dy) < 5) return;
+    const thresholdReached = dragOrigin.dockedSide
+      ? dragOrigin.dockedSide === "left"
+        ? dx > 5
+        : dx < -5
+      : Math.hypot(dx, dy) >= 5;
+    if (!thresholdReached) return;
     moved = true;
     dragging.value = true;
     open.value = false;
   }
   event.preventDefault();
-  position.value = clampToolboxPosition({
+  placement.value = clampToolboxPlacement({
+    mode: "float",
     x: dragOrigin.x + dx,
     y: dragOrigin.y + dy,
   });
@@ -265,12 +286,15 @@ function onFabPointerUp(event: PointerEvent) {
     // 捕获已随指针释放时忽略
   }
   const dragged = moved;
+  const startedDocked = dragOrigin?.dockedSide != null;
   dragPointer = null;
   dragOrigin = null;
   moved = false;
   if (!dragged) return;
   dragging.value = false;
-  saveToolboxPosition(position.value);
+  if (!startedDocked && placement.value.mode === "float")
+    placement.value = resolveToolboxPlacement(placement.value);
+  saveToolboxPlacement(placement.value);
   ignoreClick = true;
   window.setTimeout(() => {
     ignoreClick = false;
@@ -291,19 +315,40 @@ function onFabKeydown(event: KeyboardEvent) {
     event.key === "ArrowUp" ? -step : event.key === "ArrowDown" ? step : 0;
   if (!dx && !dy) return;
   event.preventDefault();
-  position.value = clampToolboxPosition({
-    x: position.value.x + dx,
-    y: position.value.y + dy,
-  });
-  saveToolboxPosition(position.value);
-  if (open.value) updatePanelStyle();
+  if (placement.value.mode === "docked") {
+    const side = placement.value.side;
+    const inward = (side === "left" && dx > 0) || (side === "right" && dx < 0);
+    if (inward) {
+      const rect = toolboxButtonRect(placement.value);
+      placement.value = clampToolboxPlacement({
+        mode: "float",
+        x: rect.x + rect.width / 2 - toolboxButtonSize / 2 + dx,
+        y: rect.y + rect.height / 2 - toolboxButtonSize / 2 + dy,
+      });
+    } else if (dy) {
+      placement.value = clampToolboxPlacement({
+        ...placement.value,
+        y: placement.value.y + dy,
+      });
+    }
+  } else {
+    placement.value = clampToolboxPlacement({
+      mode: "float",
+      x: placement.value.x + dx,
+      y: placement.value.y + dy,
+    });
+  }
+  saveToolboxPlacement(placement.value);
+  if (open.value) void nextTick(updatePanelStyle);
 }
 
 function onWindowResize() {
-  const next = clampToolboxPosition(position.value);
-  if (next.x !== position.value.x || next.y !== position.value.y)
-    position.value = next;
-  if (open.value) updatePanelStyle();
+  placement.value = clampToolboxPlacement(placement.value);
+  if (open.value) void nextTick(updatePanelStyle);
+}
+
+function onFabTransitionEnd(event: TransitionEvent) {
+  if (event.propertyName === "transform" && open.value) updatePanelStyle();
 }
 
 watch(
@@ -334,9 +379,15 @@ onUnmounted(() => {
       ref="buttonRef"
       type="button"
       class="toolbox-fab"
-      :class="{ open, dragging }"
+      :class="{
+        open,
+        dragging,
+        'docked-left': placement.mode === 'docked' && placement.side === 'left',
+        'docked-right':
+          placement.mode === 'docked' && placement.side === 'right',
+      }"
       :style="fabStyle"
-      title="快捷工具（可直接拖动，Alt + 方向键微调位置）"
+      title="快捷工具（可拖动，拖到左右边缘吸附，Alt + 方向键微调）"
       aria-label="快捷工具箱"
       aria-haspopup="dialog"
       aria-controls="toolbox-panel"
@@ -344,10 +395,8 @@ onUnmounted(() => {
       @pointerdown="onFabPointerDown"
       @click="onFabClick"
       @keydown="onFabKeydown"
+      @transitionend="onFabTransitionEnd"
     >
-      <span class="fab-aura" aria-hidden="true" />
-      <span class="fab-ring" aria-hidden="true" />
-      <span class="fab-orbit" aria-hidden="true"> <i /><i /><i /> </span>
       <span class="fab-core" aria-hidden="true">
         <span class="fab-shine" />
         <el-icon class="fab-glyph glyph-tool" :size="23">
@@ -524,6 +573,23 @@ onUnmounted(() => {
   transition: none;
   z-index: 960;
 }
+.toolbox-fab.docked-left,
+.toolbox-fab.docked-right {
+  width: 30px;
+  height: 64px;
+}
+.toolbox-fab.docked-left {
+  border-radius: 0 16px 16px 0;
+}
+.toolbox-fab.docked-right {
+  border-radius: 16px 0 0 16px;
+}
+.toolbox-fab.docked-left .fab-core,
+.toolbox-fab.docked-right .fab-core,
+.toolbox-fab.docked-left .fab-core::after,
+.toolbox-fab.docked-right .fab-core::after {
+  border-radius: inherit;
+}
 .toolbox-fab:focus-visible {
   outline: none;
 }
@@ -576,75 +642,6 @@ onUnmounted(() => {
     0 0 0 3px var(--bg-page),
     0 0 0 5px var(--brand-ring),
     0 16px 32px -14px color-mix(in srgb, var(--brand) 78%, transparent);
-}
-.fab-aura {
-  position: absolute;
-  inset: -15px;
-  border-radius: 50%;
-  background: radial-gradient(
-    circle,
-    color-mix(in srgb, var(--brand) 48%, transparent),
-    transparent 68%
-  );
-  filter: blur(11px);
-  opacity: 0.6;
-  pointer-events: none;
-  animation: fab-breathe 4.6s ease-in-out infinite;
-}
-.fab-ring {
-  position: absolute;
-  inset: -7px;
-  border: 1.5px dashed color-mix(in srgb, var(--brand) 58%, transparent);
-  border-radius: 50%;
-  opacity: 0.8;
-  pointer-events: none;
-  animation: fab-spin 16s linear infinite;
-  transition: opacity 240ms var(--ease-standard);
-}
-.toolbox-fab:hover .fab-ring {
-  opacity: 1;
-  animation-duration: 5.5s;
-}
-.toolbox-fab.open .fab-ring {
-  border-color: color-mix(in srgb, var(--brand) 34%, transparent);
-  animation-duration: 9s;
-}
-.fab-orbit {
-  position: absolute;
-  inset: -9px;
-  border-radius: 50%;
-  pointer-events: none;
-  animation: fab-spin 9s linear infinite reverse;
-  transition: animation-duration 300ms;
-}
-.toolbox-fab.open .fab-orbit {
-  animation-duration: 3.4s;
-}
-.fab-orbit i {
-  position: absolute;
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 0 7px 1px color-mix(in srgb, var(--brand) 70%, transparent);
-}
-.fab-orbit i:nth-child(1) {
-  top: -1px;
-  left: calc(50% - 2px);
-}
-.fab-orbit i:nth-child(2) {
-  right: 3px;
-  bottom: 9px;
-  width: 3px;
-  height: 3px;
-  opacity: 0.75;
-}
-.fab-orbit i:nth-child(3) {
-  bottom: 9px;
-  left: 3px;
-  width: 2.5px;
-  height: 2.5px;
-  opacity: 0.55;
 }
 .fab-shine {
   position: absolute;
@@ -1085,22 +1082,6 @@ onUnmounted(() => {
   transform: scale(0.94) translateY(4px);
 }
 
-@keyframes fab-breathe {
-  0%,
-  100% {
-    opacity: 0.42;
-    transform: scale(0.94);
-  }
-  50% {
-    opacity: 0.72;
-    transform: scale(1.08);
-  }
-}
-@keyframes fab-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
 @keyframes tile-in {
   from {
     opacity: 0;

@@ -275,7 +275,8 @@ test("快捷悬浮按钮：拖拽、位置持久化与路由关闭", async ({ pa
     const raw = localStorage.getItem("superpm.toolbox.position.v1");
     return raw ? JSON.parse(raw) : null;
   });
-  expect(stored?.version).toBe(1);
+  expect(stored?.version).toBe(2);
+  expect(stored?.mode).toBe("float");
   expect(stored?.x).toBeLessThan(1234);
   expect(stored?.y).toBeLessThan(500);
 
@@ -309,5 +310,93 @@ test("快捷悬浮按钮：拖拽、位置持久化与路由关闭", async ({ pa
     path: "test-results/online-tools-fab.png",
     fullPage: true,
   });
+  expect(errors).toEqual([]);
+});
+
+test("快捷悬浮按钮：左右吸附、点击打开与向内拖动恢复", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto("/requirements");
+  const fab = page.locator(".toolbox-fab");
+  await expect(fab).toBeVisible();
+  await expect(page.locator(".fab-aura, .fab-ring, .fab-orbit")).toHaveCount(0);
+
+  const initial = await fab.boundingBox();
+  expect(initial).not.toBeNull();
+  if (!initial) return;
+  await fab.hover();
+  await page.mouse.down();
+  await page.mouse.move(4, initial.y + initial.height / 2, { steps: 16 });
+  await page.mouse.up();
+  await expect(fab).toHaveClass(/docked-left/);
+  await expect.poll(async () => (await fab.boundingBox())?.x).toBe(0);
+  const leftDock = await fab.boundingBox();
+  expect(leftDock?.width).toBe(30);
+  expect(leftDock?.height).toBe(64);
+
+  let stored = await page.evaluate(() => {
+    const raw = localStorage.getItem("superpm.toolbox.position.v1");
+    return raw ? JSON.parse(raw) : null;
+  });
+  expect(stored).toMatchObject({ version: 2, mode: "docked", side: "left" });
+
+  await page.reload();
+  await expect(fab).toHaveClass(/docked-left/);
+  await expect.poll(async () => (await fab.boundingBox())?.x).toBe(0);
+  await fab.click();
+  let panel = page.getByRole("dialog", { name: "快捷工具" });
+  await expect(panel).toBeVisible();
+  await page.waitForTimeout(300);
+  const leftPanel = await panel.boundingBox();
+  expect(leftPanel?.x ?? 0).toBeGreaterThanOrEqual(30);
+  const beforeKeyboardMove = await fab.boundingBox();
+  await fab.focus();
+  await page.keyboard.press("Alt+ArrowDown");
+  await expect
+    .poll(async () => (await fab.boundingBox())?.y)
+    .not.toBe(beforeKeyboardMove?.y);
+  await expect
+    .poll(async () => (await panel.boundingBox())?.y)
+    .not.toBe(leftPanel?.y);
+  await page.keyboard.press("Escape");
+  await expect(panel).toBeHidden();
+
+  await fab.hover();
+  await page.mouse.down();
+  await page.mouse.move(180, (leftDock?.y ?? 0) + 32, { steps: 12 });
+  await page.mouse.up();
+  await expect(fab).not.toHaveClass(/docked-left/);
+  const floating = await fab.boundingBox();
+  expect(floating?.width).toBe(58);
+  expect(floating?.height).toBe(58);
+  stored = await page.evaluate(() => {
+    const raw = localStorage.getItem("superpm.toolbox.position.v1");
+    return raw ? JSON.parse(raw) : null;
+  });
+  expect(stored).toMatchObject({ version: 2, mode: "float" });
+
+  await fab.hover();
+  const beforeRightDrag = await fab.boundingBox();
+  await page.mouse.down();
+  await page.mouse.move(1436, (beforeRightDrag?.y ?? 0) + 29, { steps: 16 });
+  await page.mouse.up();
+  await expect(fab).toHaveClass(/docked-right/);
+  await expect.poll(async () => (await fab.boundingBox())?.x).toBe(1410);
+  const rightDock = await fab.boundingBox();
+  expect(rightDock?.width).toBe(30);
+  expect(rightDock?.height).toBe(64);
+  stored = await page.evaluate(() => {
+    const raw = localStorage.getItem("superpm.toolbox.position.v1");
+    return raw ? JSON.parse(raw) : null;
+  });
+  expect(stored).toMatchObject({ version: 2, mode: "docked", side: "right" });
+
+  await fab.click();
+  panel = page.getByRole("dialog", { name: "快捷工具" });
+  await expect(panel).toBeVisible();
+  const rightPanel = await panel.boundingBox();
+  expect((rightPanel?.x ?? 0) + (rightPanel?.width ?? 0)).toBeLessThanOrEqual(
+    rightDock?.x ?? 0,
+  );
   expect(errors).toEqual([]);
 });

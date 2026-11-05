@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import {
   onBeforeRouteLeave,
   onBeforeRouteUpdate,
@@ -24,6 +24,10 @@ import { decorative } from "../components/decorativeIcon";
 import InlineRichTextEditor from "../features/requirements/InlineRichTextEditor.vue";
 import MeetingForm from "../features/meetings/MeetingForm.vue";
 import {
+  createAutoSave,
+  type AutoSaveState,
+} from "../features/meetings/autosave";
+import {
   formatMeetingTime,
   meetingTypeTone,
 } from "../features/meetings/format";
@@ -41,11 +45,51 @@ const meeting = ref<Meeting>();
 const loading = ref(false);
 const loadError = ref("");
 const editing = ref(false);
-const saving = ref(false);
+const saveState = ref<AutoSaveState>("idle");
 const saveError = ref("");
+const savedAt = ref("");
 const deleting = ref(false);
 const form = ref<InstanceType<typeof MeetingForm>>();
 let revision = 0;
+
+// 编辑态实时保存：改动合并后落盘，离开页面或点「完成」时强制刷盘等待结果
+const autoSave = createAutoSave<MeetingCreate>({
+  snapshot: () => form.value?.snapshot() ?? null,
+  persist: async (payload) => {
+    if (!meeting.value) return;
+    const formRevision = form.value?.currentRevision() ?? 0;
+    const updated = await meetingApi.update(meeting.value.id, payload);
+    meeting.value = updated;
+    savedAt.value = updated.updatedAt;
+    // 保存期间又有输入时不清脏标记，交给排队的那次继续保存
+    form.value?.clearDirty(formRevision);
+    setTabLabel(route.path, updated.title);
+  },
+  onStateChange: (state) => {
+    saveState.value = state;
+    if (state !== "error") saveError.value = "";
+  },
+  onError: (error) => {
+    saveError.value = errorMessage(error);
+  },
+});
+
+const savedAtLabel = computed(() => {
+  const time = new Date(savedAt.value).getTime();
+  if (Number.isNaN(time)) return "已保存";
+  const date = new Date(time);
+  const pad = (part: number) => String(part).padStart(2, "0");
+  return `已保存 ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+});
+
+const saveLabel = computed(() => {
+  if (saveState.value === "saving") return "保存中…";
+  if (saveState.value === "pending") return "待保存…";
+  if (saveState.value === "saved") return savedAtLabel.value;
+  if (saveState.value === "blocked")
+    return form.value?.blockedHint() || "暂不可保存";
+  return "修改会自动保存";
+});
 
 async function load() {
   if (!Number.isInteger(id.value) || id.value <= 0) {
@@ -70,15 +114,22 @@ async function load() {
 
 watch(id, load, { immediate: true });
 
+/**
+ * 离开前先把待保存内容刷盘：成功直接放行；
+ * 必填项缺失或网络失败时明确提示，避免用户以为已经保存。
+ */
 async function confirmDiscard() {
-  if (!editing.value || !form.value?.isDirty()) return true;
+  if (!editing.value) return true;
+  if (await autoSave.flush()) return true;
   try {
     await ElMessageBox.confirm(
-      "当前修改尚未保存，离开后将丢失这些修改。",
-      "未保存的修改",
+      saveState.value === "blocked"
+        ? "标题或会议时间还没有填完整，这部分内容不会保存。仍要离开吗？"
+        : "最后一次修改没有保存成功，离开后会丢失。仍要离开吗？",
+      "内容未保存",
       {
         type: "warning",
-        confirmButtonText: "离开",
+        confirmButtonText: "仍要离开",
         cancelButtonText: "继续编辑",
       },
     );
@@ -90,9 +141,11 @@ async function confirmDiscard() {
 
 onBeforeRouteLeave(() => confirmDiscard());
 onBeforeRouteUpdate(() => confirmDiscard());
+onBeforeUnmount(() => autoSave.dispose());
 
 function startEdit() {
   saveError.value = "";
+  saveState.value = "idle";
   editing.value = true;
   if (route.query.edit !== "1")
     void router.replace({
@@ -107,35 +160,21 @@ function closeEdit() {
   if (route.query.edit) void router.replace({ path: route.path, query: {} });
 }
 
-async function cancelEdit() {
-  if (form.value?.isDirty()) {
-    try {
-      await ElMessageBox.confirm("确定放弃未保存的修改吗？", "未保存的修改", {
-        confirmButtonText: "放弃修改",
-        cancelButtonText: "继续编辑",
-      });
-    } catch {
-      return;
-    }
+/** 完成编辑：确认最后一次改动已落盘后才退出 */
+async function finishEdit() {
+  if (saveState.value === "blocked") {
+    ElMessage.warning(form.value?.blockedHint() || "请先补全必填项");
+    return;
   }
-  closeEdit();
+  if (await autoSave.flush()) {
+    closeEdit();
+    return;
+  }
+  ElMessage.error(saveError.value || "保存失败，请稍后重试");
 }
 
-async function submit(payload: MeetingCreate) {
-  if (!meeting.value || saving.value) return;
-  saving.value = true;
-  saveError.value = "";
-  try {
-    const updated = await meetingApi.update(meeting.value.id, payload);
-    meeting.value = updated;
-    setTabLabel(route.path, updated.title);
-    ElMessage.success("会议记录已保存");
-    closeEdit();
-  } catch (error) {
-    saveError.value = errorMessage(error);
-  } finally {
-    saving.value = false;
-  }
+async function retrySave() {
+  if (await autoSave.flush()) ElMessage.success("已保存");
 }
 
 async function back() {
@@ -230,7 +269,18 @@ async function removeMeeting() {
               删除
             </el-button>
           </div>
-          <span v-else class="editing-hint">编辑中，保存后生效</span>
+          <button
+            v-if="saveState === 'error'"
+            type="button"
+            class="editing-hint is-error"
+            title="点击重试保存"
+            @click="retrySave"
+          >
+            保存失败，重试
+          </button>
+          <span v-else class="editing-hint" :class="`is-${saveState}`">
+            {{ saveLabel }}
+          </span>
         </div>
       </section>
 
@@ -239,10 +289,10 @@ async function removeMeeting() {
           ref="form"
           :key="meeting.id"
           :meeting="meeting"
-          :saving="saving"
           :error="saveError"
-          @submit="submit"
-          @cancel="cancelEdit"
+          auto-save
+          @change="autoSave.schedule()"
+          @finish="finishEdit"
           @open-requirement="openRequirement"
         />
       </section>
@@ -388,8 +438,26 @@ async function removeMeeting() {
 }
 .editing-hint {
   flex: none;
-  color: var(--warning-text);
+  color: var(--text-faint);
   font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.editing-hint.is-blocked {
+  color: var(--warning-text);
+}
+.editing-hint.is-saved {
+  color: var(--tone-green-fg);
+}
+.editing-hint.is-error {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--tone-red-fg);
+  font-size: 11px;
+  cursor: pointer;
+}
+.editing-hint.is-error:hover {
+  text-decoration: underline;
 }
 .detail-grid {
   display: grid;

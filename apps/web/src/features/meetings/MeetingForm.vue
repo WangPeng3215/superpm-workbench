@@ -16,10 +16,14 @@ const props = defineProps<{
   meeting?: Meeting | null;
   saving?: boolean;
   error?: string;
+  /** 实时保存模式：隐藏提交按钮，改动由父组件自动落盘 */
+  autoSave?: boolean;
 }>();
 const emit = defineEmits<{
   submit: [payload: MeetingCreate];
   cancel: [];
+  finish: [];
+  change: [];
   "open-requirement": [id: number];
 }>();
 
@@ -40,9 +44,13 @@ const requirements = ref<MeetingRequirementRef[]>(
 const contentHtml = ref(props.meeting?.contentHtml ?? "");
 const formError = ref("");
 const dirty = ref(false);
+// 每次改动自增，用于判断保存期间的输入是否已经落盘
+let revision = 0;
 
 function markDirty() {
   dirty.value = true;
+  revision += 1;
+  emit("change");
 }
 function onContentHtml(html: string) {
   contentHtml.value = html;
@@ -50,6 +58,36 @@ function onContentHtml(html: string) {
 }
 function isDirty() {
   return dirty.value;
+}
+
+/** 当前改动序号：父组件在发起保存前取一次，成功后回传以确认没有新输入 */
+function currentRevision() {
+  return revision;
+}
+
+/** 仅当期间没有新输入时清除脏标记，避免把已落盘内容误判成未保存 */
+function clearDirty(savedRevision: number) {
+  if (savedRevision === revision) dirty.value = false;
+}
+
+/** 标题与时间不合法时无法落盘，返回给用户看的原因 */
+function blockedHint(): string {
+  if (!title.value.trim()) return "填写标题后自动保存";
+  if (!meetingTime.value || Number.isNaN(meetingTime.value.getTime()))
+    return "选择会议时间后自动保存";
+  return "";
+}
+
+/** 实时保存用的快照：必填项不完整时返回 null，不产生无效请求 */
+function snapshot(): MeetingCreate | null {
+  if (blockedHint()) return null;
+  return {
+    title: title.value.trim(),
+    type: type.value,
+    meetingTime: (meetingTime.value as Date).toISOString(),
+    requirementIds: requirements.value.map((item) => item.id),
+    contentHtml: contentHtml.value,
+  };
 }
 
 function validate(): MeetingCreate | null {
@@ -88,7 +126,13 @@ onBeforeUnmount(() =>
   window.removeEventListener("beforeunload", onBeforeUnload),
 );
 
-defineExpose({ isDirty });
+defineExpose({
+  isDirty,
+  snapshot,
+  blockedHint,
+  currentRevision,
+  clearDirty,
+});
 </script>
 
 <template>
@@ -171,15 +215,21 @@ defineExpose({ isDirty });
         </div>
       </section>
       <div class="form-actions">
-        <el-button :disabled="saving" @click="emit('cancel')">取消</el-button>
-        <el-button
-          type="primary"
-          native-type="submit"
-          :loading="saving"
-          :disabled="saving"
-        >
-          {{ meeting ? "保存修改" : "保存会议" }}
-        </el-button>
+        <template v-if="autoSave">
+          <span class="auto-save-note">修改会自动保存，不再需要手动提交</span>
+          <el-button type="primary" @click="emit('finish')">完成</el-button>
+        </template>
+        <template v-else>
+          <el-button :disabled="saving" @click="emit('cancel')">取消</el-button>
+          <el-button
+            type="primary"
+            native-type="submit"
+            :loading="saving"
+            :disabled="saving"
+          >
+            {{ meeting ? "保存修改" : "保存会议" }}
+          </el-button>
+        </template>
       </div>
     </aside>
   </form>
@@ -265,11 +315,17 @@ defineExpose({ isDirty });
 }
 .form-actions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: 8px;
   margin-top: auto;
   padding-top: 14px;
   border-top: 1px solid var(--border-soft);
+}
+.auto-save-note {
+  margin-right: auto;
+  color: var(--text-faint);
+  font-size: 11px;
 }
 .form-actions :deep(.el-button) {
   margin: 0;

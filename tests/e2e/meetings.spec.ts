@@ -177,3 +177,57 @@ test("closing an unsaved new-meeting tab waits for leave confirmation", async ({
     page.locator(".topbar-tab").filter({ hasText: "新建会议" }),
   ).toHaveCount(0);
 });
+
+test("meeting edit auto saves without a save button", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+
+  const stamp = Date.now();
+  const title = `自动保存验收-${stamp}`;
+  await page.goto("/meetings/new");
+  await page.getByPlaceholder("例如：第 42 周项目周例会").fill(title);
+  await page
+    .locator('.rich-document[aria-label="会议内容"]')
+    .fill("初始的会议内容");
+  await page.getByRole("button", { name: "保存会议" }).click();
+  await expect(page).toHaveURL(/\/meetings\/\d+$/);
+
+  await page.getByRole("button", { name: "编辑", exact: true }).click();
+  // 编辑态改为自动保存：不再提供提交按钮，只保留「完成」
+  await expect(
+    page.getByRole("button", { name: "保存修改", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "保存会议", exact: true }),
+  ).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "完成" })).toBeVisible();
+  const hint = page.locator(".editing-hint");
+  await expect(hint).toContainText("修改会自动保存");
+
+  // 标题改动后自动落盘
+  await page.getByPlaceholder("例如：第 42 周项目周例会").fill(`${title}-已改`);
+  await expect(hint).toContainText("已保存", { timeout: 8000 });
+
+  // 正文改动同样自动落盘
+  await page
+    .locator('.rich-document[aria-label="会议内容"]')
+    .fill("自动保存后的会议正文");
+  await expect(hint).toContainText("已保存", { timeout: 8000 });
+  // 保存完成后脏标记应清除，关闭页签不再弹未保存确认
+  await page.reload();
+  await expect(
+    page.getByRole("heading", { name: `${title}-已改` }),
+  ).toBeVisible();
+  await expect(
+    page.locator('.rich-document[aria-label="会议内容"]'),
+  ).toContainText("自动保存后的会议正文");
+
+  // 点「完成」退出编辑并回到只读视图
+  await page.getByRole("button", { name: "完成" }).click();
+  await expect(
+    page.getByRole("button", { name: "编辑", exact: true }),
+  ).toBeVisible();
+  await expect(page).not.toHaveURL(/edit=1/);
+
+  expect(errors).toEqual([]);
+});

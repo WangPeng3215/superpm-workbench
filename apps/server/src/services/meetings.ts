@@ -185,8 +185,15 @@ export class MeetingService {
     const parsed = meetingUpdateSchema.parse(input);
     this.db.transaction(() => {
       this.row(id);
-      if (parsed.requirementIds !== undefined)
+      // 实时保存会频繁提交完整快照：关联需求没变时不重建关联表，避免无谓写入
+      let nextRequirementIds: number[] | null = null;
+      if (
+        parsed.requirementIds !== undefined &&
+        !this.sameRequirements(id, parsed.requirementIds)
+      ) {
         this.assertRequirements(parsed.requirementIds);
+        nextRequirementIds = parsed.requirementIds;
+      }
       const assignments: string[] = [];
       const values: (string | number)[] = [];
       const set = (column: string, value: string | number) => {
@@ -204,8 +211,8 @@ export class MeetingService {
       this.db
         .prepare(`UPDATE meetings SET ${assignments.join(", ")} WHERE id = ?`)
         .run(...values, id);
-      if (parsed.requirementIds !== undefined)
-        this.replaceRequirements(id, parsed.requirementIds, timestamp);
+      if (nextRequirementIds)
+        this.replaceRequirements(id, nextRequirementIds, timestamp);
     })();
     return this.get(id);
   }
@@ -281,6 +288,18 @@ export class MeetingService {
         "VALIDATION_ERROR",
         "关联的需求不存在或已被删除，请重新选择",
       );
+  }
+
+  /** 关联需求是否与库中一致（按集合比较，不关心存储顺序） */
+  private sameRequirements(meetingId: number, ids: number[]): boolean {
+    const rows = this.db
+      .prepare(
+        "SELECT requirement_id FROM meeting_requirements WHERE meeting_id = ?",
+      )
+      .all(meetingId) as { requirement_id: number }[];
+    if (rows.length !== ids.length) return false;
+    const current = new Set(rows.map((row) => row.requirement_id));
+    return ids.every((id) => current.has(id));
   }
 
   private replaceRequirements(

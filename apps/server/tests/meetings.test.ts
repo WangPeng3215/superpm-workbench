@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import Database from "better-sqlite3";
 import type { FastifyInstance } from "fastify";
 import type {
   Meeting,
@@ -144,6 +145,76 @@ describe("meetings HTTP API", () => {
     ).toEqual([]);
     expect((await app.inject(`/api/meetings/${created.id}`)).statusCode).toBe(
       404,
+    );
+  });
+
+  it("skips rebuilding requirement links when a full snapshot repeats them", async () => {
+    const a = await createRequirement("登录改造");
+    const b = await createRequirement("报表导出");
+    const created = await createMeeting({
+      title: "实时保存会议",
+      requirementIds: [a.id],
+    });
+
+    // 用哨兵时间戳确认关联表是否被重建：实时保存会反复提交完整快照
+    const databasePath = join(directory, "test.sqlite");
+    const withDb = <T>(run: (db: Database.Database) => T): T => {
+      const db = new Database(databasePath);
+      try {
+        return run(db);
+      } finally {
+        db.close();
+      }
+    };
+    const linkTimes = () =>
+      withDb(
+        (db) =>
+          db
+            .prepare(
+              "SELECT requirement_id, created_at FROM meeting_requirements WHERE meeting_id = ? ORDER BY requirement_id",
+            )
+            .all(created.id) as {
+            requirement_id: number;
+            created_at: string;
+          }[],
+      );
+    withDb((db) =>
+      db
+        .prepare(
+          "UPDATE meeting_requirements SET created_at = '2020-01-01T00:00:00.000Z' WHERE meeting_id = ?",
+        )
+        .run(created.id),
+    );
+    const sentinel = linkTimes();
+    expect(sentinel).toEqual([
+      { requirement_id: a.id, created_at: "2020-01-01T00:00:00.000Z" },
+    ]);
+
+    // 关联需求未变化：只更新正文，不动关联表
+    const patched = await app.inject({
+      method: "PATCH",
+      url: `/api/meetings/${created.id}`,
+      payload: {
+        title: "实时保存会议（改）",
+        requirementIds: [a.id],
+        contentHtml: "<p>自动保存的正文</p>",
+      },
+    });
+    expect(patched.statusCode).toBe(200);
+    expect(patched.json<Meeting>().requirements.map((item) => item.id)).toEqual(
+      [a.id],
+    );
+    expect(linkTimes()).toEqual(sentinel);
+
+    // 关联需求变化：重建关联表
+    await app.inject({
+      method: "PATCH",
+      url: `/api/meetings/${created.id}`,
+      payload: { requirementIds: [a.id, b.id] },
+    });
+    expect(linkTimes().map((row) => row.requirement_id)).toEqual([a.id, b.id]);
+    expect(linkTimes().map((row) => row.created_at)).not.toContain(
+      "2020-01-01T00:00:00.000Z",
     );
   });
 
