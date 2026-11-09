@@ -231,3 +231,53 @@ test("meeting edit auto saves without a save button", async ({ page }) => {
 
   expect(errors).toEqual([]);
 });
+
+test("meeting keeps edit mode after switching tabs and back", async ({
+  page,
+  request,
+}) => {
+  const title = `编辑态记忆-${Date.now()}`;
+  const created = await (
+    await request.post("/api/meetings", {
+      data: {
+        title,
+        type: "weekly",
+        meetingTime: new Date().toISOString(),
+        contentHtml: "<p>初始内容</p>",
+        requirementIds: [],
+      },
+    })
+  ).json();
+  expect(created.id).toBeGreaterThan(0);
+
+  await page.goto("/requirements");
+  await page.getByRole("link", { name: "会议记录" }).click();
+  await expect(page).toHaveURL(/\/meetings$/);
+  await page.getByRole("button", { name: title }).click();
+  await expect(page).toHaveURL(new RegExp(`/meetings/${created.id}$`));
+
+  await page.getByRole("button", { name: "编辑", exact: true }).click();
+  await expect(page.getByRole("button", { name: "完成" })).toBeVisible();
+
+  // 页签不携带 ?edit=1，切走再回来应仍停在编辑态（地址栏同步补回 edit）
+  await page.locator(".topbar-tab").filter({ hasText: "需求列表" }).click();
+  await expect(page).toHaveURL(/\/requirements$/);
+  await page.locator(".topbar-tab").filter({ hasText: title }).click();
+  await expect(page).toHaveURL(new RegExp(`/meetings/${created.id}\\?edit=1$`));
+  await expect(page.getByRole("button", { name: "完成" })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "编辑", exact: true }),
+  ).toHaveCount(0);
+
+  // 点「完成」结束编辑后，再切回来保持只读
+  await page.getByRole("button", { name: "完成" }).click();
+  await expect(
+    page.getByRole("button", { name: "编辑", exact: true }),
+  ).toBeVisible();
+  await page.locator(".topbar-tab").filter({ hasText: "需求列表" }).click();
+  await page.locator(".topbar-tab").filter({ hasText: title }).click();
+  await expect(
+    page.getByRole("button", { name: "编辑", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "完成" })).toHaveCount(0);
+});

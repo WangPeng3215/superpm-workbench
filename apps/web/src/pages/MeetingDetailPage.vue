@@ -32,6 +32,11 @@ import {
   meetingTypeTone,
 } from "../features/meetings/format";
 import { removeTab, setTabLabel } from "../stores/tabs";
+import {
+  clearMeetingEditing,
+  isMeetingEditing,
+  markMeetingEditing,
+} from "../stores/meeting-editing";
 
 const BackIcon = decorative(ArrowLeftOutlined);
 const ClockIcon = decorative(ClockCircleOutlined);
@@ -103,7 +108,19 @@ async function load() {
     const detail = await meetingApi.get(id.value);
     if (token !== revision) return;
     meeting.value = detail;
-    editing.value = route.query.edit === "1";
+    // 页签不携带 ?edit=1，切页面再回来靠 store 记住的编辑态恢复
+    const resumeEditing =
+      route.query.edit === "1" || isMeetingEditing(id.value);
+    if (resumeEditing) {
+      markMeetingEditing(id.value);
+      // 恢复后把 query 同步回去，刷新时也能停在编辑态
+      if (route.query.edit !== "1")
+        void router.replace({
+          path: route.path,
+          query: { ...route.query, edit: "1" },
+        });
+    }
+    editing.value = resumeEditing;
     setTabLabel(route.path, detail.title);
   } catch (error) {
     if (token === revision) loadError.value = errorMessage(error);
@@ -147,6 +164,7 @@ function startEdit() {
   saveError.value = "";
   saveState.value = "idle";
   editing.value = true;
+  markMeetingEditing(id.value);
   if (route.query.edit !== "1")
     void router.replace({
       path: route.path,
@@ -157,6 +175,7 @@ function startEdit() {
 function closeEdit() {
   editing.value = false;
   saveError.value = "";
+  clearMeetingEditing(id.value);
   if (route.query.edit) void router.replace({ path: route.path, query: {} });
 }
 
@@ -210,6 +229,7 @@ async function removeMeeting() {
     await meetingApi.remove(meeting.value.id);
     ElMessage.success("会议记录已删除");
     editing.value = false;
+    clearMeetingEditing(meeting.value.id);
     removeTab(route.path);
     await router.push("/meetings");
   } catch (error) {

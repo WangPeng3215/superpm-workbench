@@ -5,6 +5,7 @@ import type {
   RequirementListResult,
   RequirementReferenceState,
   RequirementRelations,
+  RequirementOptimizationPointRef,
   RequirementUpdate,
   StageHistory,
   StageWorkspace,
@@ -35,6 +36,11 @@ export const requirementApi = {
     request<StageHistory[]>(`/requirements/${id}/history`),
   relations: (id: number) =>
     request<RequirementRelations>(`/requirements/${id}/relations`),
+  /** 反查来源优化点：该需求由哪些优化点转换而来 */
+  optimizationPoints: (id: number) =>
+    request<RequirementOptimizationPointRef[]>(
+      `/requirements/${id}/optimization-points`,
+    ),
   references: (ids: number[]) => {
     if (!ids.length) return Promise.resolve([] as RequirementReferenceState[]);
     return request<RequirementReferenceState[]>(

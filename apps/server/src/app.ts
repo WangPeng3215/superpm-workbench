@@ -113,6 +113,7 @@ export async function createApp(
     notes,
     onlineTools,
     meetings,
+    optimizationPoints,
   } = container;
   const paths = { databasePath, workspacePath };
   const updates = createUpdateService({
@@ -301,6 +302,11 @@ export async function createApp(
         },
         { key: "tasks", name: roadmap.tasks, status: "available" },
         { key: "meetings", name: "会议记录", status: "available" },
+        {
+          key: "optimization-points",
+          name: "优化点管理",
+          status: "available",
+        },
         { key: "online-tools", name: "工具箱", status: "available" },
         { key: "updates", name: "版本与更新", status: "available" },
         ...Object.entries(roadmap)
@@ -380,15 +386,13 @@ export async function createApp(
     service.list(request.query ?? {}),
   );
   app.post("/api/requirements", async (request, reply) => {
-    const created = service.create(request.body);
-    // 新建需求立即初始化物理目录与默认资源（文档 §12.1/§12.5）。
+    // 建需与目录初始化走同一入口（优化点转换也调用它），
     // 初始化失败不阻断建需：状态落库为 failed 并记录阶段，前端可见并可重试。
-    try {
-      directories.initialize(created.id);
-    } catch (error) {
-      app.log.error(error, "初始化需求目录失败");
-    }
-    return reply.status(201).send(created);
+    const { requirement, workspaceError } = service.createWithWorkspace(
+      request.body,
+    );
+    if (workspaceError) app.log.error(workspaceError, "初始化需求目录失败");
+    return reply.status(201).send(requirement);
   });
   app.get<{ Params: { id: string } }>(
     "/api/requirements/:id",
@@ -412,6 +416,12 @@ export async function createApp(
   app.get<{ Params: { id: string } }>(
     "/api/requirements/:id/relations",
     async (request) => service.relations(parseId(request.params.id)),
+  );
+  // 反查来源优化点：优化点转正式需求后，需求详情可回看来源记录
+  app.get<{ Params: { id: string } }>(
+    "/api/requirements/:id/optimization-points",
+    async (request) =>
+      optimizationPoints.byRequirement(parseId(request.params.id)),
   );
   const fileListQuery = z.object({
     phase: z.union([z.enum(stages), z.literal("all")]).default("analysis"),
@@ -741,6 +751,43 @@ export async function createApp(
     "/api/meetings/:id",
     async (request, reply) => {
       meetings.remove(parseScopedId(request.params.id, "会议"));
+      return reply.status(204).send();
+    },
+  );
+  // ===== 优化点管理 =====
+  // 优化点与正式需求是两个独立实体：先轻量记录，评估后再转为正式需求。
+  app.get("/api/optimization-points", async (request) =>
+    optimizationPoints.list(request.query ?? {}),
+  );
+  app.post("/api/optimization-points", async (request, reply) =>
+    reply.status(201).send(optimizationPoints.create(request.body)),
+  );
+  // 转换走独立动作，复用需求创建流程（含目录初始化），不允许用 PATCH 改状态绕过
+  app.post<{ Params: { id: string } }>(
+    "/api/optimization-points/:id/convert",
+    async (request) =>
+      optimizationPoints.convert(
+        parseScopedId(request.params.id, "优化点"),
+        request.body ?? {},
+      ),
+  );
+  app.get<{ Params: { id: string } }>(
+    "/api/optimization-points/:id",
+    async (request) =>
+      optimizationPoints.get(parseScopedId(request.params.id, "优化点")),
+  );
+  app.patch<{ Params: { id: string } }>(
+    "/api/optimization-points/:id",
+    async (request) =>
+      optimizationPoints.update(
+        parseScopedId(request.params.id, "优化点"),
+        request.body,
+      ),
+  );
+  app.delete<{ Params: { id: string } }>(
+    "/api/optimization-points/:id",
+    async (request, reply) => {
+      optimizationPoints.remove(parseScopedId(request.params.id, "优化点"));
       return reply.status(204).send();
     },
   );

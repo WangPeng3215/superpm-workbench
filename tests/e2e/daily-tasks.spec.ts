@@ -175,9 +175,13 @@ test("每日任务：计时、自动生成工时与校正", async ({ page }) => 
   ).padStart(2, "0")}`;
   const endField = entryDialog.locator(".entry-controls .el-input").nth(1);
   await endField.locator(".el-input__wrapper").click();
-  await endInput.press("Control+a");
-  await endInput.pressSequentially(end);
-  await endInput.press("Enter");
+  // 时间选择器是受控的 typeahead 输入，全量并行时偶发丢字：重试到值生效为止
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await endInput.press("Control+a");
+    await endInput.pressSequentially(end);
+    await endInput.press("Enter");
+    if ((await endInput.inputValue()) === end) break;
+  }
   await expect(endInput).toHaveValue(end);
   await entryDialog
     .getByRole("textbox", { name: "修正原因（可选）" })

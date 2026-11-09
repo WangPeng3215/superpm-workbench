@@ -11,6 +11,7 @@ import type { TabPaneName } from "element-plus";
 import {
   dateFields,
   dateLabels,
+  optimizationPointStatusLabels,
   priorities,
   requirementStatuses,
   requirementTypes,
@@ -20,6 +21,7 @@ import {
   typeLabels,
   type ArtifactNode,
   type Requirement,
+  type RequirementOptimizationPointRef,
   type RequirementRelations,
   type RequirementUpdate,
 } from "@superpm/shared";
@@ -31,6 +33,7 @@ import RequirementDocManager from "../features/requirements/RequirementDocManage
 import RequirementIssuesPanel from "../features/requirements/RequirementIssuesPanel.vue";
 import InlineRichTextEditor from "../features/requirements/InlineRichTextEditor.vue";
 import { tagTone } from "../features/requirements/enum-tags";
+import { optimizationStatusTone } from "../features/optimization-points/format";
 type Editable = Pick<
   Requirement,
   | "name"
@@ -54,6 +57,8 @@ const router = useRouter();
 const id = ref(Number(route.params.id));
 const item = ref<Requirement>();
 const relations = ref<RequirementRelations>();
+// 来源优化点：由优化点转换而来时展示，可点击回到来源记录
+const sourcePoints = ref<RequirementOptimizationPointRef[]>([]);
 const draft = ref<Editable>();
 const initial = ref("");
 const loading = ref(false),
@@ -180,13 +185,15 @@ async function load() {
   loading.value = true;
   error.value = "";
   try {
-    const [detail, related] = await Promise.all([
+    const [detail, related, sources] = await Promise.all([
       requirementApi.get(id.value),
       requirementApi.relations(id.value),
+      requirementApi.optimizationPoints(id.value),
     ]);
     if (token !== revision) return;
     item.value = detail;
     relations.value = related;
+    sourcePoints.value = sources;
     resetDraft(detail);
     // 顶栏页签回填真实文案「编号 · 名称」（进入时先以「需求 #id」占位）
     setTabLabel(path, `${detail.requirementNo} · ${detail.name}`);
@@ -211,12 +218,14 @@ async function refresh() {
   if (!Number.isInteger(id.value) || id.value <= 0) return;
   const path = route.path;
   try {
-    const [detail, related] = await Promise.all([
+    const [detail, related, sources] = await Promise.all([
       requirementApi.get(id.value),
       requirementApi.relations(id.value),
+      requirementApi.optimizationPoints(id.value),
     ]);
     item.value = detail;
     relations.value = related;
+    sourcePoints.value = sources;
     if (!dirty.value) resetDraft(detail);
     setTabLabel(path, `${detail.requirementNo} · ${detail.name}`);
   } catch {
@@ -269,6 +278,10 @@ function go(target: Requirement) {
 }
 function openRequirement(requirementId: number) {
   void router.push(`/requirements/${requirementId}`);
+}
+// 来源优化点：打开来源记录查看评估过程（未保存的需求改动由路由守卫处理）
+function openSourcePoint(pointId: number) {
+  void router.push(`/optimization-points/${pointId}`);
 }
 </script>
 <template>
@@ -530,6 +543,32 @@ function openRequirement(requirementId: number) {
                     >
                       暂无关联的父需求或子需求。
                     </p>
+                  </div>
+                  <div v-if="sourcePoints.length" class="related-block">
+                    <h2>来源优化点</h2>
+                    <div class="related-list">
+                      <div
+                        v-for="source in sourcePoints"
+                        :key="source.id"
+                        class="related-row"
+                      >
+                        <el-tag size="small" effect="plain">优化点</el-tag>
+                        <button
+                          type="button"
+                          class="link-button"
+                          @click="openSourcePoint(source.id)"
+                        >
+                          #{{ source.id }} · {{ source.name }}
+                        </button>
+                        <el-tag
+                          class="enum-tag"
+                          :class="optimizationStatusTone[source.status]"
+                          >{{
+                            optimizationPointStatusLabels[source.status]
+                          }}</el-tag
+                        >
+                      </div>
+                    </div>
                   </div>
                 </form>
               </div>

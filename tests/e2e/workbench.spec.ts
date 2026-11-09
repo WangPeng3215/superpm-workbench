@@ -561,6 +561,7 @@ test("workbench shell uses compact native theme and collapsed navigation", async
   await page.goto("/requirements");
   await expect(page.locator('nav[aria-label="主导航"] > a')).toHaveText([
     "需求列表",
+    "优化点",
     "每日任务",
     "会议记录",
     "便签",

@@ -453,7 +453,7 @@ describe("migrations 0005（资产与问题管理）", () => {
   });
   it("SCHEMA_VERSION 与已应用迁移数一致", () => {
     migrate(db);
-    expect(SCHEMA_VERSION).toBe(17);
+    expect(SCHEMA_VERSION).toBe(19);
     expect(appliedVersions(db)).toHaveLength(SCHEMA_VERSION);
   });
 });
@@ -1103,5 +1103,165 @@ describe("migrations 0017（便签）", () => {
         .prepare("SELECT converted_task_id FROM notes WHERE title = '保持灵感'")
         .get(),
     ).toEqual({ converted_task_id: null });
+  });
+});
+
+describe("migrations 0018（优化点）", () => {
+  // 0019 会把「优化思路」并入正文并重建表，这里断言的是最终形态
+  it("创建优化点表并约束状态枚举、模块默认值与需求关联", () => {
+    migrate(db);
+    expect(tableColumns(db, "optimization_points")).toEqual([
+      "id",
+      "name",
+      "module",
+      "description",
+      "description_html",
+      "remark",
+      "status",
+      "requirement_id",
+      "created_at",
+      "updated_at",
+    ]);
+    const indexes = (
+      db
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='optimization_points'",
+        )
+        .all() as { name: string }[]
+    ).map((row) => row.name);
+    expect(indexes).toEqual(
+      expect.arrayContaining([
+        "idx_optimization_points_updated",
+        "idx_optimization_points_status_updated",
+        "idx_optimization_points_requirement",
+      ]),
+    );
+    const timestamp = "2026-11-09T03:00:00.000Z";
+    const insert = db.prepare(
+      `INSERT INTO optimization_points (name, description, created_at, updated_at)
+       VALUES (?, ?, ?, ?)`,
+    );
+    insert.run("导出入口不明显", "导出藏在二级菜单", timestamp, timestamp);
+    expect(
+      db
+        .prepare(
+          "SELECT module, description_html, remark, status, requirement_id FROM optimization_points WHERE name = '导出入口不明显'",
+        )
+        .get(),
+    ).toEqual({
+      module: "",
+      description_html: "",
+      remark: "",
+      status: "pending",
+      requirement_id: null,
+    });
+    expect(() =>
+      db
+        .prepare(
+          "UPDATE optimization_points SET status = 'invalid' WHERE name = '导出入口不明显'",
+        )
+        .run(),
+    ).toThrowError(/CHECK/i);
+    // 关联正式需求被物理删除时只清空引用，优化点记录保留
+    db.prepare(
+      `INSERT INTO requirements (requirement_no, name, type, priority, description, status, current_stage, proposed_at, created_at, updated_at)
+       VALUES ('REQ-0001', '导出优化', 'improvement', 'P2', '', 'not_started', 'analysis', '2026-11-09', ?, ?)`,
+    ).run(timestamp, timestamp);
+    const requirementId = Number(
+      (
+        db
+          .prepare(
+            "SELECT id FROM requirements WHERE requirement_no = 'REQ-0001'",
+          )
+          .get() as { id: number }
+      ).id,
+    );
+    db.prepare(
+      "UPDATE optimization_points SET requirement_id = ?, status = 'converted' WHERE name = '导出入口不明显'",
+    ).run(requirementId);
+    db.prepare("DELETE FROM requirements WHERE id = ?").run(requirementId);
+    expect(
+      db
+        .prepare(
+          "SELECT requirement_id, status FROM optimization_points WHERE name = '导出入口不明显'",
+        )
+        .get(),
+    ).toEqual({ requirement_id: null, status: "converted" });
+  });
+});
+
+describe("migrations 0019（优化点正文合并）", () => {
+  // 0018 之后的旧库形状：有 solution 列、没有 description_html
+  function legacyDatabase() {
+    const scratch = new Database(":memory:");
+    scratch.exec(
+      `CREATE TABLE requirements (id INTEGER PRIMARY KEY AUTOINCREMENT);
+       CREATE TABLE optimization_points (
+         id INTEGER PRIMARY KEY AUTOINCREMENT,
+         name TEXT NOT NULL,
+         module TEXT NOT NULL DEFAULT '',
+         description TEXT NOT NULL DEFAULT '',
+         solution TEXT NOT NULL DEFAULT '',
+         remark TEXT NOT NULL DEFAULT '',
+         status TEXT NOT NULL DEFAULT 'pending',
+         requirement_id INTEGER REFERENCES requirements(id) ON DELETE SET NULL,
+         created_at TEXT NOT NULL,
+         updated_at TEXT NOT NULL
+       );`,
+    );
+    return scratch;
+  }
+
+  it("把优化思路并入正文、补上 HTML 列并去掉思路列", () => {
+    const scratch = legacyDatabase();
+    const timestamp = "2026-11-09T03:00:00.000Z";
+    const insert = scratch.prepare(
+      `INSERT INTO optimization_points (name, description, solution, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?)`,
+    );
+    insert.run("两者都有", "导出入口不明显。", "提到工具栏。", timestamp, timestamp);
+    insert.run("只有思路", "", "补充最近打开分组。", timestamp, timestamp);
+    insert.run("只有描述", "批量操作繁琐。", "", timestamp, timestamp);
+
+    scratch.exec(
+      readFileSync(join(migrationsDir, "0019_optimization_point_content.sql"), "utf8"),
+    );
+
+    expect(tableColumns(scratch, "optimization_points")).toEqual([
+      "id",
+      "name",
+      "module",
+      "description",
+      "description_html",
+      "remark",
+      "status",
+      "requirement_id",
+      "created_at",
+      "updated_at",
+    ]);
+    const rows = scratch
+      .prepare(
+        "SELECT name, description, description_html FROM optimization_points ORDER BY id",
+      )
+      .all() as {
+      name: string;
+      description: string;
+      description_html: string;
+    }[];
+    expect(rows[0].description).toBe(
+      "导出入口不明显。\n\n## 优化思路\n\n提到工具栏。",
+    );
+    expect(rows[1].description).toBe("补充最近打开分组。");
+    expect(rows[2].description).toBe("批量操作繁琐。");
+    for (const row of rows) expect(row.description_html).toBe("");
+    // 自增序列跟随保留的 id，不会因重建而回退
+    const next = scratch
+      .prepare(
+        `INSERT INTO optimization_points (name, description, created_at, updated_at)
+         VALUES ('新增', '新内容', ?, ?)`,
+      )
+      .run(timestamp, timestamp);
+    expect(Number(next.lastInsertRowid)).toBe(4);
+    scratch.close();
   });
 });

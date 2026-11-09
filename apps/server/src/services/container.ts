@@ -14,6 +14,7 @@ import { DailyTaskService } from "./daily-tasks.js";
 import { OnlineToolService } from "./online-tools.js";
 import { MeetingService } from "./meetings.js";
 import { NoteService } from "./notes.js";
+import { OptimizationPointService } from "./optimization-points.js";
 
 export interface ServiceContainerOptions {
   databasePath?: string;
@@ -36,6 +37,7 @@ export interface ServiceContainer {
   notes: NoteService;
   onlineTools: OnlineToolService;
   meetings: MeetingService;
+  optimizationPoints: OptimizationPointService;
   close(): void;
 }
 
@@ -59,7 +61,9 @@ export function createServiceContainer(
     throw error;
   }
   const directories = new RequirementDirectoryResolver(db, workspacePath);
-  const requirements = new RequirementService(db);
+  // 注入目录解析器：建需与优化点转换共用 createWithWorkspace（含目录初始化）
+  const requirements = new RequirementService(db, directories);
+  const optimizationPoints = new OptimizationPointService(db, requirements);
   const auth = new AuthService(db);
   auth.ensureSeed();
   const issues = new IssueService(db, requirements, workspacePath, directories);
@@ -104,6 +108,7 @@ export function createServiceContainer(
     notes: new NoteService(db, dailyTasks),
     onlineTools: new OnlineToolService(db),
     meetings: new MeetingService(db),
+    optimizationPoints,
     close() {
       if (closed) return;
       closed = true;

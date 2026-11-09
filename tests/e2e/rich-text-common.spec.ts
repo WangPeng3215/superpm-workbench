@@ -245,3 +245,57 @@ test("tables can be inserted and edited from the toolbar", async ({
 
   expect(errors).toEqual([]);
 });
+
+// 外部粘贴常带源码颜色，会把固定色写进正文导致切主题后不跟随；
+// 编辑器内部复制（ProseMirror 会标记 data-pm-slice）应保持原有颜色。
+test("pasted rich text drops source colors and keeps internal ones", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+
+  await page.goto("/meetings/new");
+  const doc = page.locator('.rich-document[aria-label="会议内容"]');
+  await doc.click();
+
+  const paste = (html: string, text: string) =>
+    page.evaluate(
+      ({ html, text }) => {
+        const target = document.querySelector<HTMLElement>(
+          '.rich-document[aria-label="会议内容"]',
+        );
+        const data = new DataTransfer();
+        data.setData("text/html", html);
+        data.setData("text/plain", text);
+        target?.dispatchEvent(
+          new ClipboardEvent("paste", {
+            clipboardData: data,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      },
+      { html, text },
+    );
+
+  await paste(
+    '<p><span style="color:#c00000;background-color:#ffff00">外部彩色文字</span> <strong>加粗保留</strong></p><font color="#0000ff">字体标签颜色</font>',
+    "外部彩色文字 加粗保留 字体标签颜色",
+  );
+  await expect(doc).toContainText("外部彩色文字");
+  await expect(doc).toContainText("字体标签颜色");
+  await expect(doc.locator("strong")).toHaveCount(1);
+  const pasted = await doc.innerHTML();
+  // 颜色样式与 color/bgcolor 属性都应被剥离
+  expect(pasted).not.toMatch(/color/i);
+  expect(pasted).not.toContain("background");
+
+  await paste(
+    '<p data-pm-slice="0 0 []"><span style="color:#c00000">内部复制保留色</span></p>',
+    "内部复制保留色",
+  );
+  const internal = doc.locator("span").filter({ hasText: "内部复制保留色" });
+  await expect(internal).toHaveCSS("color", "rgb(192, 0, 0)");
+
+  expect(errors).toEqual([]);
+});

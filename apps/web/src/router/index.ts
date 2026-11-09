@@ -21,6 +21,22 @@ export const router = createRouter({
       meta: { title: "需求详情", keepAlive: true },
     },
     {
+      path: "/optimization-points",
+      component: () => import("../pages/OptimizationPointsPage.vue"),
+      meta: { title: "优化点管理" },
+    },
+    {
+      // 需排在 /:id 之前：否则 "new" 会被当成优化点 ID
+      path: "/optimization-points/new",
+      component: () => import("../pages/OptimizationPointCreatePage.vue"),
+      meta: { title: "新建优化点" },
+    },
+    {
+      path: "/optimization-points/:id",
+      component: () => import("../pages/OptimizationPointDetailPage.vue"),
+      meta: { title: "优化点详情" },
+    },
+    {
       path: "/meetings",
       component: () => import("../pages/MeetingsPage.vue"),
       meta: { title: "会议记录" },

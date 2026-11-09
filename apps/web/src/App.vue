@@ -4,6 +4,7 @@ import { useRoute, useRouter } from "vue-router";
 import type { FormInstance, FormRules } from "element-plus";
 import { ElMessage, ElMessageBox } from "element-plus";
 import {
+  BulbOutlined,
   CalendarOutlined,
   FileTextOutlined,
   ProjectOutlined,
@@ -66,6 +67,7 @@ watch(
 
 const navigation = [
   { path: "/requirements", label: "需求列表", icon: ProjectOutlined },
+  { path: "/optimization-points", label: "优化点", icon: BulbOutlined },
   { path: "/tasks", label: "每日任务", icon: CalendarOutlined },
   { path: "/meetings", label: "会议记录", icon: TeamOutlined },
   { path: "/notes", label: "便签", icon: FileTextOutlined },

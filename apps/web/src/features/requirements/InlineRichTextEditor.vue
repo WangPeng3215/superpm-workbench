@@ -46,6 +46,7 @@ import { dark } from "../../theme";
 import { BlockStyle, MAX_BLOCK_INDENT, type BlockAlign } from "./block-style";
 import { imageDisplayUrl, toDisplayHtml } from "./doc-images";
 import { looksLikeMarkdown, markdownToHtml } from "./doc-markdown";
+import { stripPastedColors } from "./paste-clean";
 import RequirementReferenceDialog from "./RequirementReferenceDialog.vue";
 import type { RequirementOption } from "./requirement-options";
 import { RequirementRef, resolveRequirementRefHtml } from "./requirement-ref";
@@ -175,6 +176,8 @@ const editor = useEditor({
       class: "rich-document",
       "aria-label": props.label ?? "需求描述内容",
     },
+    // 外部粘贴去掉文字颜色与背景色，让正文跟随主题；编辑器内部复制保持原样
+    transformPastedHTML: stripPastedColors,
     // 粘贴：本地图片优先接管；纯文本带 Markdown 结构时按 Markdown 解析后插入
     handlePaste: (view, event) => {
       const files = imageFilesFrom(event.clipboardData);

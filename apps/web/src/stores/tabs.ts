@@ -9,11 +9,14 @@ export interface WorkTab {
   label: string; // 页签文案（详情页加载完成后回填「编号 · 名称」/ 会议标题）
   requirementId?: number; // 需求详情页签关联的需求 id
   meetingId?: number; // 会议详情页签关联的会议 id
+  optimizationPointId?: number; // 优化点详情页签关联的优化点 id
 }
 
 // 菜单功能路由 → 页签文案：首次进入对应功能后开出页签
 const FEATURE_TAB_LABELS: Record<string, string> = {
   "/requirements": "需求列表",
+  "/optimization-points": "优化点管理",
+  "/optimization-points/new": "新建优化点",
   "/meetings": "会议记录",
   "/meetings/new": "新建会议",
   "/tasks": "每日任务",
@@ -30,13 +33,15 @@ export const tabsStore = reactive<{
 
 // 详情路由 → 实体 id（非详情路径返回 null）
 function detailId(path: string): {
-  kind: "requirement" | "meeting";
+  kind: "requirement" | "meeting" | "optimizationPoint";
   id: number;
 } | null {
   const requirement = /^\/requirements\/(\d+)$/.exec(path);
   if (requirement) return { kind: "requirement", id: Number(requirement[1]) };
   const meeting = /^\/meetings\/(\d+)$/.exec(path);
   if (meeting) return { kind: "meeting", id: Number(meeting[1]) };
+  const point = /^\/optimization-points\/(\d+)$/.exec(path);
+  if (point) return { kind: "optimizationPoint", id: Number(point[1]) };
   return null;
 }
 
@@ -61,6 +66,15 @@ export function syncRoute(path: string) {
       path,
       label: `会议 #${detail.id}`,
       meetingId: detail.id,
+    });
+    return;
+  }
+  if (detail?.kind === "optimizationPoint") {
+    tabsStore.tabs.push({
+      key: path,
+      path,
+      label: `优化点 #${detail.id}`,
+      optimizationPointId: detail.id,
     });
     return;
   }

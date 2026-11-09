@@ -6,6 +6,7 @@ import {
 } from "@superpm/shared";
 import type Database from "better-sqlite3";
 import { RequirementsRepository } from "../repositories/requirements.js";
+import type { RequirementDirectoryResolver } from "./requirement-directory.js";
 
 export class DomainError extends Error {
   constructor(
@@ -18,7 +19,11 @@ export class DomainError extends Error {
 }
 export class RequirementService {
   private readonly repo: RequirementsRepository;
-  constructor(private readonly db: Database.Database) {
+  constructor(
+    private readonly db: Database.Database,
+    // 可选：提供时 createWithWorkspace 才会初始化物理目录（MCP 等只建记录的调用方无需注入）
+    private readonly directories?: RequirementDirectoryResolver,
+  ) {
     this.repo = new RequirementsRepository(db);
   }
   create(input: unknown) {
@@ -29,6 +34,26 @@ export class RequirementService {
       this.repo.audit(item.id, "create", data);
       return item;
     });
+  }
+  /**
+   * 建需求的统一入口：普通建需与优化点转换都走这里，避免出现第二套创建逻辑。
+   * 目录初始化沿用既有补偿语义——失败不阻断建需，状态落库为 failed 供前端重试。
+   * 返回 workspaceReady 便于调用方提示「目录待修复」。
+   */
+  createWithWorkspace(input: unknown): {
+    requirement: ReturnType<RequirementService["create"]>;
+    workspaceReady: boolean;
+    workspaceError: unknown;
+  } {
+    const requirement = this.create(input);
+    if (!this.directories)
+      return { requirement, workspaceReady: true, workspaceError: null };
+    try {
+      this.directories.initialize(requirement.id);
+      return { requirement, workspaceReady: true, workspaceError: null };
+    } catch (error) {
+      return { requirement, workspaceReady: false, workspaceError: error };
+    }
   }
   get(id: number) {
     const item = this.repo.get(id);
@@ -69,6 +94,13 @@ export class RequirementService {
       this.db
         .prepare("DELETE FROM meeting_requirements WHERE requirement_id = ?")
         .run(id);
+      // 优化点关联同样显式清理：保留优化点原始内容与「已转正式需求」状态，
+      // 只断开关联并标记失效，允许用户在优化点详情中重新转换。
+      this.db
+        .prepare(
+          "UPDATE optimization_points SET requirement_id = NULL, updated_at = ? WHERE requirement_id = ?",
+        )
+        .run(new Date().toISOString(), id);
       this.repo.audit(id, "delete", {});
     });
   }

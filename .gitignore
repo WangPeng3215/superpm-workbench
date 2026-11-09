@@ -16,6 +16,7 @@ backups/
 test-results/
 playwright-report/
 .m5-harness/
+.workbuddy/
 .pinme-home/
 .tmp-*
 /updates/

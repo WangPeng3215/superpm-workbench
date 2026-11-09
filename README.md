@@ -43,6 +43,7 @@ npm start
 - 工具箱：维护常用工具的名称、地址、图标、分类、描述、启停与收藏；全局悬浮按钮可拖动并把位置保存在本机，快捷弹窗按收藏排序搜索并新窗口打开，并保留「新建便签」快捷入口。
 - 便签：左侧导航独立入口，纸张卡片网格，卡片内直接编辑标题与正文，700ms 防抖自动保存、失焦补充保存与失败提示；支持搜索、类型/置顶筛选、置顶、归档/恢复与删除确认；可一键转为每日任务并记录目标任务，转换幂等。
 - 会议记录：记录周例会、组例会、需求沟通会议与功能上线培训，支持按标题/类型检索、关联多个需求；正文复用 Tiptap 富文本，支持文本颜色、高亮与可跳转的需求引用；编辑已有会议时改动自动保存（标题、类型、时间、关联需求与正文），离开页面或点「完成」前会先落盘。
+- 优化点管理：轻量记录主动发现的产品优化机会（名称、所属模块、优化点内容、备注），内容用与需求详情同款的富文本编辑器记录，问题与优化思路写在同一份正文里；支持名称搜索与状态筛选；状态待评估/评估中/暂缓/不采纳/已转正式需求只维护当前值、不记历史；评估通过后可在详情页头或列表操作列「转为正式需求」，复用现有建需流程生成需求编号、需求文件夹与标准目录，正文整段作为需求详情，并在需求详情反查来源优化点。
 - 富文本表格：需求描述、需求文档与会议正文的编辑器都支持插入表格（始终带表头）与行列增删、删除表格；表格按 GFM Markdown 保存，不提供合并/拆分单元格。
 - 需求物理目录自动初始化：可读目录名（`REQ-xxxx 名称`）、默认目录与系统级资源、失败可重试。
 - 前后端共享契约、真实 SQLite 集成测试、浏览器验收和 GitHub Actions CI 流水线。
@@ -187,7 +188,7 @@ npm run backup -- restore <备份ID>
 发布构建、安装包冒烟测试、真实版本升级演练与数据根迁移演练：
 
 ```powershell
-node scripts/release/build-release.mjs --version 0.15.3 --notes "更新说明"
+node scripts/release/build-release.mjs --version 1.0.0 --notes "更新说明"
 node scripts/release/rehearse-update.mjs --from release/0.2.0/superpm-workbench-0.2.0-win-x64.zip --manifest release/0.3.0/update-manifest.json
 node scripts/release/rehearse-move-home.mjs
 ```
@@ -247,6 +248,13 @@ node scripts/release/rehearse-move-home.mjs
 | PATCH `/api/notes/:id`                            | 更新便签内容、类型、颜色与状态                     |
 | DELETE `/api/notes/:id`                           | 删除便签                                           |
 | POST `/api/notes/:id/convert`                     | 转为每日任务；已转换且任务存在时幂等返回           |
+| GET `/api/optimization-points`                    | 优化点列表，支持名称搜索与状态筛选                 |
+| POST `/api/optimization-points`                   | 记录优化点                                         |
+| GET `/api/optimization-points/:id`                | 优化点详情                                         |
+| PATCH `/api/optimization-points/:id`              | 编辑优化点与状态（已转正式需求的不可改状态）       |
+| DELETE `/api/optimization-points/:id`             | 删除优化点，不级联删除生成的正式需求               |
+| POST `/api/optimization-points/:id/convert`       | 转为正式需求：复用建需流程并建立双向关联           |
+| GET `/api/requirements/:id/optimization-points`   | 反查该需求来源的优化点                             |
 
 输入字段与枚举见 `packages/shared/src/index.ts`。分页总数按主需求计算；子需求匹配筛选时携带父需求作为上下文。统一错误响应 `{ error: { code, message, details? } }`。
 
