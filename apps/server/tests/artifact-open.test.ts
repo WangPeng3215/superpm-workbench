@@ -9,7 +9,7 @@ import {
 } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { authedInject } from "./auth-helper";
 import { requirementRootPath } from "./workspace-helper";
@@ -108,8 +108,11 @@ describe("artifact open endpoint with default system open policy", () => {
       string[],
     ];
     if (process.platform === "win32") {
-      expect(command).toBe("explorer.exe");
-      expect(args).toEqual([folderPath]);
+      // 用绝对路径启动，精简 PATH 下也不会 ENOENT
+      expect(command.toLowerCase().endsWith("explorer.exe")).toBe(true);
+      expect(isAbsolute(command)).toBe(true);
+      // 引号由服务端自带（verbatim），Node 不再包一层
+      expect(args).toEqual([`"${folderPath}"`]);
     } else if (process.platform === "darwin") {
       expect(command).toBe("open");
       expect(args).toEqual([folderPath]);
@@ -128,13 +131,21 @@ describe("artifact open endpoint with default system open policy", () => {
     const [command, args, options] = spawnMock.mock.calls[0] as unknown as [
       string,
       string[],
-      { detached?: boolean; env?: NodeJS.ProcessEnv },
+      {
+        detached?: boolean;
+        env?: NodeJS.ProcessEnv;
+        windowsVerbatimArguments?: boolean;
+      },
     ];
     // Windows 下 detached 会导致启动的 GUI 程序不显示
     expect(options.detached).not.toBe(true);
     if (process.platform === "win32") {
-      expect(command).toBe("explorer.exe");
-      expect(args).toEqual([filePath]);
+      // 用绝对路径启动，精简 PATH 下也不会 ENOENT
+      expect(command.toLowerCase().endsWith("explorer.exe")).toBe(true);
+      expect(isAbsolute(command)).toBe(true);
+      // 引号由服务端自带，交给 CreateProcess 原样拼接（禁止 Node 再加一层）
+      expect(args).toEqual([`"${filePath}"`]);
+      expect(options.windowsVerbatimArguments).toBe(true);
     } else if (process.platform === "darwin") {
       expect(command).toBe("open");
       expect(args).toEqual([filePath]);
@@ -150,13 +161,18 @@ describe("artifact open endpoint with default system open policy", () => {
       url: `/api/artifacts/nodes/${fileId}/open?reveal=1`,
     });
     expect(response.statusCode).toBe(204);
-    const [command, args] = spawnMock.mock.calls[0] as unknown as [
+    const [command, args, options] = spawnMock.mock.calls[0] as unknown as [
       string,
       string[],
+      { windowsVerbatimArguments?: boolean },
     ];
     if (process.platform === "win32") {
-      expect(command).toBe("explorer.exe");
-      expect(args).toEqual([`/select,${filePath}`]);
+      // 用绝对路径启动，精简 PATH 下也不会 ENOENT
+      expect(command.toLowerCase().endsWith("explorer.exe")).toBe(true);
+      expect(isAbsolute(command)).toBe(true);
+      // /select, 开关必须在引号之外，否则 Explorer 会退回「文档」
+      expect(args).toEqual([`/select,"${filePath}"`]);
+      expect(options.windowsVerbatimArguments).toBe(true);
     } else if (process.platform === "darwin") {
       expect(command).toBe("open");
       expect(args).toEqual(["-R", filePath]);

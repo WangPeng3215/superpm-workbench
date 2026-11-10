@@ -283,6 +283,17 @@ Skill 面向安装版使用：读取 `references/install-mode.md`，用本页的
 
 应用内更新会自动停止并重启服务，无需手动操作；如果改用命令行或手工覆盖安装，请先运行安装目录下的 `Stop.cmd` 停止服务，覆盖完成后双击 `SuperPM.cmd` 启动，并打开「优化点」确认列表、详情与转换流程正常。增量包只替换 `app/`，不会补装 `Stop.cmd` 与 `Stop.ps1`；已安装 0.5.0 或更早版本且缺少停止脚本时，请用 1.0.0 完整包覆盖一次。0.3.3 或更早版本仍需先按上一节用 0.4.0 完整包完成 bootstrap。Skill 包需要到 Release Assets 下载同版本的 `superpm-skill-1.0.0.zip` 手动替换，应用内更新不会更新它；详情见 §4「AI 客户端 Skill 包（可选）」。
 
+### 1.0.0 → 1.0.1
+
+1.0.1 修复文档管理「在文件夹中显示」打开位置不对的问题，共两处原因：
+
+- **Windows 引号位置**：`explorer.exe` 的 `/select,` 开关与路径必须同属一个参数，且只能给路径加引号。此前整段 `/select,<路径>` 被引号包住（路径含空格时尤其常见），Explorer 识别不到开关，会退回默认目录（通常是「文档」），表现为打开的路径不对。现在统一拼成 `/select,"<路径>"` 并原样交给 CreateProcess。
+- **不再依赖 PATH**：explorer.exe 改用 `%SystemRoot%\explorer.exe` 绝对路径启动。此前在 IDE、精简 shell 或自定义 PATH 的本地环境里，点「在文件夹中显示」会直接报「无法启动系统默认程序：spawn explorer.exe ENOENT」。
+
+「打开目录」与「用默认程序打开文档」的行为不变，macOS 与 Linux 分支不变。数据根、数据库结构（schema 仍为 19）、MCP 工具集与接口均无变化，启动器与更新器不变（仍为 1.1.0）；已安装 1.0.0 及更早版本的用户可在「系统设置 → 版本与更新」直接增量升级。
+
+应用内更新会自动停止并重启服务，无需手动操作；如果改用命令行或手工覆盖安装，请先运行安装目录下的 `Stop.cmd` 停止服务，覆盖完成后双击 `SuperPM.cmd` 启动，并在文档管理里对一个文档点「在文件夹中显示」，确认打开的是它所在的目录且文件被选中。增量包只替换 `app/`，不会补装 `Stop.cmd` 与 `Stop.ps1`；已安装 0.5.0 或更早版本且缺少停止脚本时，请用 1.0.1 完整包覆盖一次。0.3.3 或更早版本仍需先按上一节用 0.4.0 完整包完成 bootstrap。Skill 包需要到 Release Assets 下载同版本的 `superpm-skill-1.0.1.zip` 手动替换，应用内更新不会更新它；详情见 §4「AI 客户端 Skill 包（可选）」。
+
 ```powershell
 Update.cmd --manifest https://github.com/WangPeng3215/superpm-workbench/releases/latest/download/update-manifest.json
 ```

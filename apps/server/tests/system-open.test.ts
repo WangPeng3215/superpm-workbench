@@ -9,9 +9,12 @@ import {
 } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import type { FastifyInstance } from "fastify";
-import { buildSystemOpenCommand } from "../src/services/system-open";
+import {
+  buildSystemOpenCommand,
+  resolveWindowsExplorer,
+} from "../src/services/system-open";
 import { authedInject } from "./auth-helper";
 import { requirementRootPath } from "./workspace-helper";
 
@@ -44,11 +47,14 @@ describe("buildSystemOpenCommand", () => {
   const path = "D:/workspace/requirements/REQ-0001/demo/a.txt";
   // explorer.exe 只认反斜杠，Windows 分支统一转换（正斜杠会被静默改成打开“文档”）
   const winPath = "D:\\workspace\\requirements\\REQ-0001\\demo\\a.txt";
+  // Windows 分支自带引号（只有路径被引号包住，/select, 开关留在引号外）
+  const winQuoted = `"${winPath}"`;
 
   it("opens a folder with the platform default handler", () => {
     expect(buildSystemOpenCommand(path, { platform: "win32" })).toEqual({
       command: "explorer.exe",
-      args: [winPath],
+      args: [winQuoted],
+      verbatim: true,
     });
     expect(buildSystemOpenCommand(path, { platform: "darwin" })).toEqual({
       command: "open",
@@ -63,7 +69,8 @@ describe("buildSystemOpenCommand", () => {
   it("normalizes Windows paths to backslashes", () => {
     expect(buildSystemOpenCommand(winPath, { platform: "win32" })).toEqual({
       command: "explorer.exe",
-      args: [winPath],
+      args: [winQuoted],
+      verbatim: true,
     });
   });
 
@@ -71,13 +78,19 @@ describe("buildSystemOpenCommand", () => {
     const unsafe = "D:/workspace/a&b%PATH%.txt";
     const command = buildSystemOpenCommand(unsafe, { platform: "win32" });
     expect(command.command).toBe("explorer.exe");
-    expect(command.args).toEqual(["D:\\workspace\\a&b%PATH%.txt"]);
+    // 反斜杠 + 引号后由 CreateProcess 原样接收，& 与 % 不会被 shell 解释
+    expect(command.args).toEqual(['"D:\\workspace\\a&b%PATH%.txt"']);
+    expect(command.verbatim).toBe(true);
   });
 
   it("reveals a file in its folder", () => {
     expect(
       buildSystemOpenCommand(path, { platform: "win32", reveal: true }),
-    ).toEqual({ command: "explorer.exe", args: [`/select,${winPath}`] });
+    ).toEqual({
+      command: "explorer.exe",
+      args: [`/select,${winQuoted}`],
+      verbatim: true,
+    });
     expect(
       buildSystemOpenCommand(path, { platform: "darwin", reveal: true }),
     ).toEqual({ command: "open", args: ["-R", path] });
@@ -88,6 +101,63 @@ describe("buildSystemOpenCommand", () => {
       command: "xdg-open",
       args: ["D:/workspace/requirements/REQ-0001/demo"],
     });
+  });
+
+  it("keeps the /select switch outside the quotes for paths with spaces", () => {
+    // 回归保护：整段 `/select,<含空格路径>` 被引号包住时，explorer.exe 匹配不到开关，
+    // 会退回默认目录（多为「文档」），表现为“在文件夹中显示”打开的位置不对。
+    const spaced =
+      "D:/workspace/requirements/REQ-0001 需求工作台/需求分析/a.md";
+    const command = buildSystemOpenCommand(spaced, {
+      platform: "win32",
+      reveal: true,
+    });
+    expect(command.args).toHaveLength(1);
+    expect(command.args[0]).toBe(
+      '/select,"D:\\workspace\\requirements\\REQ-0001 需求工作台\\需求分析\\a.md"',
+    );
+    // 引号必须紧跟在 /select, 之后、路径之前
+    expect(command.args[0].startsWith('/select,"')).toBe(true);
+    expect(command.args[0].endsWith('"')).toBe(true);
+  });
+
+  it("does not quote a Windows root path that ends with a backslash", () => {
+    // 尾部反斜杠会被命令行解析当作转义，驱动根目录保持不加引号
+    expect(buildSystemOpenCommand("D:/", { platform: "win32" })).toEqual({
+      command: "explorer.exe",
+      args: ["D:\\"],
+      verbatim: true,
+    });
+  });
+});
+
+describe("resolveWindowsExplorer", () => {
+  it("uses the absolute path under the system root", () => {
+    expect(
+      resolveWindowsExplorer({ SystemRoot: "C:\\Windows" }, () => true),
+    ).toBe("C:\\Windows\\explorer.exe");
+    // 少数环境只有 windir
+    expect(resolveWindowsExplorer({ windir: "D:\\Win" }, () => true)).toBe(
+      "D:\\Win\\explorer.exe",
+    );
+  });
+
+  it("falls back to C:\\Windows when the environment has no system root", () => {
+    const seen: string[] = [];
+    expect(
+      resolveWindowsExplorer({}, (candidate) => {
+        seen.push(candidate);
+        return true;
+      }),
+    ).toBe("C:\\Windows\\explorer.exe");
+    expect(seen).toEqual(["C:\\Windows\\explorer.exe"]);
+  });
+
+  it("falls back to the bare command name when the file is missing", () => {
+    // 裸名依赖 PATH，属于最后的回退；正常环境不会走到这里
+    expect(
+      resolveWindowsExplorer({ SystemRoot: "C:\\Windows" }, () => false),
+    ).toBe("explorer.exe");
   });
 });
 
@@ -158,15 +228,24 @@ describe("physical folder open with SUPERPM_ALLOW_SYSTEM_OPEN=0", () => {
     const [command, args, options] = spawnMock.mock.calls[0] as unknown as [
       string,
       string[],
-      { detached?: boolean; windowsHide?: boolean; env?: NodeJS.ProcessEnv },
+      {
+        detached?: boolean;
+        windowsHide?: boolean;
+        env?: NodeJS.ProcessEnv;
+        windowsVerbatimArguments?: boolean;
+      },
     ];
     // Windows 下 detached 会导致启动的 GUI 程序不显示
     expect(options.detached).not.toBe(true);
     // windowsHide 会把 SW_HIDE 传给 explorer，窗口不可见（“点了没反应”）
     expect(options.windowsHide).not.toBe(true);
     if (process.platform === "win32") {
-      expect(command).toBe("explorer.exe");
-      expect(args).toEqual([folderPath]);
+      // 用绝对路径启动，精简 PATH 下也不会 ENOENT
+      expect(command.toLowerCase().endsWith("explorer.exe")).toBe(true);
+      expect(isAbsolute(command)).toBe(true);
+      // 引号由服务端自带，交给 CreateProcess 原样拼接
+      expect(args).toEqual([`"${folderPath}"`]);
+      expect(options.windowsVerbatimArguments).toBe(true);
     } else if (process.platform === "darwin") {
       expect(command).toBe("open");
       expect(args).toEqual([folderPath]);
@@ -187,8 +266,11 @@ describe("physical folder open with SUPERPM_ALLOW_SYSTEM_OPEN=0", () => {
       string[],
     ];
     if (process.platform === "win32") {
-      expect(command).toBe("explorer.exe");
-      expect(args).toEqual([`/select,${filePath}`]);
+      // 用绝对路径启动，精简 PATH 下也不会 ENOENT
+      expect(command.toLowerCase().endsWith("explorer.exe")).toBe(true);
+      expect(isAbsolute(command)).toBe(true);
+      // /select, 开关在引号外，只有路径被引号包住
+      expect(args).toEqual([`/select,"${filePath}"`]);
     } else if (process.platform === "darwin") {
       expect(command).toBe("open");
       expect(args).toEqual(["-R", filePath]);
@@ -210,7 +292,9 @@ describe("physical folder open with SUPERPM_ALLOW_SYSTEM_OPEN=0", () => {
       string[],
     ];
     expect(command).toBeTruthy();
-    expect(args[0]).toBe(rootPath);
+    expect(args[0]).toBe(
+      process.platform === "win32" ? `"${rootPath}"` : rootPath,
+    );
   });
 
   it("rejects opening a file with its default program", async () => {
