@@ -8,7 +8,7 @@
 | 项目 | 要求 |
 | --- | --- |
 | 系统 | Ubuntu 22.04 / 24.04（Debian 12 同样适用） |
-| 规格 | 1 核 2 GB 内存 / 2 GB 磁盘起步（`node_modules` 约 300 MB，构建时内存峰值约 1 GB） |
+| 规格 | 1 核 2 GB 内存 / 2 GB 磁盘起步（`node_modules` 约 300 MB，构建时内存峰值约 1 GB）。**1 GB 内存**的实例也能跑，但要先加 4 GB swap 并确认 `vm.swappiness` 不为 0，见 §2 的说明 |
 | Node.js | `>=22.12.0 <25`，推荐 22 LTS |
 | 域名 | 可选；用 IP 直接访问就跳过 HTTPS 一节 |
 
@@ -26,6 +26,35 @@ sudo apt-get install -y nodejs git curl
 curl -fsSLO https://raw.githubusercontent.com/WangPeng3215/superpm-workbench/main/scripts/linux/install-superpm.sh
 sudo bash install-superpm.sh
 ```
+
+> **国内网络如果卡在下载脚本**（`raw.githubusercontent.com` 常年不通或极慢），改用 git 拿脚本，
+> 仓库本身的 `https://github.com/...` 通常可通、而且更快：
+>
+> ```bash
+> sudo git clone --depth 1 https://github.com/WangPeng3215/superpm-workbench.git /tmp/superpm-src
+> sudo bash /tmp/superpm-src/scripts/linux/install-superpm.sh
+> ```
+>
+> 服务器访问 GitHub 本身不稳定时，安装脚本内部的 `git clone` 也会失败。可以先把源码放到
+> 目标目录再跑脚本（脚本对已有仓库只做 `git pull`），或给 `git` 配国内镜像。
+
+### 1 GB 内存的实例：先修 swap
+
+`vite build` 峰值约 1 GB，1 GB 内存的实例会直接 OOM，而且默认的阿里云镜像把
+`vm.swappiness` 设成了 `0`——swap 完全不会被使用，内存一满就杀进程（连云助手客户端都会被杀掉，
+表现为实例"活着但连不上"）。上大内存机型之前，先这样做：
+
+```bash
+sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile
+sudo mkswap /swapfile && sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+
+# 关键：让内核真的愿意换页
+sudo sysctl -w vm.swappiness=60
+echo 'vm.swappiness=60' | sudo tee /etc/sysctl.d/99-superpm.conf
+```
+
+之后构建可以用 `--minify false` 进一步压峰值（产物大一些，但 Nginx 开 gzip 后差别不大）。
 
 脚本结束会打印初始账号口令，只显示这一次。它做的事：
 
@@ -143,6 +172,12 @@ server {
     # 附件上传上限 50 MB，留一点余量
     client_max_body_size 60m;
 
+    # 前端产物是未压缩的 JS/CSS，开 gzip 后首屏传输约从 2.7 MB 降到 570 KB
+    gzip on;
+    gzip_comp_level 5;
+    gzip_min_length 1024;
+    gzip_types text/plain text/css application/javascript application/json image/svg+xml;
+
     location / {
         proxy_pass http://127.0.0.1:3001;
         proxy_set_header Host $host;
@@ -258,6 +293,8 @@ sudo bash install-superpm.sh
 | 打开页面白屏 / 静态资源 404 | 前端未构建：确认 `apps/web/dist/index.html` 存在，重跑 `npm run build` |
 | 登录一直 401 | 反代没有透传 `Cookie`/`Host`，对照 §4 的配置块 |
 | 附件上传失败（大文件） | Nginx 的 `client_max_body_size` 还是默认 1 MB |
+| `npm run build` 卡在 `transforming...` 后整机失联 / 连不上 | 内存不足触发 OOM：确认 swap 已挂载且 `vm.swappiness` 不是 `0`（见 §2），再试 `--minify false` |
+| 构建后首屏加载慢 | Nginx 没开 gzip，2.7 MB 的 JS 在裸传 |
 
 ## 11. 与 Windows 安装包的差异
 
