@@ -93,6 +93,30 @@ export function resolveAllowSystemOpen(value?: string): boolean {
 export const allowSystemOpen = resolveAllowSystemOpen(
   process.env.SUPERPM_ALLOW_SYSTEM_OPEN,
 );
+/**
+ * 监听地址：默认只监听回环，避免把带登录的本机服务暴露到局域网。
+ * 容器或托管平台需要绑定 0.0.0.0 才能被外部探活与反向代理访问，
+ * 由部署方显式设置 SUPERPM_HOST=0.0.0.0 开启；不读通用的 HOST，避免被平台注入影响本地。
+ */
+export function resolveListenHost(
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const host = env.SUPERPM_HOST?.trim();
+  return host ? host : "127.0.0.1";
+}
+/**
+ * Web 静态产物目录：默认仓库内 apps/web/dist。
+ * 部署到托管环境时常把前端产物放在别处（服务端 bundle 与前端产物分开上传），
+ * 用 SUPERPM_WEB_DIR 指定相对项目根的路径或绝对路径。
+ */
+export function resolveWebRoot(
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const fallback = join(projectRoot, "apps", "web", "dist");
+  const configured = env.SUPERPM_WEB_DIR?.trim();
+  if (!configured) return fallback;
+  return isAbsolute(configured) ? resolve(configured) : resolve(projectRoot, configured);
+}
 function readAppVersion(): string {
   try {
     const manifest = JSON.parse(

@@ -14,6 +14,8 @@ import {
   isPackagedRoot,
   loadEnv,
   projectRoot,
+  resolveListenHost,
+  resolveWebRoot,
 } from "../src/config/index.js";
 import { SCHEMA_VERSION } from "../src/db/migrate.js";
 
@@ -83,6 +85,23 @@ describe("版本号与环境加载", () => {
     const env: NodeJS.ProcessEnv = {};
     expect(loadEnv(project, env)).toBeUndefined();
     expect(env.PORT).toBe("4100");
+  });
+
+  it("监听地址默认回环，托管部署只能用 SUPERPM_HOST 放开", () => {
+    expect(resolveListenHost({})).toBe("127.0.0.1");
+    expect(resolveListenHost({ SUPERPM_HOST: "   " })).toBe("127.0.0.1");
+    expect(resolveListenHost({ SUPERPM_HOST: "0.0.0.0" })).toBe("0.0.0.0");
+    // 通用 HOST 不参与解析，避免平台注入把本机服务暴露到局域网
+    expect(resolveListenHost({ HOST: "0.0.0.0" })).toBe("127.0.0.1");
+  });
+
+  it("Web 产物目录默认 apps/web/dist，可按相对或绝对路径覆盖", () => {
+    expect(resolveWebRoot({})).toBe(join(projectRoot, "apps", "web", "dist"));
+    expect(resolveWebRoot({ SUPERPM_WEB_DIR: "web-dist" })).toBe(
+      join(projectRoot, "web-dist"),
+    );
+    const absolute = join(projectRoot, "public");
+    expect(resolveWebRoot({ SUPERPM_WEB_DIR: absolute })).toBe(absolute);
   });
 
   it("发布模式按目录名或打包清单识别，开发仓库不被误判", () => {

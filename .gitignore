@@ -20,3 +20,8 @@ playwright-report/
 .pinme-home/
 .tmp-*
 /updates/
+
+# 托管发布用的源码快照（仅源码，不含 data/workspace）
+/.sites-app/
+# 托管应用标记文件（发布工具写入，不入库）
+*.genie

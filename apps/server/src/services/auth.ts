@@ -12,6 +12,24 @@ const TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 // scrypt 派生密钥长度（字节）
 const SCRYPT_KEYLEN = 64;
 export const AUTH_COOKIE_NAME = "superpm_token";
+/** 种子账号的默认口令：仅用于本机安装，服务器部署应通过环境变量覆盖 */
+const DEFAULT_SEED_PASSWORD = "admin123";
+
+/**
+ * 首次启动创建 admin 时使用的口令。
+ * 服务器部署常常直接暴露在公网，默认口令等于没有口令，
+ * 因此允许用 SUPERPM_ADMIN_PASSWORD 在首启时指定；配置过短时直接报错，
+ * 避免用户以为设了强口令、实际却回退成默认值。
+ */
+export function resolveSeedPassword(
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const configured = env.SUPERPM_ADMIN_PASSWORD?.trim();
+  if (!configured) return DEFAULT_SEED_PASSWORD;
+  if (configured.length < 6)
+    throw new Error("SUPERPM_ADMIN_PASSWORD 至少 6 位字符");
+  return configured;
+}
 
 export interface AuthUser {
   id: number;
@@ -54,7 +72,7 @@ export class AuthService {
       .get();
     if (!admin) {
       const now = new Date().toISOString();
-      this.createUser("admin", "管理员", "admin123", now);
+      this.createUser("admin", "管理员", resolveSeedPassword(), now);
     }
   }
 

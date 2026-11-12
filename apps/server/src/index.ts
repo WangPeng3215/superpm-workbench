@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { createApp } from "./app.js";
-import { appHome, appVersion, homePath } from "./config/index.js";
+import { appHome, appVersion, homePath, resolveListenHost } from "./config/index.js";
 import { prepareHomeIfConfigured } from "./config/home-migration.js";
 import { createServerLogger } from "./config/logging.js";
 import { SCHEMA_VERSION } from "./db/migrate.js";
@@ -29,6 +29,8 @@ if (!Number.isInteger(port) || port < 1 || port > 65535) {
   await app.close();
   throw new Error("PORT 必须为 1–65535 的整数");
 }
+// 默认回环；容器/托管部署通过 SUPERPM_HOST=0.0.0.0 绑定外部可达地址。
+const host = resolveListenHost();
 
 let closing = false;
 async function shutdown(code: number) {
@@ -48,7 +50,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.once(signal, () => void shutdown(0));
 }
 try {
-  await app.listen({ host: "127.0.0.1", port });
+  await app.listen({ host, port });
   writeServerState(homePath, {
     pid: process.pid,
     port,
@@ -57,9 +59,7 @@ try {
     schemaVersion: SCHEMA_VERSION,
     shutdownToken,
   });
-  console.info(
-    `[superpm] 服务已启动：http://127.0.0.1:${port}（数据根 ${homePath}）`,
-  );
+  console.info(`[superpm] 服务已启动：http://${host}:${port}（数据根 ${homePath}）`);
 } catch (error) {
   await app.close();
   throw error;
