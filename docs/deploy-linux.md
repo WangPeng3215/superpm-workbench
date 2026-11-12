@@ -240,7 +240,7 @@ journalctl -u superpm -n 200 --no-pager
 curl -fsS http://127.0.0.1:3001/api/health   # 健康检查，无需登录
 ```
 
-健康检查返回 `{"status":"ok","version":"1.0.1","schemaVersion":19,...}`。可用它做监控探针。
+健康检查返回 `{"status":"ok","version":"1.1.0","schemaVersion":20,...}`。可用它做监控探针。
 
 ## 8. 备份与恢复
 
