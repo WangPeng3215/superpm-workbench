@@ -151,6 +151,8 @@ CI 流水线位于 `.github/workflows/ci.yml`（与模板 `docs/ci/ci.yml` 一�
 
 发布包自带 Node 22 运行时，解压后双击 `SuperPM.cmd` 即可使用，双击 `Stop.cmd` 停止服务（更新后静默启动的服务没有前台窗口，也用它停止；无响应时用 `Stop.cmd -Force`）。更新可在应用内「系统设置 → 版本与更新」完成检查、查看说明、下载校验并交给独立更新器安装；`Update.cmd` 保留为命令行与离线更新入口。安装布局、数据根、停止与更新命令、手动回滚与发布流程见 [`docs/install-update.md`](docs/install-update.md)，设计基线见 [`docs/deployment-update-strategy.md`](docs/deployment-update-strategy.md)。
 
+自有服务器部署（Ubuntu / Debian）：Release 只提供 `win32-x64` 安装包，Linux 侧从源码构建，由 systemd 守护并由 Nginx / Caddy 反代。执行 `sudo bash scripts/linux/install-superpm.sh` 即可完成建账号、拉源码、构建、装服务与首启口令生成；端口、数据根、监听地址、种子口令等变量与排错见 [`docs/deploy-linux.md`](docs/deploy-linux.md)。Linux 上没有内置更新器，升级重跑同一脚本。
+
 ```powershell
 # 启动发布版（安装目录内）
 SuperPM.cmd
