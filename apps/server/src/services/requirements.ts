@@ -23,8 +23,10 @@ export class RequirementService {
     private readonly db: Database.Database,
     // 可选：提供时 createWithWorkspace 才会初始化物理目录（MCP 等只建记录的调用方无需注入）
     private readonly directories?: RequirementDirectoryResolver,
+    // 仓储层使用原生连接：drizzle 生成的语句自带参数绑定，隔离条件在仓储内显式书写
+    ormDb?: Database.Database,
   ) {
-    this.repo = new RequirementsRepository(db);
+    this.repo = new RequirementsRepository(ormDb ?? db);
   }
   create(input: unknown) {
     const data = requirementCreateSchema.parse(input);
@@ -70,6 +72,7 @@ export class RequirementService {
       const existing = this.get(id);
       if (patch.parentId !== undefined) this.checkParent(patch.parentId, id);
       const updated = this.repo.update(id, patch);
+      if (!updated) throw new DomainError("NOT_FOUND", "需求不存在", 404);
       if (patch.currentStage && patch.currentStage !== existing.currentStage) {
         this.repo.addHistory({
           requirementId: id,

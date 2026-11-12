@@ -19,6 +19,7 @@ import {
   type DailyTimeEntryStatus,
 } from "@superpm/shared";
 import { DomainError } from "./requirements.js";
+import { ownerFilterSql } from "../db/scope.js";
 import {
   addMonths,
   businessDate,
@@ -530,17 +531,41 @@ export class DailyTaskService {
 
   /** 关闭已到 18:00 或当日 8 小时上限的活动计时；可重复调用。 */
   reconcile(now = this.now()) {
-    const active = this.activeRow();
-    if (!active) return [] as number[];
-    const boundary = this.activeBoundary(active);
-    if (now.getTime() < boundary.endAt.getTime()) return [] as number[];
-    this.transaction(() => {
-      // 重新读取，避免并发关闭重复写入
-      const current = this.activeRow();
-      if (!current || current.id !== active.id) return;
-      this.closeEntry(current, boundary.endAt, boundary.endReason, now);
-    });
-    return [active.id];
+    // 多用户下可能同时存在多条活动计时：系统身份（定时补偿）一次扫全部，
+    // 请求作用域内只看得到本人的那一条，行为与改造前一致。
+    const closed: number[] = [];
+    for (const active of this.activeRows()) {
+      const boundary = this.activeBoundary(active);
+      if (now.getTime() < boundary.endAt.getTime()) continue;
+      this.transaction(() => {
+        // 重新读取，避免并发关闭重复写入
+        const current = this.activeRowById(active.id);
+        if (!current || current.status !== "active") return;
+        this.closeEntry(current, boundary.endAt, boundary.endReason, now);
+      });
+      closed.push(active.id);
+    }
+    return closed;
+  }
+
+  /** 全部活动计时（当前作用域内）；系统身份下即全库 */
+  private activeRows(): ActiveTimerRow[] {
+    const owner = ownerFilterSql("e");
+    return this.db
+      .prepare(
+        `SELECT e.*, t.title AS task_title, t.plan_date AS task_plan_date
+         FROM daily_time_entries e
+         JOIN daily_tasks t ON t.id = e.task_id AND t.user_id = e.user_id
+         WHERE e.status = 'active'${owner.sql}
+         ORDER BY e.id`,
+      )
+      .all(...owner.params) as ActiveTimerRow[];
+  }
+
+  private activeRowById(id: number): TimeEntryRow | undefined {
+    return this.db
+      .prepare("SELECT * FROM daily_time_entries WHERE id = ?")
+      .get(id) as TimeEntryRow | undefined;
   }
 
   private closeEntry(
@@ -569,15 +594,17 @@ export class DailyTaskService {
   }
 
   private buildDay(date: string, now: Date): DailyTaskDay {
+    // 关联需求是多表联查，隔离条件必须显式书写（代理只在单表语句上自动追加）
+    const owner = ownerFilterSql("t");
     const taskRows = this.db
       .prepare(
         `SELECT t.*, r.requirement_no AS requirement_no, r.name AS requirement_name
          FROM daily_tasks t
-         LEFT JOIN requirements r ON r.id = t.requirement_id AND r.deleted_at IS NULL
-         WHERE t.plan_date = ? AND t.deleted_at IS NULL
+         LEFT JOIN requirements r ON r.id = t.requirement_id AND r.deleted_at IS NULL AND r.user_id = t.user_id
+         WHERE t.plan_date = ? AND t.deleted_at IS NULL${owner.sql}
          ORDER BY t.sort_order, t.id`,
       )
-      .all(date) as TaskRow[];
+      .all(date, ...owner.params) as TaskRow[];
     const rangeStart = businessDayStart(date).toISOString();
     const rangeEnd = nextBusinessDayStart(date).toISOString();
     const entryRows = this.db
@@ -813,15 +840,16 @@ export class DailyTaskService {
   }
 
   private activeRow(): ActiveTimerRow | null {
+    const owner = ownerFilterSql("e");
     const row = this.db
       .prepare(
         `SELECT e.*, t.title AS task_title, t.plan_date AS task_plan_date
          FROM daily_time_entries e
-         JOIN daily_tasks t ON t.id = e.task_id
-         WHERE e.status = 'active'
+         JOIN daily_tasks t ON t.id = e.task_id AND t.user_id = e.user_id
+         WHERE e.status = 'active'${owner.sql}
          LIMIT 1`,
       )
-      .get() as ActiveTimerRow | undefined;
+      .get(...owner.params) as ActiveTimerRow | undefined;
     return row ?? null;
   }
 
@@ -853,14 +881,15 @@ export class DailyTaskService {
   }
 
   private getTask(id: number) {
+    const owner = ownerFilterSql("t");
     const row = this.db
       .prepare(
         `SELECT t.*, r.requirement_no AS requirement_no, r.name AS requirement_name
          FROM daily_tasks t
-         LEFT JOIN requirements r ON r.id = t.requirement_id AND r.deleted_at IS NULL
-         WHERE t.id = ? AND t.deleted_at IS NULL`,
+         LEFT JOIN requirements r ON r.id = t.requirement_id AND r.deleted_at IS NULL AND r.user_id = t.user_id
+         WHERE t.id = ? AND t.deleted_at IS NULL${owner.sql}`,
       )
-      .get(id) as TaskRow | undefined;
+      .get(id, ...owner.params) as TaskRow | undefined;
     if (!row) throw new DomainError("NOT_FOUND", "任务不存在", 404);
     const entries = this.db
       .prepare(

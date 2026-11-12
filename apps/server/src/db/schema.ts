@@ -35,6 +35,8 @@ export const requirements = sqliteTable("requirements", {
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
   deletedAt: text("deleted_at"),
+  // 归属用户（迁移 0020）：数据隔离与超管可见性的依据
+  userId: integer("user_id").notNull().default(0),
 });
 export const stageHistory = sqliteTable("requirement_history", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -46,6 +48,7 @@ export const stageHistory = sqliteTable("requirement_history", {
   actor: text("actor").notNull(),
   note: text("note").notNull(),
   createdAt: text("created_at").notNull(),
+  userId: integer("user_id").notNull().default(0),
 });
 export const requirementFiles = sqliteTable("requirement_files", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -164,6 +167,10 @@ export const users = sqliteTable("users", {
   displayName: text("display_name").notNull(),
   passwordHash: text("password_hash").notNull(),
   passwordSalt: text("password_salt").notNull(),
+  // active 正常 / disabled 停用（迁移 0020）：停用账号无法登录，其数据仍保留
+  status: text("status").$type<"active" | "disabled">().notNull().default("active"),
+  // 超管：可查看全部用户数据；admin 账号在迁移中置 1
+  isAdmin: integer("is_admin", { mode: "boolean" }).notNull().default(false),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });
@@ -222,6 +229,7 @@ export const requirementAudit = sqliteTable("requirement_audit", {
   action: text("action").notNull(),
   payload: text("payload").notNull(),
   createdAt: text("created_at").notNull(),
+  userId: integer("user_id").notNull().default(0),
 });
 // M3 受控写入：一次性确认令牌（只存哈希）与追加式审计。
 export const mcpWriteConfirmations = sqliteTable("mcp_write_confirmations", {

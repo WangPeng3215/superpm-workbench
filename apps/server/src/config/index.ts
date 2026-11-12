@@ -117,6 +117,18 @@ export function resolveWebRoot(
   if (!configured) return fallback;
   return isAbsolute(configured) ? resolve(configured) : resolve(projectRoot, configured);
 }
+/**
+ * 是否开放自助注册。
+ * 默认开放（个人/小团队自建服务需要它）；部署在公网且只给固定几个人用时，
+ * 用 SUPERPM_ALLOW_REGISTRATION=off 关掉入口，账号只能由超管创建。
+ */
+export function resolveRegistrationEnabled(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const configured = env.SUPERPM_ALLOW_REGISTRATION?.trim().toLowerCase();
+  if (!configured) return true;
+  return !["off", "false", "0", "no", "disabled"].includes(configured);
+}
 function readAppVersion(): string {
   try {
     const manifest = JSON.parse(

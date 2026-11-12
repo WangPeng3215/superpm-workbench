@@ -20,6 +20,7 @@ import type {
   RequirementListParsed,
 } from "@superpm/shared";
 import { requirements, stageHistory, requirementAudit } from "../db/schema.js";
+import { currentUserScope } from "../db/scope.js";
 import { decodeDescription, encodeDescription } from "./description.js";
 
 type MutableFields = Partial<RequirementCreateParsed>;
@@ -30,6 +31,22 @@ function decodeRequirement(row: typeof requirements.$inferSelect) {
     descriptionHtml: row.descriptionHtml ?? "",
   };
 }
+
+/**
+ * 归属过滤条件：drizzle 生成的语句无法被数据库代理改写，
+ * 因此仓储层必须自己带 user_id 条件（开发文档 §3「后端无论通过什么入口都无法越权」）。
+ * 超管与系统身份（迁移、种子、MCP、测试）不加过滤。
+ */
+function ownerFilter() {
+  const scope = currentUserScope();
+  if (!scope || scope.isAdmin) return undefined;
+  return eq(requirements.userId, scope.userId);
+}
+
+/** 新增行时的归属值；系统身份落 0，只有超管可见 */
+function ownerValue(): number {
+  return currentUserScope()?.userId ?? 0;
+}
 export class RequirementsRepository {
   private readonly orm: BetterSQLite3Database;
   constructor(db: Database.Database) {
@@ -39,7 +56,13 @@ export class RequirementsRepository {
     const row = this.orm
       .select()
       .from(requirements)
-      .where(and(eq(requirements.id, id), isNull(requirements.deletedAt)))
+      .where(
+        and(
+          eq(requirements.id, id),
+          isNull(requirements.deletedAt),
+          ownerFilter(),
+        ),
+      )
       .get();
     return row ? decodeRequirement(row) : undefined;
   }
@@ -47,7 +70,13 @@ export class RequirementsRepository {
     return this.orm
       .select()
       .from(requirements)
-      .where(and(eq(requirements.parentId, id), isNull(requirements.deletedAt)))
+      .where(
+        and(
+          eq(requirements.parentId, id),
+          isNull(requirements.deletedAt),
+          ownerFilter(),
+        ),
+      )
       .orderBy(asc(requirements.id))
       .all()
       .map(decodeRequirement);
@@ -62,7 +91,7 @@ export class RequirementsRepository {
         deletedAt: requirements.deletedAt,
       })
       .from(requirements)
-      .where(inArray(requirements.id, ids))
+      .where(and(inArray(requirements.id, ids), ownerFilter()))
       .all();
   }
   insert(data: RequirementCreateParsed) {
@@ -83,6 +112,7 @@ export class RequirementsRepository {
         requirementNo: `REQ-${String(next).padStart(4, "0")}`,
         createdAt: now,
         updatedAt: now,
+        userId: ownerValue(),
       })
       .returning()
       .get();
@@ -96,23 +126,25 @@ export class RequirementsRepository {
     const row = this.orm
       .update(requirements)
       .set({ ...storagePatch, updatedAt: new Date().toISOString() })
-      .where(eq(requirements.id, id))
+      .where(and(eq(requirements.id, id), ownerFilter()))
       .returning()
       .get();
-    return decodeRequirement(row);
+    return row ? decodeRequirement(row) : undefined;
   }
   softDelete(id: number) {
     const now = new Date().toISOString();
     this.orm
       .update(requirements)
       .set({ deletedAt: now, updatedAt: now })
-      .where(eq(requirements.id, id))
+      .where(and(eq(requirements.id, id), ownerFilter()))
       .run();
   }
   list(query: RequirementListParsed) {
     // Determine matching IDs first; grouping happens before pagination, so a
     // matching child can bring its parent onto a page without being orphaned.
     const filters: SQL[] = [isNull(requirements.deletedAt)];
+    const owner = ownerFilter();
+    if (owner) filters.push(owner);
     for (const key of ["type", "priority", "status", "currentStage"] as const) {
       if (query[key]) filters.push(eq(requirements[key], query[key]!));
     }
@@ -150,7 +182,11 @@ export class RequirementsRepository {
       .select()
       .from(requirements)
       .where(
-        and(inArray(requirements.id, rootIds), isNull(requirements.deletedAt)),
+        and(
+          inArray(requirements.id, rootIds),
+          isNull(requirements.deletedAt),
+          ownerFilter(),
+        ),
       )
       .orderBy(order(requirements[query.sortBy]), asc(requirements.id))
       .limit(query.pageSize)
@@ -166,6 +202,7 @@ export class RequirementsRepository {
             and(
               inArray(requirements.parentId, pageIds),
               isNull(requirements.deletedAt),
+              ownerFilter(),
             ),
           )
           .orderBy(order(requirements[query.sortBy]), asc(requirements.id))
@@ -190,15 +227,26 @@ export class RequirementsRepository {
     };
   }
   history(id: number) {
+    const scope = currentUserScope();
     return this.orm
       .select()
       .from(stageHistory)
-      .where(eq(stageHistory.requirementId, id))
+      .where(
+        and(
+          eq(stageHistory.requirementId, id),
+          scope && !scope.isAdmin
+            ? eq(stageHistory.userId, scope.userId)
+            : undefined,
+        ),
+      )
       .orderBy(asc(stageHistory.id))
       .all();
   }
   addHistory(record: typeof stageHistory.$inferInsert) {
-    this.orm.insert(stageHistory).values(record).run();
+    this.orm
+      .insert(stageHistory)
+      .values({ ...record, userId: record.userId ?? ownerValue() })
+      .run();
   }
   audit(id: number, action: string, payload: unknown) {
     this.orm
@@ -208,6 +256,7 @@ export class RequirementsRepository {
         action,
         payload: JSON.stringify(payload),
         createdAt: new Date().toISOString(),
+        userId: ownerValue(),
       })
       .run();
   }

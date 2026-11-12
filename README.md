@@ -22,12 +22,17 @@ npm start
 
 打开 http://127.0.0.1:3001。使用 Ctrl+C 停止服务。
 
-## 登录与账号
+## 登录、注册与多用户
 
 - 打开任意页面会先进入登录页（`/login`，复用 ease-ui 浅色/深色主题，跟随系统与顶栏主题切换）。
-- 默认账号：`admin`，默认密码：`admin123`（首次登录后请在右上角用户菜单中修改密码）。
+- 默认超管账号：`admin`，默认密码：`admin123`（首次登录后请在右上角用户菜单中修改密码）。
+- 登录页可切换到注册形态自助注册账号（账号 3-32 位字母/数字/下线线/中划线，密码至少 6 位），注册成功即登录；`admin` 为系统保留名。
+- **每个账号的数据完全隔离**：需求、问题、产出物与文档、每日任务与工时、会议、便签、优化点、工具箱都按归属用户过滤，换账号登录就是一套空工作台。
+- 超管可以查看全部用户的数据（顶栏显示「超管」标识），普通账号只能看到自己的；写入永远归属本人。
 - 会话使用 HMAC 签名 Token 写入 httpOnly Cookie，7 天有效；退出登录或 401 会回到登录页。
 - 密码使用 node crypto scrypt 派生密钥存储；签名密钥首次启动随机生成并保存在数据库 `app_meta` 表中，重启后登录态不失效。
+- 公网部署时可用 `SUPERPM_ALLOW_REGISTRATION=off` 关闭自助注册（登录页会自动隐藏入口），账号改由超管在数据库层创建。
+- 设计、迁移与越权测试清单见 [`docs/multi-user.md`](docs/multi-user.md)。
 
 ## 当前能力
 
@@ -200,6 +205,12 @@ node scripts/release/rehearse-move-home.mjs
 | 接口                                              | 用途                                               |
 | ------------------------------------------------- | -------------------------------------------------- |
 | GET `/api/health`                                 | 服务状态、应用版本与 schema 版本                   |
+| GET `/api/auth/config`                            | 登录页配置：是否开放自助注册                       |
+| POST `/api/auth/register`                         | 注册账号并直接登录（关闭注册时返回 403）           |
+| POST `/api/auth/login`                            | 登录，写入 httpOnly 会话 Cookie                    |
+| GET `/api/auth/me`                                | 当前账号与超管标记                                 |
+| POST `/api/auth/change-password`                  | 修改自己的密码                                     |
+| POST `/api/auth/logout`                           | 退出登录                                           |
 | GET `/api/system`                                 | 运行路径与模块状态（需登录）                       |
 | GET `/api/system/home/move`                       | 当前迁移任务状态                                   |
 | POST `/api/system/home/validate`                  | 校验目标父目录、空间与数据量                       |

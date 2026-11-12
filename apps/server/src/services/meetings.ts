@@ -1,4 +1,5 @@
 import type Database from "better-sqlite3";
+import { ownerFilterSql } from "../db/scope.js";
 import {
   meetingCreateSchema,
   meetingListSchema,
@@ -255,15 +256,18 @@ export class MeetingService {
     );
     if (!meetingIds.length) return map;
     const placeholders = meetingIds.map(() => "?").join(", ");
+    const owner = ownerFilterSql("mr");
     const rows = this.db
       .prepare(
         `SELECT mr.meeting_id, r.id, r.requirement_no, r.name
          FROM meeting_requirements mr
-         JOIN requirements r ON r.id = mr.requirement_id
-         WHERE mr.meeting_id IN (${placeholders}) AND r.deleted_at IS NULL
+         JOIN requirements r ON r.id = mr.requirement_id AND r.user_id = mr.user_id
+         WHERE mr.meeting_id IN (${placeholders}) AND r.deleted_at IS NULL${owner.sql}
          ORDER BY mr.created_at ASC, r.id ASC`,
       )
-      .all(...meetingIds) as MeetingRequirementRow[];
+      .all(
+        ...([...meetingIds, ...owner.params] as number[]),
+      ) as MeetingRequirementRow[];
     for (const row of rows) {
       map.get(row.meeting_id)?.push({
         id: row.id,

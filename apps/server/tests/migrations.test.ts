@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -115,6 +116,8 @@ describe("migrations 0006（用户认证）", () => {
       "password_salt",
       "created_at",
       "updated_at",
+      "status",
+      "is_admin",
     ]);
     expect(tableColumns(db, "app_meta")).toEqual(["key", "value"]);
   });
@@ -151,6 +154,7 @@ describe("migrations 0008（问题正文富文本化与关联切换）", () => {
       "artifact_id",
       "relation_type",
       "created_at",
+      "user_id",
     ]);
     expect(
       db
@@ -270,12 +274,14 @@ describe("migrations 0005（资产与问题管理）", () => {
       "asset_id",
       "relation_type",
       "created_at",
+      "user_id",
     ]);
     expect(tableColumns(db, "issue_artifact_links")).toEqual([
       "issue_id",
       "artifact_id",
       "relation_type",
       "created_at",
+      "user_id",
     ]);
   });
   it("旧库升级：kind/is_final 正确映射为 resource_type/storage_type/status", () => {
@@ -453,7 +459,7 @@ describe("migrations 0005（资产与问题管理）", () => {
   });
   it("SCHEMA_VERSION 与已应用迁移数一致", () => {
     migrate(db);
-    expect(SCHEMA_VERSION).toBe(19);
+    expect(SCHEMA_VERSION).toBe(20);
     expect(appliedVersions(db)).toHaveLength(SCHEMA_VERSION);
   });
 });
@@ -616,6 +622,7 @@ describe("migrations 0012（MCP 写入确认与审计）", () => {
       "expires_at",
       "used_at",
       "created_at",
+      "user_id",
     ]);
     expect(tableColumns(db, "mcp_audit")).toEqual([
       "id",
@@ -631,6 +638,7 @@ describe("migrations 0012（MCP 写入确认与审计）", () => {
       "error_code",
       "result_summary",
       "created_at",
+      "user_id",
     ]);
     const indexes = (
       db.prepare("SELECT name FROM sqlite_master WHERE type='index'").all() as {
@@ -981,11 +989,13 @@ describe("migrations 0016（会议记录）", () => {
       "content_html",
       "created_at",
       "updated_at",
+      "user_id",
     ]);
     expect(tableColumns(db, "meeting_requirements")).toEqual([
       "meeting_id",
       "requirement_id",
       "created_at",
+      "user_id",
     ]);
     const indexes = (
       db
@@ -1052,6 +1062,7 @@ describe("migrations 0017（便签）", () => {
       "created_at",
       "updated_at",
       "archived_at",
+      "user_id",
     ]);
     const indexes = (
       db
@@ -1121,6 +1132,7 @@ describe("migrations 0018（优化点）", () => {
       "requirement_id",
       "created_at",
       "updated_at",
+      "user_id",
     ]);
     const indexes = (
       db
@@ -1219,12 +1231,21 @@ describe("migrations 0019（优化点正文合并）", () => {
       `INSERT INTO optimization_points (name, description, solution, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?)`,
     );
-    insert.run("两者都有", "导出入口不明显。", "提到工具栏。", timestamp, timestamp);
+    insert.run(
+      "两者都有",
+      "导出入口不明显。",
+      "提到工具栏。",
+      timestamp,
+      timestamp,
+    );
     insert.run("只有思路", "", "补充最近打开分组。", timestamp, timestamp);
     insert.run("只有描述", "批量操作繁琐。", "", timestamp, timestamp);
 
     scratch.exec(
-      readFileSync(join(migrationsDir, "0019_optimization_point_content.sql"), "utf8"),
+      readFileSync(
+        join(migrationsDir, "0019_optimization_point_content.sql"),
+        "utf8",
+      ),
     );
 
     expect(tableColumns(scratch, "optimization_points")).toEqual([
@@ -1262,6 +1283,103 @@ describe("migrations 0019（优化点正文合并）", () => {
       )
       .run(timestamp, timestamp);
     expect(Number(next.lastInsertRowid)).toBe(4);
+    scratch.close();
+  });
+});
+
+describe("migrations 0020（用户隔离）", () => {
+  // 模拟线上 1.0.1 的库：只应用到 0019，已有 admin 与若干业务数据
+  function legacyDatabaseBeforeIsolation() {
+    const scratch = new Database(":memory:");
+    scratch.pragma("foreign_keys = ON");
+    scratch.exec(
+      "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)",
+    );
+    // 逐版本执行到 0019，模拟 1.0.1 的库
+    const files = readdirSync(migrationsDir)
+      .filter((file) => /^\d+_.*\.sql$/.test(file))
+      .filter((file) => Number(file.split("_")[0]) <= 19)
+      .sort();
+    expect(files.length).toBe(19);
+    for (const file of files) {
+      scratch.exec(readFileSync(join(migrationsDir, file), "utf8"));
+      scratch
+        .prepare(
+          "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+        )
+        .run(Number(file.split("_")[0]), "2026-11-01T00:00:00.000Z");
+    }
+    return scratch;
+  }
+
+  it("存量数据归属 admin，账号标记超管，活动计时改为按用户唯一", () => {
+    const scratch = legacyDatabaseBeforeIsolation();
+    const timestamp = "2026-11-01T00:00:00.000Z";
+    scratch
+      .prepare(
+        "INSERT INTO users(username, display_name, password_hash, password_salt, created_at, updated_at) VALUES ('admin','管理员','h','s',?,?)",
+      )
+      .run(timestamp, timestamp);
+    scratch
+      .prepare(
+        `INSERT INTO requirements
+          (requirement_no, name, type, priority, description, status, current_stage, proposed_at, created_at, updated_at)
+         VALUES ('REQ-0001','历史需求','feature','medium','', 'in_progress','requirement', ?, ?, ?)`,
+      )
+      .run(timestamp, timestamp, timestamp);
+    scratch
+      .prepare(
+        "INSERT INTO notes(title, content, type, color, is_pinned, is_archived, created_at, updated_at) VALUES ('历史便签','正文','inspiration','yellow',0,0,?,?)",
+      )
+      .run(timestamp, timestamp);
+    scratch
+      .prepare(
+        "INSERT INTO daily_tasks(title, description, plan_date, estimated_minutes, status, sort_order, created_at, updated_at) VALUES ('历史任务','', '2026-11-01', 30, 'pending', 0, ?, ?)",
+      )
+      .run(timestamp, timestamp);
+
+    migrate(scratch);
+
+    expect(SCHEMA_VERSION).toBe(20);
+    const admin = scratch
+      .prepare("SELECT id, is_admin, status FROM users WHERE username='admin'")
+      .get() as { id: number; is_admin: number; status: string };
+    expect(admin).toEqual({ id: 1, is_admin: 1, status: "active" });
+
+    for (const table of ["requirements", "notes", "daily_tasks"])
+      expect(
+        (
+          scratch.prepare(`SELECT user_id FROM ${table}`).get() as {
+            user_id: number;
+          }
+        ).user_id,
+      ).toBe(admin.id);
+
+    // 计时唯一约束改为「每个用户一条 active」：两个用户可同时计时
+    scratch
+      .prepare(
+        "INSERT INTO users(username, display_name, password_hash, password_salt, status, is_admin, created_at, updated_at) VALUES ('second','第二人','h','s','active',0,?,?)",
+      )
+      .run(timestamp, timestamp);
+    const insertEntry = scratch.prepare(
+      `INSERT INTO daily_time_entries
+        (task_id, started_at, duration_seconds, status, created_at, updated_at, user_id)
+       VALUES (1, ?, 0, 'active', ?, ?, ?)`,
+    );
+    insertEntry.run(timestamp, timestamp, timestamp, 1);
+    expect(() =>
+      insertEntry.run(timestamp, timestamp, timestamp, 1),
+    ).toThrowError(/UNIQUE/i);
+    insertEntry.run(timestamp, timestamp, timestamp, 2);
+    expect(
+      (
+        scratch
+          .prepare(
+            "SELECT COUNT(*) AS count FROM daily_time_entries WHERE status='active'",
+          )
+          .get() as { count: number }
+      ).count,
+    ).toBe(2);
     scratch.close();
   });
 });

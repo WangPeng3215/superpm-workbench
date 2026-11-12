@@ -5,12 +5,12 @@
 
 ## 1. 前提
 
-| 项目 | 要求 |
-| --- | --- |
-| 系统 | Ubuntu 22.04 / 24.04（Debian 12 同样适用） |
-| 规格 | 1 核 2 GB 内存 / 2 GB 磁盘起步（`node_modules` 约 300 MB，构建时内存峰值约 1 GB）。**1 GB 内存**的实例也能跑，但要先加 4 GB swap 并确认 `vm.swappiness` 不为 0，见 §2 的说明 |
-| Node.js | `>=22.12.0 <25`，推荐 22 LTS |
-| 域名 | 可选；用 IP 直接访问就跳过 HTTPS 一节 |
+| 项目    | 要求                                                                                                                                                                         |
+| ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 系统    | Ubuntu 22.04 / 24.04（Debian 12 同样适用）                                                                                                                                   |
+| 规格    | 1 核 2 GB 内存 / 2 GB 磁盘起步（`node_modules` 约 300 MB，构建时内存峰值约 1 GB）。**1 GB 内存**的实例也能跑，但要先加 4 GB swap 并确认 `vm.swappiness` 不为 0，见 §2 的说明 |
+| Node.js | `>=22.12.0 <25`，推荐 22 LTS                                                                                                                                                 |
+| 域名    | 可选；用 IP 直接访问就跳过 HTTPS 一节                                                                                                                                        |
 
 **为什么只能源码部署**：Release 里的安装包只提供 `win32-x64`（`SuperPM.cmd` 启动器 + 内置更新器），
 没有 Linux 包。Linux 上从源码构建即可，功能完整，但**没有内置更新器**（见 §9）。
@@ -72,12 +72,12 @@ sudo PORT=8080 APP_DIR=/srv/superpm DATA_DIR=/srv/superpm-data bash install-supe
 
 安装后的目录分布：
 
-| 路径 | 内容 |
-| --- | --- |
-| `/opt/superpm` | 代码与构建产物（可随时删除重建） |
-| `/var/lib/superpm` | 数据根：`data/superpm.sqlite`、`workspace/`、`backups/` |
-| `/etc/superpm/superpm.env` | 运行时配置（`640 root:superpm`） |
-| `/etc/systemd/system/superpm.service` | 服务单元 |
+| 路径                                  | 内容                                                    |
+| ------------------------------------- | ------------------------------------------------------- |
+| `/opt/superpm`                        | 代码与构建产物（可随时删除重建）                        |
+| `/var/lib/superpm`                    | 数据根：`data/superpm.sqlite`、`workspace/`、`backups/` |
+| `/etc/superpm/superpm.env`            | 运行时配置（`640 root:superpm`）                        |
+| `/etc/systemd/system/superpm.service` | 服务单元                                                |
 
 ## 3. 手动部署（等价步骤）
 
@@ -123,16 +123,17 @@ systemctl status superpm --no-pager
 
 ### 环境变量一览
 
-| 变量 | 默认 | 说明 |
-| --- | --- | --- |
-| `PORT` | `3001` | HTTP 端口 |
-| `SUPERPM_HOST` | `127.0.0.1` | 监听地址。**故意不读通用 `HOST`**，避免被平台注入后把本机服务暴露到局域网 |
-| `SUPERPM_HOME` | `~/.local/share/superpm` | 数据根；不设则随服务用户家目录走，建议显式指定 |
-| `SUPERPM_DATA_DIR` | `data` | 数据库子目录（相对数据根或绝对路径） |
-| `SUPERPM_WORKSPACE_DIR` | `workspace` | 工作区子目录 |
-| `SUPERPM_WEB_DIR` | `apps/web/dist` | 前端产物目录，前后端分开部署时才需要 |
-| `SUPERPM_ALLOW_SYSTEM_OPEN` | 开启 | 设为 `0` 关闭「用本机程序打开/在文件夹中显示」 |
-| `SUPERPM_ADMIN_PASSWORD` | `admin123` | 首启口令，**少于 6 位会拒绝启动** |
+| 变量                         | 默认                     | 说明                                                                      |
+| ---------------------------- | ------------------------ | ------------------------------------------------------------------------- |
+| `PORT`                       | `3001`                   | HTTP 端口                                                                 |
+| `SUPERPM_HOST`               | `127.0.0.1`              | 监听地址。**故意不读通用 `HOST`**，避免被平台注入后把本机服务暴露到局域网 |
+| `SUPERPM_HOME`               | `~/.local/share/superpm` | 数据根；不设则随服务用户家目录走，建议显式指定                            |
+| `SUPERPM_DATA_DIR`           | `data`                   | 数据库子目录（相对数据根或绝对路径）                                      |
+| `SUPERPM_WORKSPACE_DIR`      | `workspace`              | 工作区子目录                                                              |
+| `SUPERPM_WEB_DIR`            | `apps/web/dist`          | 前端产物目录，前后端分开部署时才需要                                      |
+| `SUPERPM_ALLOW_SYSTEM_OPEN`  | 开启                     | 设为 `0` 关闭「用本机程序打开/在文件夹中显示」                            |
+| `SUPERPM_ADMIN_PASSWORD`     | `admin123`               | 首启口令，**少于 6 位会拒绝启动**                                         |
+| `SUPERPM_ALLOW_REGISTRATION` | `on`                     | 设为 `off` 关闭自助注册：登录页隐藏注册入口，注册接口返回 403             |
 
 ## 4. 反向代理与 HTTPS
 
@@ -214,6 +215,21 @@ sudo ufw enable
 `SUPERPM_ADMIN_PASSWORD` 只在数据库里还没有 `admin` 时生效；之后改口令请走界面，
 改环境变量不会覆盖已有账号。
 
+### 多用户与数据隔离
+
+本版本起支持自助注册与按账号隔离数据，同一台服务器可以给多个人用：
+
+- 每个账号登录后是一套空工作台；需求、问题、产出物、每日任务、会议、便签、优化点、工具箱
+  都按归属账号过滤，拿别人的 ID 直接打接口会返回 404。
+- `admin` 是超管（顶栏显示「超管」标识），能看到全部账号的数据；旧版本升级上来的历史数据
+  在迁移 0020 中归属 `admin`。
+- **公网服务器建议二选一**：要么把注册关掉（`SUPERPM_ALLOW_REGISTRATION=off`，账号由你创建），
+  要么接受任何访问者都能注册一个自己的隔离空间。
+- 账号停用：数据库里 `UPDATE users SET status='disabled' WHERE username='…'`，
+  该账号无法登录，已登录的会话在下一次请求即失效。
+- 升级到本版本无需手工执行 SQL：服务启动时自动应用迁移 0020（`schemaVersion` 从 19 变 20）。
+  详见 [`docs/multi-user.md`](multi-user.md)。
+
 ## 7. 日常运维
 
 ```bash
@@ -283,28 +299,28 @@ sudo bash install-superpm.sh
 
 ## 10. 排错
 
-| 现象 | 排查方向 |
-| --- | --- |
-| `service failed`，日志 `SUPERPM_ADMIN_PASSWORD 至少 6 位字符` | 首启口令配得太短，改 env 文件后重启 |
-| 启动即退出，日志 `EACCES` / `SQLITE_CANTOPEN` | 数据根属主不对：`sudo chown -R superpm:superpm /var/lib/superpm` |
-| 日志 `另一个进程正在执行数据迁移（锁文件：…/.migration.lock）` | 上次启动在迁移中被中断。确认没有实例在跑后删掉该锁文件再启动（锁超过 1 小时会自动失效） |
-| `npm ci` 卡在 `better-sqlite3` 编译 | 预编译包缺失时回落到源码编译：`sudo apt-get install -y build-essential python3` |
-| 502 Bad Gateway | 反代端口与 `PORT` 不一致；或服务没起来（`systemctl status superpm`） |
-| 打开页面白屏 / 静态资源 404 | 前端未构建：确认 `apps/web/dist/index.html` 存在，重跑 `npm run build` |
-| 登录一直 401 | 反代没有透传 `Cookie`/`Host`，对照 §4 的配置块 |
-| 附件上传失败（大文件） | Nginx 的 `client_max_body_size` 还是默认 1 MB |
-| `npm run build` 卡在 `transforming...` 后整机失联 / 连不上 | 内存不足触发 OOM：确认 swap 已挂载且 `vm.swappiness` 不是 `0`（见 §2），再试 `--minify false` |
-| 构建后首屏加载慢 | Nginx 没开 gzip，2.7 MB 的 JS 在裸传 |
+| 现象                                                           | 排查方向                                                                                      |
+| -------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `service failed`，日志 `SUPERPM_ADMIN_PASSWORD 至少 6 位字符`  | 首启口令配得太短，改 env 文件后重启                                                           |
+| 启动即退出，日志 `EACCES` / `SQLITE_CANTOPEN`                  | 数据根属主不对：`sudo chown -R superpm:superpm /var/lib/superpm`                              |
+| 日志 `另一个进程正在执行数据迁移（锁文件：…/.migration.lock）` | 上次启动在迁移中被中断。确认没有实例在跑后删掉该锁文件再启动（锁超过 1 小时会自动失效）       |
+| `npm ci` 卡在 `better-sqlite3` 编译                            | 预编译包缺失时回落到源码编译：`sudo apt-get install -y build-essential python3`               |
+| 502 Bad Gateway                                                | 反代端口与 `PORT` 不一致；或服务没起来（`systemctl status superpm`）                          |
+| 打开页面白屏 / 静态资源 404                                    | 前端未构建：确认 `apps/web/dist/index.html` 存在，重跑 `npm run build`                        |
+| 登录一直 401                                                   | 反代没有透传 `Cookie`/`Host`，对照 §4 的配置块                                                |
+| 附件上传失败（大文件）                                         | Nginx 的 `client_max_body_size` 还是默认 1 MB                                                 |
+| `npm run build` 卡在 `transforming...` 后整机失联 / 连不上     | 内存不足触发 OOM：确认 swap 已挂载且 `vm.swappiness` 不是 `0`（见 §2），再试 `--minify false` |
+| 构建后首屏加载慢                                               | Nginx 没开 gzip，2.7 MB 的 JS 在裸传                                                          |
 
 ## 11. 与 Windows 安装包的差异
 
-| 能力 | Windows 安装包 | Linux 源码部署 |
-| --- | --- | --- |
-| 启动/停止 | `SuperPM.cmd` / `Stop.cmd` | `systemctl start/stop superpm` |
-| 应用内更新 | 支持（增量包） | 不支持，用 §9 的脚本 |
-| 数据根 | `%LOCALAPPDATA%\superPM` | `SUPERPM_HOME`（推荐 `/var/lib/superpm`） |
-| 「在文件夹中显示」/「用本机程序打开」 | 可用 | 无意义，已在 env 中关闭 |
-| MCP 服务 | 本机 stdio，随客户端调用 | `node apps/server/dist/mcp/stdio.js`，需要跑在**能用同一份数据**的机器上；远程客户端不能直接连 stdio |
+| 能力                                  | Windows 安装包             | Linux 源码部署                                                                                       |
+| ------------------------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------- |
+| 启动/停止                             | `SuperPM.cmd` / `Stop.cmd` | `systemctl start/stop superpm`                                                                       |
+| 应用内更新                            | 支持（增量包）             | 不支持，用 §9 的脚本                                                                                 |
+| 数据根                                | `%LOCALAPPDATA%\superPM`   | `SUPERPM_HOME`（推荐 `/var/lib/superpm`）                                                            |
+| 「在文件夹中显示」/「用本机程序打开」 | 可用                       | 无意义，已在 env 中关闭                                                                              |
+| MCP 服务                              | 本机 stdio，随客户端调用   | `node apps/server/dist/mcp/stdio.js`，需要跑在**能用同一份数据**的机器上；远程客户端不能直接连 stdio |
 
 跨平台升级、迁移数据时，只要把整个数据根（`data/`、`workspace/`、`.env`）复制到新位置并指向
 `SUPERPM_HOME` 即可；数据库结构版本 `schemaVersion` 会在启动时自动迁移到当前版本。

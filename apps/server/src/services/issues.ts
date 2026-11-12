@@ -2,6 +2,7 @@ import type Database from "better-sqlite3";
 import { z } from "zod";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { ownerFilterSql } from "../db/scope.js";
 import {
   issueAssetLinkSchema,
   issueCommentSchema,
@@ -402,11 +403,12 @@ export class IssueService {
   // 关联列表：join artifact_nodes 投影名称/类型/相对路径（节点硬删除后关联行级联清理，天然无悬空）
   listAssets(requirementId: number, issueId: number): IssueAssetListResult {
     this.row(requirementId, issueId);
+    const owner = ownerFilterSql("link");
     const rows = this.db
       .prepare(
-        "SELECT link.issue_id, link.artifact_id AS asset_id, link.relation_type, link.created_at AS link_created_at, node.id AS node_id, node.node_type AS node_type, node.name AS node_name, node.relative_path AS node_relative_path FROM issue_artifact_links AS link JOIN artifact_nodes AS node ON node.id = link.artifact_id WHERE link.issue_id=? ORDER BY link.created_at DESC, link.artifact_id DESC",
+        `SELECT link.issue_id, link.artifact_id AS asset_id, link.relation_type, link.created_at AS link_created_at, node.id AS node_id, node.node_type AS node_type, node.name AS node_name, node.relative_path AS node_relative_path FROM issue_artifact_links AS link JOIN artifact_nodes AS node ON node.id = link.artifact_id AND node.user_id = link.user_id WHERE link.issue_id=?${owner.sql} ORDER BY link.created_at DESC, link.artifact_id DESC`,
       )
-      .all(issueId) as LinkRow[];
+      .all(...([issueId, ...owner.params] as number[])) as LinkRow[];
     const items = rows.map((row) => ({
       issueId: row.issue_id,
       assetId: row.asset_id,

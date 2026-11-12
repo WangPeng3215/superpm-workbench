@@ -4,7 +4,10 @@
     :key="dark ? 'dark' : 'light'"
     :loading="loading"
     :error="error"
+    :mode="mode"
+    :allow-register="allowRegister"
     @submit="handleSubmit"
+    @switch-mode="handleSwitchMode"
   />
   <!-- 浅色 / 深色切换：与主应用共用同一主题状态（localStorage superpm-theme） -->
   <ThemeSwitch class="login-theme-toggle" />
@@ -19,9 +22,16 @@ import DarkTheme from "./themes/DarkTheme.vue";
 
 defineOptions({ name: "XlyLogin" });
 
-defineProps<{ loading?: boolean; error?: string }>();
+defineProps<{
+  loading?: boolean;
+  error?: string;
+  /** 登录与注册共用同一套视觉，由页面控制当前形态 */
+  mode?: "login" | "register";
+  allowRegister?: boolean;
+}>();
 const emit = defineEmits<{
   submit: [form: { username: string; password: string }];
+  "switch-mode": [mode: "login" | "register"];
 }>();
 
 // 浅色 → 经典蓝（ClassicTheme），深色 → 暗黑科技（DarkTheme）
@@ -29,6 +39,10 @@ const activeTheme = computed(() => (dark.value ? DarkTheme : ClassicTheme));
 
 function handleSubmit(form: { username: string; password: string }) {
   emit("submit", form);
+}
+
+function handleSwitchMode(next: "login" | "register") {
+  emit("switch-mode", next);
 }
 </script>
 

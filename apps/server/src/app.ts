@@ -20,6 +20,7 @@ import {
   installRoot,
   isPackagedInstall,
   resolveAppDataRoot,
+  resolveRegistrationEnabled,
   resolveWebRoot,
 } from "./config/index.js";
 import { SCHEMA_VERSION } from "./db/migrate.js";
@@ -41,7 +42,9 @@ import {
   parseAuthCookie,
   serializeAuthCookie,
   serializeClearAuthCookie,
+  type AuthUser,
 } from "./services/auth.js";
+import { runAsUser } from "./db/scope.js";
 import {
   artifactUploadMaxBytes,
   artifactUploadMaxLabel,
@@ -51,10 +54,11 @@ import {
   updateInstallRequestSchema,
 } from "@superpm/shared";
 
-// 认证中间件写入的当前用户 ID（由 Token 校验产生）
+// 认证中间件写入的当前用户信息（由 Token 校验产生）
 declare module "fastify" {
   interface FastifyRequest {
     authUserId?: number;
+    authUser?: AuthUser;
   }
 }
 
@@ -83,6 +87,18 @@ const changePasswordSchema = z
       .string()
       .min(6, "新密码至少 6 位")
       .max(100, "新密码最多 100 位"),
+  })
+  .strict();
+// 注册请求体：账号规则由服务层统一校验，这里只做长度与必填约束
+const registerSchema = z
+  .object({
+    username: z
+      .string()
+      .trim()
+      .min(3, "账号至少 3 位")
+      .max(32, "账号最多 32 位"),
+    displayName: z.string().trim().max(50, "显示名最多 50 位").optional(),
+    password: z.string().min(6, "密码至少 6 位").max(100, "密码最多 100 位"),
   })
   .strict();
 const version = appVersion;
@@ -252,29 +268,48 @@ export async function createApp(
       setImmediate(() => options.onShutdownRequested?.());
     });
   }
-  // 认证中间件：除公开端点外，全部 /api/* 均需有效会话 Cookie
+  // 认证中间件：除公开端点外，全部 /api/* 均需有效会话 Cookie。
+  // 同时在这里建立用户作用域——之后该请求链路上的所有同步 SQL 都自动带上 user_id 条件，
+  // 业务代码即使漏写归属判断也不会越权（作用域代理见 db/scope.ts）。
+  const registrationEnabled = resolveRegistrationEnabled();
   const publicApiPaths = new Set([
     "/api/health",
     "/api/auth/login",
+    "/api/auth/config",
+    "/api/auth/register",
     "/api/shutdown",
   ]);
-  // 编辑器内容以 <img src="/api/..."> 引用阶段工作区图片，图片 raw 读取保持公开
-  const publicImagePattern = /^\/api\/requirements\/\d+\/images\/[^/]+$/;
-  app.addHook("onRequest", async (request, reply) => {
+  app.addHook("onRequest", (request, reply, done) => {
     const pathname = request.url.split("?")[0];
-    if (!pathname.startsWith("/api/")) return;
-    if (publicApiPaths.has(pathname) || publicImagePattern.test(pathname))
-      return;
+    if (!pathname.startsWith("/api/")) return done();
+    if (publicApiPaths.has(pathname)) return done();
     const token = parseAuthCookie(request.headers.cookie);
     const userId = token ? authService.verifyToken(token) : null;
-    if (!userId)
-      return reply.status(401).send({
+    if (!userId) {
+      reply.status(401).send({
         error: {
           code: "UNAUTHORIZED",
           message: "未登录或登录已过期，请重新登录",
         },
       });
-    request.authUserId = userId;
+      return done();
+    }
+    let user;
+    try {
+      user = authService.getUser(userId);
+    } catch {
+      reply.status(401).send({
+        error: {
+          code: "UNAUTHORIZED",
+          message: "登录已失效，请重新登录",
+        },
+      });
+      return done();
+    }
+    request.authUserId = user.id;
+    request.authUser = user;
+    // 作用域必须覆盖后续处理链：runAsUser 内部调用 done()，异步上下文随之传递
+    runAsUser({ userId: user.id, isAdmin: user.isAdmin }, () => done());
   });
   app.get("/api/system", async () => {
     const rootInfo = dataRoot.info();
@@ -341,6 +376,29 @@ export async function createApp(
   app.post("/api/update/install", async (request, reply) => {
     const body = updateInstallRequestSchema.parse(request.body);
     return reply.status(202).send(updates.startInstall(body));
+  });
+  // 登录页在未登录状态下就要知道是否显示注册入口
+  app.get("/api/auth/config", async () => ({ registrationEnabled }));
+  app.post("/api/auth/register", async (request, reply) => {
+    if (!registrationEnabled)
+      return reply.status(403).send({
+        error: {
+          code: "REGISTRATION_DISABLED",
+          message: "本服务未开放自助注册，请联系管理员开通账号",
+        },
+      });
+    const body = registerSchema.parse(request.body);
+    const { user, token } = authService.register({
+      username: body.username,
+      displayName: body.displayName?.trim() || body.username,
+      password: body.password,
+    });
+    reply.header(
+      "set-cookie",
+      serializeAuthCookie(token, authService.tokenMaxAgeSeconds),
+    );
+    reply.status(201);
+    return user;
   });
   app.post("/api/auth/login", async (request, reply) => {
     const body = loginSchema.parse(request.body);

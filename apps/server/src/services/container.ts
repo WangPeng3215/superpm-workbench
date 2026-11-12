@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import { resolve } from "node:path";
 import { defaultPaths, ensurePaths } from "../config/index.js";
 import { migrate } from "../db/migrate.js";
+import { createScopedDatabase } from "../db/scope.js";
 import { RequirementService } from "./requirements.js";
 import { AuthService } from "./auth.js";
 import { RequirementDirectoryResolver } from "./requirement-directory.js";
@@ -53,18 +54,22 @@ export function createServiceContainer(
     options.workspacePath ?? defaults.workspacePath,
   );
   ensurePaths(databasePath, workspacePath);
-  const db = new Database(databasePath);
+  const rawDb = new Database(databasePath);
   try {
-    migrate(db, undefined, workspacePath);
+    migrate(rawDb, undefined, workspacePath);
   } catch (error) {
-    db.close();
+    rawDb.close();
     throw error;
   }
+  // 业务服务一律拿到「作用域代理」：语句在执行时按当前登录用户自动追加 user_id 条件。
+  // 迁移、种子、MCP、定时补偿等系统路径不在作用域内，行为与改造前一致。
+  const db = createScopedDatabase(rawDb);
   const directories = new RequirementDirectoryResolver(db, workspacePath);
   // 注入目录解析器：建需与优化点转换共用 createWithWorkspace（含目录初始化）
-  const requirements = new RequirementService(db, directories);
+  // 仓储层用原生连接：drizzle 生成语句并自带参数绑定，隔离条件在仓储内显式书写
+  const requirements = new RequirementService(db, directories, rawDb);
   const optimizationPoints = new OptimizationPointService(db, requirements);
-  const auth = new AuthService(db);
+  const auth = new AuthService(rawDb);
   auth.ensureSeed();
   const issues = new IssueService(db, requirements, workspacePath, directories);
   const artifacts = new ArtifactService(

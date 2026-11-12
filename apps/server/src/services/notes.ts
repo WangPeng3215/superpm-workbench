@@ -1,4 +1,5 @@
 import type Database from "better-sqlite3";
+import { ownerFilterSql } from "../db/scope.js";
 import {
   noteCreateSchema,
   noteListSchema,
@@ -42,8 +43,9 @@ const selectColumns = `n.id, n.title, n.content, n.type, n.color, n.is_pinned,
   n.is_archived, n.converted_task_id, n.created_at, n.updated_at, n.archived_at,
   t.title AS task_title, t.plan_date AS task_plan_date, t.deleted_at AS task_deleted_at`;
 
+// 联查目标任务属于多表语句，隔离条件显式书写：关联行必须与便签同属一人
 const fromClause = `FROM notes n
-  LEFT JOIN daily_tasks t ON t.id = n.converted_task_id`;
+  LEFT JOIN daily_tasks t ON t.id = n.converted_task_id AND t.user_id = n.user_id`;
 
 function taskTitleFallback(title: string, content: string) {
   const heading = title.trim();
@@ -111,13 +113,16 @@ export class NoteService {
 
   list(input: unknown): Note[] {
     const query = noteListSchema.parse(input);
+    const owner = ownerFilterSql("n");
     const rows = this.db
       .prepare(
         `SELECT ${selectColumns} ${fromClause}
-         WHERE n.is_archived = ?
+         WHERE n.is_archived = ?${owner.sql}
          ORDER BY n.is_pinned DESC, n.created_at DESC, n.id DESC`,
       )
-      .all(query.archived ? 1 : 0) as NoteRow[];
+      .all(
+        ...([query.archived ? 1 : 0, ...owner.params] as number[]),
+      ) as NoteRow[];
     return rows.map(toNote);
   }
 
@@ -169,19 +174,24 @@ export class NoteService {
       params.push(query.isArchived ? 1 : 0);
     }
     const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+    const owner = ownerFilterSql("n");
+    const scopedWhere = where
+      ? `${where}${owner.sql}`
+      : `WHERE 1=1${owner.sql}`;
+    const scopedParams = [...params, ...owner.params];
     const total = (
       this.db
-        .prepare(`SELECT COUNT(*) AS count FROM notes n ${where}`)
-        .get(...params) as { count: number }
+        .prepare(`SELECT COUNT(*) AS count FROM notes n ${scopedWhere}`)
+        .get(...scopedParams) as { count: number }
     ).count;
     const offset = (query.page - 1) * query.pageSize;
     const rows = this.db
       .prepare(
-        `SELECT ${selectColumns} ${fromClause} ${where}
+        `SELECT ${selectColumns} ${fromClause} ${scopedWhere}
          ORDER BY n.is_pinned DESC, n.created_at DESC, n.id DESC
          LIMIT ? OFFSET ?`,
       )
-      .all(...params, query.pageSize, offset) as NoteRow[];
+      .all(...scopedParams, query.pageSize, offset) as NoteRow[];
     return {
       items: rows.map(toNoteSummary),
       total,
@@ -284,9 +294,12 @@ export class NoteService {
   }
 
   private row(id: number): NoteRow {
+    const owner = ownerFilterSql("n");
     const row = this.db
-      .prepare(`SELECT ${selectColumns} ${fromClause} WHERE n.id = ?`)
-      .get(id) as NoteRow | undefined;
+      .prepare(
+        `SELECT ${selectColumns} ${fromClause} WHERE n.id = ?${owner.sql}`,
+      )
+      .get(...([id, ...owner.params] as number[])) as NoteRow | undefined;
     if (!row) throw new DomainError("NOT_FOUND", "便签不存在", 404);
     return row;
   }

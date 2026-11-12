@@ -35,6 +35,8 @@ export interface AuthUser {
   id: number;
   username: string;
   displayName: string;
+  /** 超管：可查看全部用户数据 */
+  isAdmin: boolean;
 }
 
 interface UserRow {
@@ -43,6 +45,18 @@ interface UserRow {
   display_name: string;
   password_hash: string;
   password_salt: string;
+  status: string;
+  is_admin: number;
+}
+
+/** 账号名规则：字母数字与下划线/中划线，3-32 位；admin 为系统保留 */
+export const USERNAME_PATTERN = /^[A-Za-z0-9_-]{3,32}$/;
+export const RESERVED_USERNAMES = new Set(["admin"]);
+
+export interface RegisterInput {
+  username: string;
+  displayName: string;
+  password: string;
 }
 
 export class AuthService {
@@ -68,11 +82,14 @@ export class AuthService {
         .run(this.secret);
     }
     const admin = this.db
-      .prepare("SELECT id FROM users WHERE username = 'admin'")
-      .get();
+      .prepare("SELECT id, is_admin FROM users WHERE username = 'admin'")
+      .get() as { id: number; is_admin: number } | undefined;
     if (!admin) {
       const now = new Date().toISOString();
-      this.createUser("admin", "管理员", resolveSeedPassword(), now);
+      this.createUser("admin", "管理员", resolveSeedPassword(), now, true);
+    } else if (admin.is_admin !== 1) {
+      // 老库升级：admin 永远是超管，避免升级后失去跨用户视图
+      this.db.prepare("UPDATE users SET is_admin = 1 WHERE id = ?").run(admin.id);
     }
   }
 
@@ -81,14 +98,15 @@ export class AuthService {
     displayName: string,
     password: string,
     now: string,
+    isAdmin = false,
   ): number {
     const salt = randomBytes(16).toString("hex");
     const hash = this.hashPassword(password, salt);
     const result = this.db
       .prepare(
-        "INSERT INTO users(username, display_name, password_hash, password_salt, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO users(username, display_name, password_hash, password_salt, status, is_admin, created_at, updated_at) VALUES (?, ?, ?, ?, 'active', ?, ?, ?)",
       )
-      .run(username, displayName, hash, salt, now, now);
+      .run(username, displayName, hash, salt, isAdmin ? 1 : 0, now, now);
     return Number(result.lastInsertRowid);
   }
 
@@ -101,6 +119,7 @@ export class AuthService {
       id: row.id,
       username: row.username,
       displayName: row.display_name,
+      isAdmin: row.is_admin === 1,
     };
   }
 
@@ -108,6 +127,29 @@ export class AuthService {
     return this.db
       .prepare("SELECT * FROM users WHERE username = ?")
       .get(username) as UserRow | undefined;
+  }
+
+  /** 注册普通账号：只建账号，不建任何业务数据；账号名与种子超管互斥 */
+  register(input: RegisterInput): { user: AuthUser; token: string } {
+    const username = input.username.trim();
+    const displayName = input.displayName.trim() || username;
+    if (!USERNAME_PATTERN.test(username))
+      throw new DomainError(
+        "VALIDATION_ERROR",
+        "账号需为 3-32 位字母、数字、下划线或中划线",
+      );
+    if (RESERVED_USERNAMES.has(username.toLowerCase()))
+      throw new DomainError("CONFLICT", "该账号名为系统保留，请更换", 409);
+    if (input.password.length < 6)
+      throw new DomainError("VALIDATION_ERROR", "密码至少 6 位");
+    if (this.findByUsername(username))
+      throw new DomainError("CONFLICT", "该账号已被注册", 409);
+    const now = new Date().toISOString();
+    const id = this.createUser(username, displayName, input.password, now);
+    const row = this.db
+      .prepare("SELECT * FROM users WHERE id = ?")
+      .get(id) as UserRow;
+    return { user: this.toUser(row), token: this.signToken(id) };
   }
 
   private verifyPassword(row: UserRow, password: string): boolean {
@@ -128,6 +170,8 @@ export class AuthService {
     }
     if (!this.verifyPassword(row, password))
       throw new DomainError("AUTH_FAILED", "账号或密码错误", 401);
+    if (row.status !== "active")
+      throw new DomainError("ACCOUNT_DISABLED", "账号已停用，请联系管理员", 403);
     return { user: this.toUser(row), token: this.signToken(row.id) };
   }
 
@@ -136,7 +180,7 @@ export class AuthService {
     const row = this.db
       .prepare("SELECT * FROM users WHERE id = ?")
       .get(id) as UserRow | undefined;
-    if (!row)
+    if (!row || row.status !== "active")
       throw new DomainError("UNAUTHORIZED", "登录已失效，请重新登录", 401);
     return this.toUser(row);
   }

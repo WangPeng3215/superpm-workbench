@@ -104,12 +104,17 @@ function handleUserCommand(command: string | number | object) {
         <button class="user-trigger" type="button" aria-label="账户菜单">
           <span class="user-avatar">{{ avatarChar }}</span>
           <strong>{{ authStore.user?.displayName ?? "未登录" }}</strong>
+          <!-- 超管标识：能看到全部用户数据，需要明确的视觉提示 -->
+          <span v-if="authStore.user?.isAdmin" class="user-badge">超管</span>
           <el-icon aria-hidden="true" class="user-caret"
             ><DownOutlined
           /></el-icon>
         </button>
         <template #dropdown>
           <el-dropdown-menu>
+            <el-dropdown-item v-if="authStore.user" disabled>
+              当前账号：{{ authStore.user.username }}
+            </el-dropdown-item>
             <el-dropdown-item command="change-password">
               修改密码
             </el-dropdown-item>

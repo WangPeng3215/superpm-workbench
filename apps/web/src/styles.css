@@ -356,6 +356,17 @@ a,
   font-weight: 600;
   color: var(--text-body);
 }
+/* 超管标识：以浅色胶囊呈现，避免与普通账号混淆 */
+.user-badge {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--bg-brand-soft);
+  color: var(--brand);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  white-space: nowrap;
+}
 .user-caret {
   font-size: 11px;
   color: var(--text-muted);

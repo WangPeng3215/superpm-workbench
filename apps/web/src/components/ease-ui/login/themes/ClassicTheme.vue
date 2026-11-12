@@ -45,8 +45,14 @@
       <!-- 右侧表单区 -->
       <div class="t-classic__form-area">
         <div class="form-header">
-          <h2 class="form-title">欢迎回来</h2>
-          <p class="form-sub">请登录您的账号以继续使用</p>
+          <h2 class="form-title">{{ isRegister ? "创建账号" : "欢迎回来" }}</h2>
+          <p class="form-sub">
+            {{
+              isRegister
+                ? "注册后拥有独立的个人工作台，数据互不可见"
+                : "请登录您的账号以继续使用"
+            }}
+          </p>
         </div>
 
         <!-- ========== 登录表单（内联） ========== -->
@@ -91,15 +97,30 @@
             </div>
           </div>
 
-          <div v-if="error" class="cf-error">
+          <div v-if="isRegister" class="cf-field">
+            <label class="cf-label" for="classic-confirm">确认密码</label>
+            <div class="cf-input-wrap">
+              <LockOutlined class="cf-input-icon" aria-hidden="true" />
+              <input
+                id="classic-confirm"
+                v-model="form.confirm"
+                type="password"
+                class="cf-input"
+                placeholder="请再次输入密码"
+                autocomplete="new-password"
+              />
+            </div>
+          </div>
+
+          <div v-if="displayError" class="cf-error">
             <ExclamationCircleFilled class="cf-error-icon" aria-hidden="true" />
-            {{ error }}
+            {{ displayError }}
           </div>
 
           <button
             type="submit"
             class="cf-btn"
-            :disabled="loading || !form.username || !form.password"
+            :disabled="loading || !canSubmit"
           >
             <span class="cf-btn-shimmer" />
             <span v-if="loading" class="cf-btn-spinner">
@@ -113,18 +134,40 @@
               </svg>
             </span>
             <template v-else>
-              <span class="cf-btn-text">立即登录</span>
+              <span class="cf-btn-text">{{ isRegister ? "注册并登录" : "立即登录" }}</span>
               <span class="cf-btn-arrow">
                 <ArrowRightOutlined aria-hidden="true" />
               </span>
             </template>
-            <span v-if="loading" class="cf-btn-text">验证中...</span>
+            <span v-if="loading" class="cf-btn-text">
+              {{ isRegister ? "创建中..." : "验证中..." }}
+            </span>
           </button>
 
-          <!-- 默认账号提示 -->
+          <!-- 默认账号提示 / 注册说明 -->
           <div class="cf-hint">
             <InfoCircleOutlined class="cf-hint-icon" aria-hidden="true" />
-            默认账号：admin · 密码：admin123（首次登录后请修改）
+            <template v-if="isRegister">
+              账号 3-32 位字母、数字、下划线或中划线，密码至少 6 位
+            </template>
+            <template v-else>
+              默认账号：admin · 密码：admin123（首次登录后请修改）
+            </template>
+          </div>
+
+          <div v-if="isRegister || allowRegister" class="cf-switch">
+            <template v-if="isRegister">
+              已有账号？
+              <button type="button" class="cf-switch-btn" @click="emit('switch-mode', 'login')">
+                返回登录
+              </button>
+            </template>
+            <template v-else-if="allowRegister">
+              还没有账号？
+              <button type="button" class="cf-switch-btn" @click="emit('switch-mode', 'register')">
+                立即注册
+              </button>
+            </template>
           </div>
         </form>
       </div>
@@ -140,7 +183,7 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref } from "vue";
+import { computed, reactive, ref } from "vue";
 import {
   ArrowRightOutlined,
   CheckCircleFilled,
@@ -156,9 +199,16 @@ import {
 const logoUrl = "/logo-mark.png";
 const appVersion = __APP_VERSION__;
 
-defineProps<{ loading?: boolean; error?: string }>();
+const props = defineProps<{
+  loading?: boolean;
+  error?: string;
+  mode?: "login" | "register";
+  /** 服务端关闭自助注册时，隐藏切换入口 */
+  allowRegister?: boolean;
+}>();
 const emit = defineEmits<{
   submit: [form: { username: string; password: string }];
+  "switch-mode": [mode: "login" | "register"];
 }>();
 
 const features = [
@@ -167,12 +217,25 @@ const features = [
   "问题、决策与跟进闭环",
 ];
 const showPwd = ref(false);
-const form = reactive({ username: "", password: "" });
+const form = reactive({ username: "", password: "", confirm: "" });
+const isRegister = computed(() => props.mode === "register");
+const allowRegister = computed(() => props.allowRegister !== false);
+// 本地校验错误优先于接口错误：切换模式或重新输入时立即消失
+const localError = ref("");
+const displayError = computed(() => localError.value || props.error || "");
+const canSubmit = computed(() => {
+  if (!form.username || !form.password) return false;
+  return isRegister.value ? Boolean(form.confirm) : true;
+});
 
 function handleSubmit() {
-  if (form.username && form.password) {
-    emit("submit", { username: form.username, password: form.password });
+  if (!canSubmit.value) return;
+  if (isRegister.value && form.password !== form.confirm) {
+    localError.value = "两次输入的密码不一致";
+    return;
   }
+  localError.value = "";
+  emit("submit", { username: form.username, password: form.password });
 }
 </script>
 
@@ -678,6 +741,39 @@ function handleSubmit() {
   .cf-hint-icon {
     font-size: 12px;
     flex: none;
+  }
+}
+
+/* 登录 / 注册模式切换 */
+.cf-switch {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.cf-switch-btn {
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--brand);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: color var(--duration-fast);
+
+  &:hover {
+    color: var(--brand-strong);
+    text-decoration: underline;
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--brand);
+    outline-offset: 2px;
   }
 }
 

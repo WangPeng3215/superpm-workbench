@@ -119,3 +119,38 @@ test("修改密码后旧密码失效、新密码可登录", async ({
   });
   expect(restore.ok()).toBeTruthy();
 });
+
+test("注册新账号后进入独立工作台，看不到任何他人数据", async ({ page }) => {
+  const username = `e2e${Date.now().toString().slice(-8)}`;
+  await page.goto("/login");
+  // 登录页切换到注册形态：同屏切换，不清空已输入的错误提示
+  await page.getByRole("button", { name: "立即注册" }).click();
+  await usernameInput(page).fill(username);
+  // 注册形态下两个密码框分别输入新密码与确认密码
+  const passwords = page.locator("input[type='password']");
+  await passwords.nth(0).fill("secret123");
+  await passwords.nth(1).fill("secret123");
+  await page.getByRole("button", { name: "注册并登录" }).click();
+  await expect(page).toHaveURL(/\/requirements/);
+  // 右上角显示新账号显示名，且不带超管标识
+  await expect(page.locator(".user-trigger strong")).toHaveText(username);
+  await expect(page.locator(".user-badge")).toHaveCount(0);
+  // 新账号的工作台是空的：admin 及其他用例造的数据一条都不可见
+  const listed = await page.request.get("/api/requirements");
+  expect(listed.ok()).toBeTruthy();
+  expect((await listed.json()).items).toHaveLength(0);
+});
+
+test("注册时两次密码不一致会本地拦截", async ({ page }) => {
+  await page.goto("/login");
+  await page.getByRole("button", { name: "立即注册" }).click();
+  await usernameInput(page).fill("e2e_mismatch");
+  const passwords = page.locator("input[type='password']");
+  await passwords.nth(0).fill("secret123");
+  await passwords.nth(1).fill("secret456");
+  await page.getByRole("button", { name: "注册并登录" }).click();
+  await expect(page.locator(".cf-error, .df-error")).toContainText(
+    "两次输入的密码不一致",
+  );
+  await expect(page).toHaveURL(/\/login/);
+});

@@ -75,15 +75,30 @@
             </div>
           </div>
 
-          <div v-if="error" class="df-error">
+          <div v-if="isRegister" class="df-field">
+            <label class="df-label" for="dark-confirm">确认密码</label>
+            <div class="df-input-wrap">
+              <LockOutlined class="df-input-icon" aria-hidden="true" />
+              <input
+                id="dark-confirm"
+                v-model="form.confirm"
+                type="password"
+                class="df-input"
+                placeholder="请再次输入密码"
+                autocomplete="new-password"
+              />
+            </div>
+          </div>
+
+          <div v-if="displayError" class="df-error">
             <ExclamationCircleFilled class="df-error-icon" aria-hidden="true" />
-            {{ error }}
+            {{ displayError }}
           </div>
 
           <button
             type="submit"
             class="df-btn"
-            :disabled="loading || !form.username || !form.password"
+            :disabled="loading || !canSubmit"
           >
             <span class="df-btn-shimmer" />
             <span v-if="loading" class="df-btn-spinner">
@@ -97,18 +112,40 @@
               </svg>
             </span>
             <template v-else>
-              <span class="df-btn-text">立即登录</span>
+              <span class="df-btn-text">{{ isRegister ? "注册并登录" : "立即登录" }}</span>
               <span class="df-btn-arrow">
                 <ArrowRightOutlined aria-hidden="true" />
               </span>
             </template>
-            <span v-if="loading" class="df-btn-text">验证中...</span>
+            <span v-if="loading" class="df-btn-text">
+              {{ isRegister ? "创建中..." : "验证中..." }}
+            </span>
           </button>
 
-          <!-- 默认账号提示 -->
+          <!-- 默认账号提示 / 注册说明 -->
           <div class="df-hint">
             <InfoCircleOutlined class="df-hint-icon" aria-hidden="true" />
-            默认账号：admin · 密码：admin123（首次登录后请修改）
+            <template v-if="isRegister">
+              账号 3-32 位字母、数字、下划线或中划线，密码至少 6 位
+            </template>
+            <template v-else>
+              默认账号：admin · 密码：admin123（首次登录后请修改）
+            </template>
+          </div>
+
+          <div v-if="isRegister || allowRegister" class="df-switch">
+            <template v-if="isRegister">
+              已有账号？
+              <button type="button" class="df-switch-btn" @click="emit('switch-mode', 'login')">
+                返回登录
+              </button>
+            </template>
+            <template v-else-if="allowRegister">
+              还没有账号？
+              <button type="button" class="df-switch-btn" @click="emit('switch-mode', 'register')">
+                立即注册
+              </button>
+            </template>
           </div>
         </form>
       </div>
@@ -133,7 +170,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, onUnmounted } from "vue";
+import { ref, reactive, computed, onMounted, onUnmounted } from "vue";
 import {
   ArrowRightOutlined,
   ExclamationCircleFilled,
@@ -148,9 +185,16 @@ import {
 const logoUrl = "/logo-mark.png";
 const appVersion = __APP_VERSION__;
 
-defineProps<{ loading?: boolean; error?: string }>();
+const props = defineProps<{
+  loading?: boolean;
+  error?: string;
+  mode?: "login" | "register";
+  /** 服务端关闭自助注册时，隐藏切换入口 */
+  allowRegister?: boolean;
+}>();
 const emit = defineEmits<{
   submit: [form: { username: string; password: string }];
+  "switch-mode": [mode: "login" | "register"];
 }>();
 
 const canvasRef = ref<HTMLCanvasElement | null>(null);
@@ -225,12 +269,25 @@ onMounted(() => initCanvas());
 onUnmounted(() => cancelAnimationFrame(animId));
 
 const showPwd = ref(false);
-const form = reactive({ username: "", password: "" });
+const form = reactive({ username: "", password: "", confirm: "" });
+const isRegister = computed(() => props.mode === "register");
+const allowRegister = computed(() => props.allowRegister !== false);
+// 本地校验错误优先于接口错误：切换模式或重新输入时立即消失
+const localError = ref("");
+const displayError = computed(() => localError.value || props.error || "");
+const canSubmit = computed(() => {
+  if (!form.username || !form.password) return false;
+  return isRegister.value ? Boolean(form.confirm) : true;
+});
 
 function handleSubmit() {
-  if (form.username && form.password) {
-    emit("submit", { username: form.username, password: form.password });
+  if (!canSubmit.value) return;
+  if (isRegister.value && form.password !== form.confirm) {
+    localError.value = "两次输入的密码不一致";
+    return;
   }
+  localError.value = "";
+  emit("submit", { username: form.username, password: form.password });
 }
 </script>
 
@@ -697,6 +754,38 @@ function handleSubmit() {
   .df-hint-icon {
     font-size: 12px;
     flex: none;
+  }
+}
+
+/* 登录 / 注册模式切换 */
+.df-switch {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: rgba(214, 224, 255, 0.55);
+}
+
+.df-switch-btn {
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--brand);
+  cursor: pointer;
+  transition: color var(--duration-fast);
+
+  &:hover {
+    color: #8ea6ff;
+    text-decoration: underline;
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--brand);
+    outline-offset: 2px;
   }
 }
 
