@@ -112,7 +112,9 @@
               </svg>
             </span>
             <template v-else>
-              <span class="df-btn-text">{{ isRegister ? "注册并登录" : "立即登录" }}</span>
+              <span class="df-btn-text">{{
+                isRegister ? "注册并登录" : "立即登录"
+              }}</span>
               <span class="df-btn-arrow">
                 <ArrowRightOutlined aria-hidden="true" />
               </span>
@@ -122,27 +124,30 @@
             </span>
           </button>
 
-          <!-- 默认账号提示 / 注册说明 -->
-          <div class="df-hint">
+          <!-- 只在注册时给出账号规则；登录态不展示任何初始账号信息 -->
+          <div v-if="isRegister" class="df-hint">
             <InfoCircleOutlined class="df-hint-icon" aria-hidden="true" />
-            <template v-if="isRegister">
-              账号 3-32 位字母、数字、下划线或中划线，密码至少 6 位
-            </template>
-            <template v-else>
-              默认账号：admin · 密码：admin123（首次登录后请修改）
-            </template>
+            账号 3-32 位字母、数字、下划线或中划线，密码至少 6 位
           </div>
 
           <div v-if="isRegister || allowRegister" class="df-switch">
             <template v-if="isRegister">
               已有账号？
-              <button type="button" class="df-switch-btn" @click="emit('switch-mode', 'login')">
+              <button
+                type="button"
+                class="df-switch-btn"
+                @click="emit('switch-mode', 'login')"
+              >
                 返回登录
               </button>
             </template>
             <template v-else-if="allowRegister">
               还没有账号？
-              <button type="button" class="df-switch-btn" @click="emit('switch-mode', 'register')">
+              <button
+                type="button"
+                class="df-switch-btn"
+                @click="emit('switch-mode', 'register')"
+              >
                 立即注册
               </button>
             </template>
@@ -741,7 +746,7 @@ function handleSubmit() {
   }
 }
 
-/* 默认账号提示 */
+/* 账号规则提示（仅注册形态显示） */
 .df-hint {
   display: flex;
   align-items: center;

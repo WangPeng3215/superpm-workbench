@@ -51,9 +51,7 @@ test("短视口下登录卡片与页脚不重叠", async ({ page }) => {
     const footerBox = await footer.boundingBox();
     expect(cardBox).not.toBeNull();
     expect(footerBox).not.toBeNull();
-    expect(footerBox!.y).toBeGreaterThanOrEqual(
-      cardBox!.y + cardBox!.height,
-    );
+    expect(footerBox!.y).toBeGreaterThanOrEqual(cardBox!.y + cardBox!.height);
   }
 });
 
@@ -87,10 +85,7 @@ test("退出登录后访问受保护页面回到登录页", async ({ page }) => 
   await expect(page).toHaveURL(/\/login\?redirect=/);
 });
 
-test("修改密码后旧密码失效、新密码可登录", async ({
-  page,
-  request,
-}) => {
+test("修改密码后旧密码失效、新密码可登录", async ({ page, request }) => {
   await loginViaUi(page, "admin", "admin123");
   await expect(page).toHaveURL(/\/requirements/);
   await openUserMenu(page, "修改密码");
@@ -153,4 +148,18 @@ test("注册时两次密码不一致会本地拦截", async ({ page }) => {
     "两次输入的密码不一致",
   );
   await expect(page).toHaveURL(/\/login/);
+});
+
+test("登录页不展示任何初始账号信息", async ({ page }) => {
+  await page.goto("/login");
+  const body = page.locator("body");
+  // 公网部署时登录页是唯一对外的门面，不能把初始凭据写在上面
+  await expect(body).not.toContainText("admin123");
+  await expect(body).not.toContainText("默认账号");
+  // 注册入口保留，账号规则只在注册形态展示
+  await expect(
+    page.getByRole("button", { name: "立即注册", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "立即注册", exact: true }).click();
+  await expect(body).toContainText("账号 3-32 位");
 });
