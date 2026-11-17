@@ -426,7 +426,7 @@ describe("更新安装", () => {
       accepted: true,
     });
     await waitFor(
-      () => service.status().install?.status === "installing" ? true : null,
+      () => (service.status().install?.status === "installing" ? true : null),
       20000,
     );
     expect(launched).toHaveLength(1);
