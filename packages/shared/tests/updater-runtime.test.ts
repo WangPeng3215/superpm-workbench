@@ -82,7 +82,7 @@ it("独立打包后的更新器不会因其他进程复用旧 MCP PID 而停在�
       {
         encoding: "utf8",
         windowsHide: true,
-        timeout: 10000,
+        timeout: 30000,
         env: {
           ...process.env,
           SUPERPM_HOME: home,
@@ -102,4 +102,4 @@ it("独立打包后的更新器不会因其他进程复用旧 MCP PID 而停在�
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
-}, 15000);
+}, 45000);

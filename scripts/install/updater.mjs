@@ -36,7 +36,7 @@ import {
 import yauzl from "yauzl";
 import { stopMcpProcesses } from "@superpm/shared/mcp-runtime";
 
-const UPDATER_VERSION = "1.1.1";
+const UPDATER_VERSION = "1.1.2";
 const MANIFEST_MAX_BYTES = 1024 * 1024;
 const ARCHIVE_MAX_BYTES = 1024 * 1024 * 1024;
 const ARCHIVE_MAX_ENTRIES = 200000;

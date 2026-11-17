@@ -382,7 +382,7 @@ async function stageInstall(work, options, appStage, runtime) {
         platform: "win32-x64",
         schemaVersion: appStage.schema,
         builtAt: new Date().toISOString(),
-        updaterVersion: "1.1.1",
+        updaterVersion: "1.1.2",
       },
       null,
       2,
@@ -471,7 +471,7 @@ function writeManifest(out, options, manifest, full, update) {
     platform: "win32-x64",
     releasedAt: new Date().toISOString(),
     schemaVersion: manifest.schemaVersion,
-    minUpdaterVersion: "1.1.1",
+    minUpdaterVersion: "1.1.2",
     notes: options.notes || `superPM Workbench v${options.version}`,
     full: {
       file: full.file,

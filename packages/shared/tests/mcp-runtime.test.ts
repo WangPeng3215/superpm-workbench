@@ -83,7 +83,7 @@ afterEach(async () => {
     rmSync(directory, { recursive: true, force: true });
 });
 
-describe("MCP 进程身份核验", () => {
+describe("MCP 进程身份核验", { timeout: 45000 }, () => {
   const identity = {
     startedAt: old,
     executable: "C:\\superPM\\runtime\\node.exe",

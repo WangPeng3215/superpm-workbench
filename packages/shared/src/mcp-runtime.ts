@@ -98,7 +98,8 @@ function processIdentity(pid: number): ProcessIdentity | null {
         {
           encoding: "utf8",
           windowsHide: true,
-          timeout: 3000,
+          // Windows 冷启动 CIM 查询在高负载设备上可能超过 3 秒。
+          timeout: 10000,
           stdio: ["ignore", "pipe", "pipe"],
         },
       );

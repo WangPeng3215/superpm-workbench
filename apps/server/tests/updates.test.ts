@@ -425,12 +425,13 @@ describe("更新安装", () => {
     expect(service.startInstall({ version: "0.3.0", force: false })).toEqual({
       accepted: true,
     });
-    await waitFor(() =>
-      service.status().install?.status === "installing" ? true : null,
+    await waitFor(
+      () => service.status().install?.status === "installing" ? true : null,
+      20000,
     );
     expect(launched).toHaveLength(1);
     expect(launched[0].args).not.toContain("--force");
-  }, 30000);
+  }, 45000);
 });
 
 describe("更新状态", () => {
