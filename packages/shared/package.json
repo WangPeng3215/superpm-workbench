@@ -1,11 +1,12 @@
 {
   "name": "@superpm/shared",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "private": true,
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
     "./data-root": "./src/data-root.ts",
+    "./mcp-runtime": "./src/mcp-runtime.ts",
     "./data-root-contract": "./src/data-root-contract.ts"
   },
   "scripts": {

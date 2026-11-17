@@ -411,7 +411,7 @@ async function runMoveScenario(options, context) {
   );
   const installInfo = readJson(join(install, "install.json"));
   assert(
-    installInfo.updaterVersion === "1.1.0",
+    installInfo.updaterVersion === context.manifest.minUpdaterVersion,
     `install.json 更新器版本为 ${installInfo.updaterVersion}`,
   );
 
@@ -793,7 +793,9 @@ async function runBootstrapScenario(options, context) {
     assert(updaterCode === 1, `0.3.3 更新器退出码 ${updaterCode}，期望 1`);
     assert(updaterResult?.status === "failed", "0.3.3 更新器状态不是 failed");
     assert(
-      /更新器版本 1\.0\.0 低于要求 1\.1\.0/.test(updaterResult.error ?? ""),
+      (updaterResult.error ?? "").includes(
+        `更新器版本 1.0.0 低于要求 ${manifestSource.minUpdaterVersion}`,
+      ),
       `0.3.3 更新器拒绝原因不正确：${updaterResult?.error}`,
     );
     assert(
@@ -863,7 +865,8 @@ async function runBootstrapScenario(options, context) {
     );
     assert(updateStatus.status === 200, "读取更新状态失败");
     assert(
-      updateStatus.body.updaterVersion === "1.1.0",
+      updateStatus.body.updaterVersion ===
+        readJson(join(install040, "install.json")).updaterVersion,
       `覆盖安装后更新器版本为 ${updateStatus.body.updaterVersion}`,
     );
     assert(

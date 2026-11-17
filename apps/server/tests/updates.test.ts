@@ -393,6 +393,44 @@ describe("更新安装", () => {
       registration.close();
     }
   });
+
+  it("历史登记的 PID 被其他程序占用时，不显示 MCP 警告且允许普通更新", async () => {
+    const directory = tempDirectory();
+    const home = join(directory, "home");
+    const { fetchImpl } = routeFetch(manifest());
+    const launched: LaunchUpdaterInput[] = [];
+    const service = createService(directory, {
+      home,
+      fetchImpl,
+      launchUpdater: (input) => {
+        launched.push(input);
+        return { pid: 4321 };
+      },
+    });
+    await service.check();
+    const registration = registerMcpProcess(home, {
+      version: "0.10.0",
+      schemaVersion: 12,
+      writeEnabled: false,
+    });
+    writeFileSync(
+      registration.path,
+      JSON.stringify({
+        ...registration.record,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        heartbeatAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    expect(service.status().mcpProcesses).toEqual([]);
+    expect(service.startInstall({ version: "0.3.0", force: false })).toEqual({
+      accepted: true,
+    });
+    await waitFor(() =>
+      service.status().install?.status === "installing" ? true : null,
+    );
+    expect(launched).toHaveLength(1);
+    expect(launched[0].args).not.toContain("--force");
+  }, 30000);
 });
 
 describe("更新状态", () => {

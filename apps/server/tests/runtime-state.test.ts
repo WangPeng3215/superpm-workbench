@@ -14,6 +14,7 @@ import {
   activeUpdateLock,
   listMcpProcesses,
   MCP_HEARTBEAT_MS,
+  MCP_STALE_MS,
   readServerState,
   registerMcpProcess,
   releaseUpdateLock,
@@ -79,6 +80,27 @@ describe("MCP 运行时注册", () => {
       }),
     );
     expect(listMcpProcesses(home)[0].alive).toBe(false);
+  });
+
+  it("历史 MCP 的 PID 被其他活进程占用时，不再认定 MCP 存活", () => {
+    const home = tempHome();
+    const registration = registerMcpProcess(home, {
+      version: "0.10.0",
+      schemaVersion: 12,
+      writeEnabled: false,
+    });
+    // 用当前测试进程模拟已被其他程序复用的 PID：PID 存在，但并非 MCP。
+    writeFileSync(
+      registration.path,
+      JSON.stringify({
+        ...registration.record,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        heartbeatAt: new Date(Date.now() - MCP_STALE_MS - 1000).toISOString(),
+      }),
+    );
+    const [listed] = listMcpProcesses(home);
+    expect(listed.stale).toBe(true);
+    expect(listed.alive).toBe(false);
   });
 });
 

@@ -34,8 +34,9 @@ import {
   resolveDataRoot,
 } from "@superpm/shared/data-root";
 import yauzl from "yauzl";
+import { stopMcpProcesses } from "@superpm/shared/mcp-runtime";
 
-const UPDATER_VERSION = "1.1.0";
+const UPDATER_VERSION = "1.1.1";
 const MANIFEST_MAX_BYTES = 1024 * 1024;
 const ARCHIVE_MAX_BYTES = 1024 * 1024 * 1024;
 const ARCHIVE_MAX_ENTRIES = 200000;
@@ -223,25 +224,6 @@ function releaseLock(home) {
   rmSync(join(home, "runtime", "update.lock"), { force: true });
 }
 
-function listMcpProcesses(home) {
-  const directory = join(home, "runtime", "mcp");
-  let names;
-  try {
-    names = readdirSync(directory);
-  } catch {
-    return [];
-  }
-  const result = [];
-  for (const name of names) {
-    if (!name.endsWith(".json")) continue;
-    const path = join(directory, name);
-    const record = readJson(path);
-    if (!record || !Number.isInteger(record.pid)) continue;
-    result.push({ ...record, alive: isAlive(record.pid), path });
-  }
-  return result.filter((item) => item.alive);
-}
-
 function appendUpdateLog(home, message) {
   try {
     mkdirSync(join(home, "logs"), { recursive: true });
@@ -298,32 +280,6 @@ function killProcess(pid, context) {
       // 进程可能已退出
     }
   }
-}
-
-async function stopMcpProcesses(context) {
-  const deadline = Date.now() + context.options.timeoutMs;
-  while (Date.now() < deadline) {
-    const live = listMcpProcesses(context.home);
-    if (live.length === 0) return;
-    await sleep(400);
-  }
-  const live = listMcpProcesses(context.home);
-  if (live.length === 0) return;
-  if (!context.options.force)
-    throw new Error(
-      `仍有 ${live.length} 个 MCP 进程运行（PID ${live
-        .map((item) => item.pid)
-        .join(", ")}）。关闭客户端后重试，或使用 --force 强制结束`,
-    );
-  for (const item of live) killProcess(item.pid, context);
-  await sleep(1500);
-  const remaining = listMcpProcesses(context.home);
-  if (remaining.length > 0)
-    throw new Error(
-      `强制结束后仍有 MCP 进程存活（PID ${remaining
-        .map((item) => item.pid)
-        .join(", ")}）`,
-    );
 }
 
 function validateRemoteUrl(url) {

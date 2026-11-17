@@ -300,6 +300,7 @@ async function runScenario(name, options, context) {
     );
     assert(folders.length === 1, "完整安装包根目录结构异常");
     const install = join(extractRoot, folders[0]);
+    const installInfo = readJson(join(install, "install.json"));
     details.install = install;
     const versionA = packageVersion(join(install, "app"));
     // 0.2.0 自带的更新器没有 M3 进度写入；旧更新器升级只验证兼容与回退。
@@ -478,7 +479,7 @@ async function runScenario(name, options, context) {
         "更新状态接口未识别安装包环境",
       );
       assert(
-        updateStatus.body.updaterVersion === "1.1.0",
+        updateStatus.body.updaterVersion === installInfo.updaterVersion,
         "更新状态接口更新器版本不正确",
       );
       if (updaterSupportsProgress) {

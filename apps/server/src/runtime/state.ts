@@ -1,35 +1,30 @@
 import {
   mkdirSync,
   readFileSync,
-  readdirSync,
   renameSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import {
+  isProcessAlive,
+  type McpProcessRecord,
+} from "@superpm/shared/mcp-runtime";
+export {
+  isProcessAlive,
+  listMcpProcesses,
+  MCP_HEARTBEAT_MS,
+  MCP_STALE_MS,
+  type McpProcessRecord,
+  type McpProcessInfo,
+} from "@superpm/shared/mcp-runtime";
 
 export interface UpdateLock {
   pid: number;
   createdAt: string;
   reason?: string;
   version?: string;
-}
-
-export interface McpProcessRecord {
-  pid: number;
-  startedAt: string;
-  heartbeatAt: string;
-  version: string;
-  schemaVersion: number;
-  writeEnabled: boolean;
-}
-
-export interface McpProcessInfo {
-  record: McpProcessRecord;
-  path: string;
-  alive: boolean;
-  stale: boolean;
 }
 
 export interface ServerRuntimeRecord {
@@ -41,8 +36,6 @@ export interface ServerRuntimeRecord {
   shutdownToken: string;
 }
 
-export const MCP_HEARTBEAT_MS = 5000;
-export const MCP_STALE_MS = 30000;
 const INVALID_LOCK_STALE_MS = 30 * 60 * 1000;
 
 export function runtimeRoot(home: string) {
@@ -66,16 +59,6 @@ export function ensureRuntimeRoot(home: string) {
   mkdirSync(root, { recursive: true, mode: 0o700 });
   mkdirSync(mcpRegistryDir(home), { recursive: true, mode: 0o700 });
   return root;
-}
-
-export function isProcessAlive(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
 }
 
 function writeJsonAtomic(path: string, value: unknown) {
@@ -196,30 +179,6 @@ export function registerMcpProcess(
     rmSync(path, { force: true });
   };
   return { record, path, touch, close };
-}
-
-export function listMcpProcesses(home: string): McpProcessInfo[] {
-  let names: string[];
-  try {
-    names = readdirSync(mcpRegistryDir(home));
-  } catch {
-    return [];
-  }
-  const result: McpProcessInfo[] = [];
-  for (const name of names) {
-    if (!name.endsWith(".json")) continue;
-    const path = join(mcpRegistryDir(home), name);
-    const record = parseJsonFile<McpProcessRecord>(path);
-    if (!record || !Number.isInteger(record.pid) || record.pid <= 0) continue;
-    const alive = isProcessAlive(record.pid);
-    const heartbeat = Date.parse(record.heartbeatAt);
-    const stale =
-      !alive ||
-      !Number.isFinite(heartbeat) ||
-      Date.now() - heartbeat > MCP_STALE_MS;
-    result.push({ record, path, alive, stale });
-  }
-  return result.sort((left, right) => left.record.pid - right.record.pid);
 }
 
 export function unregisterMcpProcess(home: string, pid = process.pid) {

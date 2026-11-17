@@ -16,11 +16,26 @@ superpm-workbench-<version>-win-x64/
   runtime/node.exe         自带 Node 22 运行时
   runtime/LICENSE          Node 许可证
   app/                     可替换程序目录（不保存用户数据）
-  install.json             安装版本、schema 与更新器版本（当前 1.1.0）
+  install.json             安装版本、schema 与更新器版本（当前 1.1.1）
   README.txt
 ```
 
 `app/` 是更新器唯一替换的目录。数据库、工作区、日志和备份均在独立数据根中，不随程序更新变化。
+
+### 更新时反复出现历史 MCP PID
+
+旧更新器只检查登记中的 PID 是否存在。Windows 复用已退出 MCP 的 PID 后，历史登记可能被误报为仍在运行；旧版强制结束命令也没有保留系统错误诊断。
+
+修复后的 HTTP 服务与独立更新器使用同一套核验规则：心跳过期时核对进程创建时间、Node 程序与 MCP 启动入口，排除已确认失效的身份；真实 MCP 即使心跳过期仍阻断更新。强制结束前再次核验，无法核验时停止操作，Windows 拒绝结束时保留错误原因。
+
+**增量更新不会替换 `bin/updater.mjs`。** 已被旧更新器阻断的安装需先手工替换独立更新器，或使用包含修复的完整安装包。手工修复步骤：
+
+1. 在所有 AI 客户端中断开 superPM MCP 连接，避免自动重新拉起。停止 HTTP 服务，确认没有更新正在运行。
+2. 备份安装目录中的 `bin/updater.mjs`，将修复包中已打包的 `updater.mjs` 复制到该位置。不能直接复制仓库 `scripts/install/updater.mjs` 源码，它依赖构建时打包的模块。
+3. 在安装目录运行 `Update.cmd --manifest <更新清单地址> --force`。只有确认允许结束 MCP 时使用 `--force`；默认先等待 15 秒。若已是目标版本，更新器会提示无需更新。
+4. 失败时查看实际数据根的 `logs/update.log` 和 `updates/last-update.json`。如果提示权限不足或无法核验身份，先从原 MCP 客户端断开连接；重启 Windows 也能退出旧进程。不要按历史 PID 盲目执行结束命令，也不要用删除全部登记文件的方式跳过真实 MCP 检查。
+
+替换更新器只涉及程序文件，不复制、删除或迁移 `data/`、`workspace/`、配置指针或原型目录。
 
 ## 2. 首次安装
 
@@ -306,6 +321,14 @@ Skill 面向安装版使用：读取 `references/install-mode.md`，用本页的
 数据库结构变化较大：22 张业务表新增 `user_id`，`users` 新增 `status` 与 `is_admin`，活动计时与工具箱名称两处唯一约束改为按用户唯一（schema 20，迁移 `0020_user_isolation.sql`）。启动器与更新器不变（仍为 1.1.0）；已安装 1.0.1 及更早版本的用户可在「系统设置 → 版本与更新」直接增量升级，更新器会先创建 `pre-update` 备份，替换程序后自动执行 schema 20 迁移，再重启并检查健康状态。
 
 应用内更新会自动停止并重启服务，无需手动操作；如果改用命令行或手工覆盖安装，请先运行安装目录下的 `Stop.cmd` 停止服务，覆盖完成后双击 `SuperPM.cmd` 启动，并用原账号登录，确认需求、任务、便签等数据都在。增量包只替换 `app/`，不会补装 `Stop.cmd` 与 `Stop.ps1`；已安装 0.5.0 或更早版本且缺少停止脚本时，请用 1.1.0 完整包覆盖一次。0.3.3 或更早版本仍需先按上一节用 0.4.0 完整包完成 bootstrap。Skill 包需要到 Release Assets 下载同版本的 `superpm-skill-1.1.0.zip` 手动替换，应用内更新不会更新它；详情见 §4「AI 客户端 Skill 包（可选）」。
+
+### 1.1.0 → 1.1.1
+
+1.1.1 修复 Windows 更新时历史 MCP PID 被复用导致的误报与强制结束失败。更新器会核对进程创建时间、Node 程序与 MCP 启动入口，并在强制结束前再次核验；Windows 结束失败时保留系统错误信息。数据库 schema 保持 20，业务数据与工作区格式不变。
+
+由于增量更新只替换 `app/`，不会更新旧安装目录中的 `bin/updater.mjs`。从 1.1.0 升级的设备，先下载 Release 中的 `superpm-mcp-updater-repair-1.1.1.zip`，按包内说明替换 `bin/updater.mjs`，再执行更新。也可以直接使用 `superpm-workbench-1.1.1-win-x64.zip` 完整包覆盖安装目录；数据根不会被覆盖。
+
+更新器版本由 1.1.0 升至 1.1.1，1.1.1 增量清单要求 `minUpdaterVersion: "1.1.1"`。旧安装也可直接使用 1.1.1 完整包完成更新器 bootstrap。仅手工替换 `bin/updater.mjs` 不会刷新 `install.json` 的更新器版本，应用内可能继续提示版本不足，此时使用 `Update.cmd` 完成更新；完整包会同步安装元数据。
 
 ```powershell
 Update.cmd --manifest https://github.com/WangPeng3215/superpm-workbench/releases/latest/download/update-manifest.json

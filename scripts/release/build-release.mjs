@@ -382,7 +382,7 @@ async function stageInstall(work, options, appStage, runtime) {
         platform: "win32-x64",
         schemaVersion: appStage.schema,
         builtAt: new Date().toISOString(),
-        updaterVersion: "1.1.0",
+        updaterVersion: "1.1.1",
       },
       null,
       2,
@@ -471,7 +471,7 @@ function writeManifest(out, options, manifest, full, update) {
     platform: "win32-x64",
     releasedAt: new Date().toISOString(),
     schemaVersion: manifest.schemaVersion,
-    minUpdaterVersion: "1.1.0",
+    minUpdaterVersion: "1.1.1",
     notes: options.notes || `superPM Workbench v${options.version}`,
     full: {
       file: full.file,
@@ -558,6 +558,32 @@ async function main() {
   const full = await createZip(fullPath, install, `${folder}/`);
   console.log("[release] 生成增量更新包…");
   const update = await createZip(updatePath, join(install, "app"), "app/");
+  const repairStage = join(work, "mcp-update-repair");
+  mkdirSync(repairStage, { recursive: true });
+  copyFileSync(
+    join(install, "bin", "updater.mjs"),
+    join(repairStage, "updater.mjs"),
+  );
+  writeFileSync(
+    join(repairStage, "使用说明.txt"),
+    `superPM MCP 更新器修复包 v${options.version}
+
+1. 在所有 AI 客户端中断开 superPM MCP 连接，停止 HTTP 服务，确认没有更新正在运行。
+2. 备份安装目录中的 bin/updater.mjs，将本包 updater.mjs 复制到该位置。
+3. 在安装目录执行：
+   Update.cmd --manifest https://github.com/${options.repo}/releases/latest/download/update-manifest.json --force
+
+--force 允许结束经过身份核验的 MCP 进程，默认先等待 15 秒。
+增量更新只替换 app，不会替换旧 updater.mjs；完整安装包已包含此修复。
+手动替换 updater.mjs 不刷新 install.json 的更新器版本，请使用上面的命令行更新。完整包会同步安装元数据。
+若仍失败，请查看实际数据根 logs/update.log 和 updates/last-update.json。
+本包只替换程序文件，不修改数据库、工作区、原型或数据根配置。
+`,
+  );
+  const repairFile = `superpm-mcp-updater-repair-${options.version}.zip`;
+  const repairPath = join(out, repairFile);
+  console.log("[release] 生成 MCP 更新器修复包…");
+  const repair = await createZip(repairPath, repairStage, "");
   const skillFile = `superpm-skill-${options.version}.zip`;
   const skillPath = join(out, skillFile);
   console.log("[release] 生成 AI Skill 包…");
@@ -593,7 +619,7 @@ async function main() {
 
   rmSync(work, { recursive: true, force: true });
   console.log(
-    `\n[release] 完成：\n  完整包 ${fullPath}（${full.size} 字节）\n  更新包 ${updatePath}（${update.size} 字节）\n  Skill 包 ${skillPath}（${skill.size} 字节）\n  清单   ${manifest.path}`,
+    `\n[release] 完成：\n  完整包 ${fullPath}（${full.size} 字节）\n  更新包 ${updatePath}（${update.size} 字节）\n  Skill 包 ${skillPath}（${skill.size} 字节）\n  MCP 修复包 ${repairPath}（${repair.size} 字节）\n  清单   ${manifest.path}`,
   );
 }
 
