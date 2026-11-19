@@ -94,7 +94,10 @@ export const requirementCreateSchema = z
   .strict();
 export const requirementUpdateSchema = requirementCreateSchema
   .partial()
-  .extend({ stageNote: z.string().trim().max(2000).optional() })
+  .extend({
+    stageNote: z.string().trim().max(2000).optional(),
+    pinned: z.boolean().optional(),
+  })
   .strict()
   .refine(
     (value) => Object.keys(value).some((key) => key !== "stageNote"),
@@ -151,6 +154,7 @@ export type RequirementListParsed = z.output<typeof requirementListSchema>;
 export interface Requirement extends RequirementCreateParsed {
   id: number;
   requirementNo: string;
+  pinned: boolean;
   createdAt: string;
   updatedAt: string;
   deletedAt: string | null;

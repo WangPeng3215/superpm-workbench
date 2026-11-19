@@ -49,7 +49,7 @@ function activeFooter(page: Page) {
   return page.locator(".el-tab-pane:visible .md-footer");
 }
 
-// 通过详情表单切换当前阶段（头部步骤条已移除）：下拉选择阶段并保存
+// 通过详情表单切换当前阶段（头部步骤条已移除）：下拉选择阶段并等待自动保存
 async function switchStage(page: Page, label: string) {
   await page.getByRole("tab", { name: "需求详情" }).click();
   await page
@@ -61,8 +61,8 @@ async function switchStage(page: Page, label: string) {
     .locator(".el-select-dropdown__item:visible")
     .filter({ hasText: label })
     .click();
-  await page.getByRole("button", { name: "保存修改" }).click();
-  await expect(page.getByText("需求已保存").first()).toBeVisible();
+  await expect(page.locator(".head-stage")).toHaveText(label);
+  await expect(page.locator(".detail-save-state")).toHaveText("已同步到本地");
 }
 
 // 通过 API 建需求（记忆即时初始化）并放置两个知识库文件，随后打开「文档管理」页签

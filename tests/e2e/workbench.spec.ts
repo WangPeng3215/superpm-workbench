@@ -1,11 +1,12 @@
 import { test, expect, type Page } from "@playwright/test";
 
 async function addRequirement(page: Page, name: string) {
-  await page.getByRole("button", { name: /在底部新增一行/ }).click();
+  await page.getByRole("button", { name: "添加需求", exact: true }).click();
   const row = page.locator("tr.editing-row");
   await expect(row).toBeVisible();
-  await row.getByRole("textbox", { name: "需求名称" }).fill(name);
-  await row.getByRole("button", { name: "保存", exact: true }).click();
+  const input = row.getByRole("textbox", { name: "需求名称" });
+  await input.fill(name);
+  await input.press("Enter");
   await expect(page.getByRole("button", { name, exact: true })).toBeVisible();
   return page
     .getByRole("button", { name, exact: true })
@@ -24,8 +25,7 @@ async function switchStage(page: Page, label: string) {
     .locator(".el-select-dropdown__item:visible")
     .filter({ hasText: label })
     .click();
-  await page.getByRole("button", { name: "保存修改" }).click();
-  await expect(page.getByText("需求已保存").first()).toBeVisible();
+  await expect(page.locator(".head-stage")).toHaveText(label);
 }
 
 test("inline CRUD inserts a child below its parent", async ({
@@ -42,7 +42,7 @@ test("inline CRUD inserts a child below its parent", async ({
   const childName = `${name}-子项`;
   const childRow = page.locator("tr.editing-row");
   await childRow.getByRole("textbox", { name: "需求名称" }).fill(childName);
-  await childRow.getByRole("button", { name: "保存", exact: true }).click();
+  await childRow.getByRole("button", { name: "创建", exact: true }).click();
   // 子需求行的名称按钮内含「子需求」徽标，名称用包含匹配
   const child = page.getByRole("button", { name: childName });
   await expect(child).toHaveCount(1);
@@ -52,10 +52,7 @@ test("inline CRUD inserts a child below its parent", async ({
     .locator("tr.editing-row")
     .getByRole("textbox", { name: "需求名称" })
     .fill(`${childName}-已编辑`);
-  await page
-    .locator("tr.editing-row")
-    .getByRole("button", { name: "保存", exact: true })
-    .click();
+  await expect(page.getByText("已自动保存", { exact: true })).toBeVisible();
   await page.reload();
   await expect(
     page.getByRole("button", { name: `${childName}-已编辑` }),
@@ -79,10 +76,7 @@ test("rich description and column preferences persist", async ({
   const editor = page.getByRole("dialog");
   await editor.getByLabel("富文本内容").fill("描述内容");
   await editor.getByRole("button", { name: "应用内容", exact: true }).click();
-  await page
-    .locator("tr.editing-row")
-    .getByRole("button", { name: "保存", exact: true })
-    .click();
+  await expect(page.getByText("已自动保存", { exact: true })).toBeVisible();
   const item = (
     await (
       await request.get(`/api/requirements?q=${encodeURIComponent(name)}`)
@@ -150,10 +144,7 @@ test("list description dialog shares the detail editor and keeps block styles", 
   await expect(content.locator("em").first()).toContainText("复选框");
   await dialog.getByRole("button", { name: "应用内容", exact: true }).click();
   await expect(dialog).toBeHidden();
-  await page
-    .locator("tr.editing-row")
-    .getByRole("button", { name: "保存", exact: true })
-    .click();
+  await expect(page.getByText("已自动保存", { exact: true })).toBeVisible();
   const saved = (
     await (
       await request.get(`/api/requirements?q=${encodeURIComponent(name)}`)
@@ -255,24 +246,29 @@ test("requirement detail keeps open document when switching features", async ({
   );
   // DOM 未被重建：同一编辑器节点被页面缓存保留下来
   await expect(page.locator('[data-keep-alive-probe="1"]')).toHaveCount(1);
-  // 需求详情表单的未保存草稿同样跨功能保留
+  // 马上切换功能时，导航先完成需求详情的保存
   await page.getByRole("tab", { name: "需求详情" }).click();
   const nameInput = page
     .locator("label.field")
     .filter({ hasText: "需求名称" })
     .getByRole("textbox");
-  await nameInput.fill(`${renamed}-草稿`);
-  await expect(page.getByText("有未保存的修改")).toBeVisible();
+  const savedName = `${renamed}-离页保存`;
+  await nameInput.fill(savedName);
   await page.getByRole("link", { name: "每日任务" }).click();
   await expect(page).toHaveURL(/\/tasks$/);
+  expect(
+    (await (await request.get(`/api/requirements/${id}`)).json()).name,
+  ).toBe(savedName);
   await page
     .locator(".topbar-tab")
     .filter({ hasText: name })
     .locator(".tab-label")
     .click();
   await expect(page).toHaveURL(detailUrl);
-  await expect(nameInput).toHaveValue(`${renamed}-草稿`);
-  await expect(page.getByText("有未保存的修改")).toBeVisible();
+  await expect(nameInput).toHaveValue(savedName);
+  await expect(
+    page.getByRole("status").filter({ hasText: "已同步到本地" }),
+  ).toBeVisible();
 });
 
 test("cached requirement detail state is scoped per requirement", async ({
@@ -303,6 +299,82 @@ test("cached requirement detail state is scoped per requirement", async ({
   await expect(page.getByRole("tab", { name: "需求记忆.md" })).toHaveAttribute(
     "aria-selected",
     "true",
+  );
+});
+
+test("requirement detail automatically saves the description and properties", async ({
+  page,
+  request,
+}) => {
+  const response = await request.post("/api/requirements", {
+    data: { name: "自动保存需求", proposedAt: "2026-06-01" },
+  });
+  expect(response.ok()).toBeTruthy();
+  const { id } = await response.json();
+  const path = `/requirements/${id}`;
+  const name = page.getByPlaceholder("输入需求名称");
+  const editor = page.locator(".detail-desc .tiptap");
+  await page.goto(path);
+  await name.fill("自动保存后的名称");
+  await editor.fill("自动保存的需求描述");
+  await expect
+    .poll(async () => {
+      const detail = await (await request.get(`/api${path}`)).json();
+      return [detail.name, detail.description, detail.descriptionHtml];
+    })
+    .toEqual([
+      "自动保存后的名称",
+      "自动保存的需求描述",
+      "<p>自动保存的需求描述</p>",
+    ]);
+  await page.reload();
+  await expect(name).toHaveValue("自动保存后的名称");
+  await expect(editor).toHaveText("自动保存的需求描述");
+});
+
+test("requirement autosave keeps edits made during a request and retries a failed save", async ({
+  page,
+  request,
+}) => {
+  const created = await request.post("/api/requirements", {
+    data: { name: "保存重试需求", proposedAt: "2026-06-01" },
+  });
+  expect(created.ok()).toBeTruthy();
+  const { id } = await created.json();
+  const path = `/requirements/${id}`;
+  const apiPath = `/api${path}`;
+  const name = page.getByPlaceholder("输入需求名称");
+  const firstSaved = Promise.withResolvers<void>();
+  const releaseResponse = Promise.withResolvers<void>();
+  let attempts = 0;
+  await page.route(apiPath, async (route) => {
+    if (route.request().method() !== "PATCH") return route.continue();
+    attempts += 1;
+    if (attempts === 1) {
+      const response = await route.fetch();
+      firstSaved.resolve();
+      await releaseResponse.promise;
+      return route.fulfill({ response });
+    }
+    if (attempts === 2) return route.fulfill({ status: 503 });
+    return route.continue();
+  });
+  await page.goto(path);
+  await name.fill("先输入的名称");
+  try {
+    await firstSaved.promise;
+    await name.fill("请求期间输入的新名称");
+  } finally {
+    releaseResponse.resolve();
+  }
+  const retry = page.getByRole("button", { name: "重试保存" });
+  await expect(retry).toBeVisible();
+  await expect(name).toHaveValue("请求期间输入的新名称");
+  expect((await (await request.get(apiPath)).json()).name).toBe("先输入的名称");
+  await retry.click();
+  await expect(page.locator(".head-title")).toHaveText("请求期间输入的新名称");
+  expect((await (await request.get(apiPath)).json()).name).toBe(
+    "请求期间输入的新名称",
   );
 });
 
@@ -400,11 +472,115 @@ test("stage workspace persists analysis docs and issue resolution", async ({
   expect(testing.items[0].resolvedAt).toBeTruthy();
 });
 
+test("creating a requirement works when the name column is hidden", async ({
+  page,
+  request,
+}) => {
+  await page.goto("/requirements");
+  await page.getByRole("button", { name: "列设置", exact: true }).click();
+  const columns = page.getByRole("dialog");
+  await columns.locator(".el-checkbox").filter({ hasText: "需求名称" }).click();
+  await columns.getByRole("button", { name: "完成", exact: true }).click();
+  const header = page.getByRole("columnheader", { name: /需求名称/ });
+  await expect(header).toHaveCount(0);
+  await page.getByRole("button", { name: "添加需求", exact: true }).click();
+  const name = "隐藏列新建-" + Date.now();
+  const input = page
+    .locator(".editing-row")
+    .getByRole("textbox", { name: "需求名称" });
+  await input.fill(name);
+  await input.press("Enter");
+  await expect(header).toHaveCount(0);
+  const result = await request.get(
+    "/api/requirements?q=" + encodeURIComponent(name),
+  );
+  expect((await result.json()).items[0].name).toBe(name);
+});
+
+test("leaving the list waits for edits queued during a save", async ({
+  page,
+  request,
+}) => {
+  const name = "切换页面保存-" + Date.now();
+  const created = await request.post("/api/requirements", {
+    data: { name, proposedAt: "2026-10-13" },
+  });
+  expect(created.ok()).toBeTruthy();
+  const { id } = await created.json();
+  const apiPath = "/api/requirements/" + id;
+  const firstSave = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  let attempts = 0;
+  await page.route(apiPath, async (route) => {
+    if (route.request().method() !== "PATCH" || ++attempts > 1)
+      return route.continue();
+    const response = await route.fetch();
+    firstSave.resolve();
+    await release.promise;
+    return route.fulfill({ response });
+  });
+  await page.goto("/requirements");
+  await page.getByRole("button", { name, exact: true }).click();
+  const input = page
+    .locator(".editing-row")
+    .getByRole("textbox", { name: "需求名称" });
+  await input.fill(name + "第一次");
+  try {
+    await firstSave.promise;
+    await input.fill(name + "第二次");
+    await page.getByRole("link", { name: "每日任务", exact: true }).click();
+    await expect(page).toHaveURL(/requirements$/);
+  } finally {
+    release.resolve();
+  }
+  await expect(page).toHaveURL(/tasks$/);
+  expect((await (await request.get(apiPath)).json()).name).toBe(
+    name + "第二次",
+  );
+  expect(attempts).toBe(2);
+});
+
+test("number sorting keeps pinned requirements first until unpinned", async ({
+  page,
+  request,
+}) => {
+  const prefix = "排序置顶-" + Date.now();
+  for (const suffix of ["甲", "乙"]) {
+    const response = await request.post("/api/requirements", {
+      data: { name: prefix + suffix, proposedAt: "2026-10-13" },
+    });
+    expect(response.ok()).toBeTruthy();
+  }
+  await page.goto("/requirements");
+  await page.getByPlaceholder("搜索名称或编号").fill(prefix);
+  await page.getByRole("button", { name: "查询", exact: true }).click();
+  const names = page.locator(".name-cell");
+  const numberHeader = page.getByRole("columnheader", { name: /需求编号/ });
+  await numberHeader.locator(".sort-caret.ascending").click();
+  await expect(names).toHaveText([prefix + "甲", prefix + "乙"]);
+  const second = page
+    .locator("tr")
+    .filter({ has: names.filter({ hasText: prefix + "乙" }) });
+  await second.getByRole("button", { name: "置顶", exact: true }).click();
+  await expect(names).toHaveText([prefix + "乙", prefix + "甲"]);
+  await page.reload();
+  await expect(
+    second.getByRole("button", { name: "取消置顶", exact: true }),
+  ).toBeVisible();
+  await page.getByPlaceholder("搜索名称或编号").fill(prefix);
+  await page.getByRole("button", { name: "查询", exact: true }).click();
+  await numberHeader.locator(".sort-caret.ascending").click();
+  await second.getByRole("button", { name: "取消置顶", exact: true }).click();
+  await expect(names).toHaveText([prefix + "甲", prefix + "乙"]);
+  await numberHeader.locator(".sort-caret.descending").click();
+  await expect(names).toHaveText([prefix + "乙", prefix + "甲"]);
+});
+
 test("unsaved inline edits are protected on cancel and navigation", async ({
   page,
 }) => {
   await page.goto("/requirements");
-  await page.getByRole("button", { name: /在底部新增一行/ }).click();
+  await page.getByRole("button", { name: "添加需求", exact: true }).click();
   await page
     .locator("tr.editing-row")
     .getByRole("textbox", { name: "需求名称" })
@@ -521,6 +697,173 @@ test("workbench tabs open from menu and close with route fallback", async ({
   expect(errors).toEqual([]);
 });
 
+test("topbar tabs scroll when crowded and can close other or all tabs", async ({
+  page,
+}) => {
+  await page.goto("/requirements");
+  for (const [name, path] of [
+    ["优化点", "optimization-points"],
+    ["每日任务", "tasks"],
+    ["会议记录", "meetings"],
+    ["便签", "notes"],
+    ["工具箱", "online-tools"],
+    ["系统设置", "settings"],
+  ]) {
+    await page.getByRole("link", { name, exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(path + "$"));
+  }
+  const left = page.getByRole("button", { name: "向左滚动页签" });
+  const right = page.getByRole("button", { name: "向右滚动页签" });
+  const menu = page.getByRole("button", { name: "页签操作" });
+  await page.setViewportSize({ width: 680, height: 900 });
+  await expect
+    .poll(() =>
+      page
+        .locator(".topbar-tabs")
+        .evaluate((el) => el.scrollWidth - el.clientWidth),
+    )
+    .toBeGreaterThan(0);
+  await expect(right).toBeEnabled();
+  await right.click();
+  await expect(left).toBeEnabled();
+  await left.click();
+  await expect(right).toBeEnabled();
+  await menu.click();
+  await page.getByRole("menuitem", { name: "关闭其他（全部）" }).click();
+  await expect(page.locator(".topbar-tab")).toHaveCount(1);
+  await expect(page.locator(".topbar-tab.active")).toHaveText("系统设置");
+  await expect(left).toBeHidden();
+  await menu.click();
+  await page.getByRole("menuitem", { name: "关闭所有标签页" }).click();
+  await expect(page).toHaveURL(/\/requirements$/);
+  await expect(page.locator(".topbar-tab")).toHaveCount(1);
+  await expect(page.locator(".topbar-tab.active")).toHaveText("需求列表");
+});
+
+test("closing all tabs keeps the current tab if saving is blocked", async ({
+  page,
+}) => {
+  await page.goto("/requirements");
+  const row = await addRequirement(page, "批量关闭前保存");
+  await row.locator(".requirement-no").click();
+  const name = page.getByPlaceholder("输入需求名称");
+  await name.fill("");
+  const detailUrl = page.url();
+  const menu = page.getByRole("button", { name: "页签操作" });
+  await menu.click();
+  await page.getByRole("menuitem", { name: "关闭所有标签页" }).click();
+  await expect(page.locator(".el-message--warning")).toContainText(
+    "填写需求名称后自动保存",
+  );
+  await expect(page).toHaveURL(detailUrl);
+  await expect(page.locator(".topbar-tab")).toHaveCount(2);
+  await name.fill("批量关闭后已保存");
+  await menu.click();
+  await page.getByRole("menuitem", { name: "关闭所有标签页" }).click();
+  await expect(page).toHaveURL(/\/requirements$/);
+  await expect(page.locator(".topbar-tab")).toHaveCount(1);
+  await expect(
+    page.getByRole("button", { name: "批量关闭后已保存", exact: true }),
+  ).toBeVisible();
+});
+
+test("tab order and pin changes persist on refresh", async ({ page }) => {
+  await page.goto("/requirements");
+  for (const [name, path] of [
+    ["优化点", "optimization-points"],
+    ["每日任务", "tasks"],
+    ["会议记录", "meetings"],
+  ]) {
+    await page.getByRole("link", { name, exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(path + "$"));
+  }
+  const tabs = page.locator(".topbar-tab");
+  const label = (name: string) =>
+    tabs.filter({ hasText: name }).locator(".tab-label");
+  await label("每日任务").dragTo(label("会议记录"));
+  await expect(tabs.locator(".tab-label")).toHaveText([
+    "需求列表",
+    "优化点管理",
+    "会议记录",
+    "每日任务",
+  ]);
+  await tabs.getByRole("button", { name: "固定 每日任务" }).click();
+  await expect(tabs.locator(".tab-label")).toHaveText([
+    "每日任务",
+    "需求列表",
+    "优化点管理",
+    "会议记录",
+  ]);
+  const storedLayout = await page.evaluate(async () => {
+    const user = (await (await fetch("/api/auth/me")).json()) as {
+      id: number;
+    };
+    return JSON.parse(
+      localStorage.getItem(`superpm.workbench.tab-layout.v1.${user.id}`) ??
+        "null",
+    );
+  });
+  expect(storedLayout.order).toEqual([
+    "/tasks",
+    "/requirements",
+    "/optimization-points",
+    "/meetings",
+  ]);
+  await page.reload();
+  await expect(tabs.locator(".tab-label")).toHaveText([
+    "每日任务",
+    "需求列表",
+    "优化点管理",
+    "会议记录",
+  ]);
+  const unpin = page.getByRole("button", {
+    name: "取消固定 每日任务",
+    exact: true,
+  });
+  const pin = page.getByRole("button", { name: "固定 每日任务", exact: true });
+  await expect(unpin).toBeVisible();
+  await unpin.click();
+  await expect(pin).toBeVisible();
+  await page.reload();
+  await expect(pin).toBeVisible();
+  await label("每日任务").dragTo(label("会议记录"));
+  await expect(tabs.locator(".tab-label")).toHaveText([
+    "需求列表",
+    "优化点管理",
+    "会议记录",
+    "每日任务",
+  ]);
+});
+
+test("close other tabs offers both pinned-tab policies", async ({ page }) => {
+  await page.goto("/requirements");
+  for (const [name, path] of [
+    ["优化点", "optimization-points"],
+    ["每日任务", "tasks"],
+    ["会议记录", "meetings"],
+  ]) {
+    await page.getByRole("link", { name, exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(path + "$"));
+  }
+  await page
+    .locator(".topbar-tab")
+    .filter({ hasText: "优化点管理" })
+    .getByRole("button", { name: "固定 优化点管理" })
+    .click();
+  const menu = page.getByRole("button", { name: "页签操作" });
+  await menu.click();
+  await page
+    .getByRole("menuitem", { name: "关闭其他（保留固定页签）" })
+    .click();
+  await expect(page.locator(".topbar-tab .tab-label")).toHaveText([
+    "优化点管理",
+    "会议记录",
+  ]);
+  await menu.click();
+  await page.getByRole("menuitem", { name: "关闭其他（全部）" }).click();
+  await expect(page.locator(".topbar-tab .tab-label")).toHaveText(["会议记录"]);
+});
+
 test("requirement detail can collapse the property sidebar", async ({
   page,
 }) => {
@@ -577,9 +920,9 @@ test("workbench shell uses compact native theme and collapsed navigation", async
     "0px",
   );
   const activeTab = page.locator(".topbar-tab.active");
-  await expect(activeTab).toHaveCSS("height", "36px");
+  await expect(activeTab).toHaveCSS("height", "38px");
   await expect(activeTab).toHaveCSS("border-top-left-radius", "8px");
-  await expect(activeTab).toHaveCSS("border-bottom-left-radius", "0px");
+  await expect(activeTab).toHaveCSS("border-bottom-left-radius", "8px");
   const brand = await page.evaluate(() =>
     getComputedStyle(document.documentElement)
       .getPropertyValue("--brand")

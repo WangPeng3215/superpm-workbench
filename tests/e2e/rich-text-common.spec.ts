@@ -143,10 +143,7 @@ test("rich text colors, highlights and requirement refs are shared across editor
   await applyColor(page);
   await dialog.getByRole("button", { name: "应用内容", exact: true }).click();
   await expect(dialog).toBeHidden();
-  await page
-    .locator("tr.editing-row")
-    .getByRole("button", { name: "保存", exact: true })
-    .click();
+  await expect(page.getByText("已自动保存", { exact: true })).toBeVisible();
   const saved = (await (
     await request.get(`/api/requirements?q=${encodeURIComponent(main.name)}`)
   ).json()) as { items: Array<{ descriptionHtml: string }> };

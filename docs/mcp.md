@@ -60,7 +60,7 @@ npm run mcp:dev -w @superpm/server
 
 数据与迁移：
 
-- 启动时执行与 HTTP 服务相同的迁移（当前 `SCHEMA_VERSION = 19`，最新迁移 `apps/server/drizzle/0019_optimization_point_content.sql`）；`mcp_audit`、`mcp_write_confirmations` 由 `0012_mcp_write_audit.sql` 建立。会议与便签工具直接复用 `0016_meetings.sql`、`0017_notes.sql` 建立的业务表；1.0.0 新增的 `0018_optimization_points.sql`、`0019_optimization_point_content.sql` 只服务「优化点管理」页面，本轮未新增 MCP 工具。
+- 启动时执行与 HTTP 服务相同的迁移（当前 `SCHEMA_VERSION = 21`，最新迁移 `apps/server/drizzle/0021_requirement_pins.sql`）；`mcp_audit`、`mcp_write_confirmations` 由 `0012_mcp_write_audit.sql` 建立。会议与便签工具直接复用 `0016_meetings.sql`、`0017_notes.sql` 建立的业务表；`0021_requirement_pins.sql` 仅为需求列表增加置顶标记，本轮未新增 MCP 工具。
 - 只跑迁移不启动 MCP：`npm run db:migrate -w @superpm/server`。
 - SQLite 以 WAL 模式打开，并设置 `busy_timeout`。**同一数据目录不建议同时启动多个 MCP 进程并发起写入**；只读并发可以，写并发会退化为串行等待甚至 `SQLITE_BUSY`。若需并行，请为每个进程指定独立的 `SUPERPM_DATA_DIR`。
 - 运行账号需对数据目录（含 `-wal`/`-shm` 文件）和工作区目录有读写权限；权限不足会在 stderr 报错并以非零码退出。

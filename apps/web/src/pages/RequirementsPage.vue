@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
 import { useRouter } from "vue-router";
+import type { TableInstance } from "element-plus";
 import {
   DownOutlined,
   FileTextOutlined,
   PlusOutlined,
+  PushpinFilled,
   SearchOutlined,
   SettingOutlined,
   UpOutlined,
@@ -18,7 +20,6 @@ import {
   typeLabels,
   type Requirement,
 } from "@superpm/shared";
-import XlyButton from "../components/ease-ui/xly-button/index.vue";
 import XlyEmpty from "../components/ease-ui/xly-empty/index.vue";
 import { decorative } from "../components/decorativeIcon";
 import RichTextEditor from "../features/requirements/RichTextEditor.vue";
@@ -27,18 +28,22 @@ import { useEditableTable } from "../features/requirements/useEditableTable";
 
 const SearchIcon = decorative(SearchOutlined);
 const SettingIcon = decorative(SettingOutlined);
+const AddIcon = decorative(PlusOutlined);
 
 const router = useRouter();
 const {
   list,
   loading,
   saving,
+  saveState,
+  pinning,
   loadError,
   formError,
   filters,
   dateRanges,
   expandedDates,
   form,
+  editingId,
   editing,
   columns,
   showColumns,
@@ -54,13 +59,16 @@ const {
   edit,
   cancel,
   save,
+  retrySave,
+  finishEditing,
+  setPinned,
   rows,
   isEditing,
   remove,
 } = useEditableTable();
 const richOpen = ref(false),
   richTarget = ref<Requirement>();
-const table = ref();
+const table = ref<TableInstance>();
 const collapsed = ref(new Set<number>());
 const displayedRows = computed(() =>
   rows.value.filter(
@@ -72,7 +80,7 @@ function toggle(id: number) {
   next.has(id) ? next.delete(id) : next.add(id);
   collapsed.value = next;
 }
-watch(editing, async (value) => {
+watch([editing, editingId], async ([value]) => {
   if (value) {
     await nextTick();
     const element = document.querySelector(
@@ -128,13 +136,48 @@ function rowClass({ row }: { row: Requirement & { draft?: boolean } }) {
     row.parentId ? "child-row" : "",
   ].join(" ");
 }
-function sorted({ prop, order }: { prop: string; order: string | null }) {
+type SortOrder = "ascending" | "descending";
+let appliedSort: { prop: string; order: SortOrder } | undefined;
+let restoringSort = false;
+async function sorted({
+  prop,
+  order,
+}: {
+  prop: string;
+  order: SortOrder | null;
+}) {
+  if (restoringSort) return;
+  if (!(await finishEditing())) {
+    restoringSort = true;
+    try {
+      if (appliedSort) table.value?.sort(appliedSort.prop, appliedSort.order);
+      else table.value?.clearSort();
+    } finally {
+      restoringSort = false;
+    }
+    return;
+  }
+  appliedSort = order ? { prop, order } : undefined;
   filters.sortBy = (order ? prop : "updatedAt") as typeof filters.sortBy;
   filters.sortOrder = order === "ascending" ? "asc" : "desc";
-  load();
+  filters.page = 1;
+  await load();
+}
+async function changePage(page: number) {
+  if (!(await finishEditing())) return;
+  if (filters.page === page) return;
+  filters.page = page;
+  await load();
+}
+async function changePageSize(size: number) {
+  if (!(await finishEditing())) return;
+  filters.pageSize = size;
+  filters.page = 1;
+  await load();
 }
 function sortable(key: string) {
   return [
+    "requirementNo",
     "type",
     "status",
     "priority",
@@ -143,6 +186,22 @@ function sortable(key: string) {
     "updatedAt",
   ].includes(key);
 }
+const saveHint = computed(() => {
+  switch (saveState.value) {
+    case "pending":
+      return "等待自动保存…";
+    case "saving":
+      return "正在保存…";
+    case "saved":
+      return "已自动保存";
+    case "blocked":
+      return "请补全必填项";
+    case "error":
+      return "自动保存失败";
+    default:
+      return "编辑后自动保存";
+  }
+});
 function openDetailPage(row: Requirement) {
   router.push(`/requirements/${row.id}`);
 }
@@ -256,6 +315,14 @@ function openRequirement(requirementId: number) {
       </div>
       <div class="filter-actions">
         <el-button type="primary" @click="applyFilters">查询</el-button>
+        <el-button
+          type="primary"
+          plain
+          :icon="AddIcon"
+          :disabled="saving"
+          @click="create()"
+          >添加需求</el-button
+        >
         <el-button @click="clearFilters">重置</el-button>
         <el-button
           class="date-toggle"
@@ -356,18 +423,43 @@ function openRequirement(requirementId: number) {
             >
               {{ row.requirementNo }}
             </button>
+            <el-icon
+              v-if="row.pinned"
+              class="pinned-requirement"
+              title="已置顶"
+              aria-hidden="true"
+              ><PushpinFilled
+            /></el-icon>
           </div>
-          <el-input
+          <div
             v-else-if="isEditing(row) && column.kind === 'text'"
-            v-model="form.name"
-            aria-label="需求名称"
-            placeholder="输入需求名称"
-            maxlength="200"
-            @keyup.enter="save"
-          />
+            class="name-editor"
+          >
+            <el-input
+              v-model="form.name"
+              aria-label="需求名称"
+              placeholder="输入需求名称"
+              maxlength="200"
+              :disabled="saving"
+              @keydown.enter="
+                (event: KeyboardEvent) => {
+                  if (!event.isComposing) save();
+                }
+              "
+            />
+            <el-button
+              v-if="row.draft"
+              type="primary"
+              size="small"
+              :loading="saving"
+              @click="save"
+              >创建</el-button
+            >
+          </div>
           <el-select
             v-else-if="isEditing(row) && column.kind === 'select'"
             v-model="(form as any)[column.key]"
+            :disabled="saving"
             :aria-label="column.label"
             ><template #label="{ label, value }"
               ><el-tag
@@ -394,6 +486,7 @@ function openRequirement(requirementId: number) {
           <el-date-picker
             v-else-if="isEditing(row) && column.kind === 'date'"
             v-model="(form as any)[column.key]"
+            :disabled="saving"
             type="date"
             value-format="YYYY-MM-DD"
             :aria-label="column.label"
@@ -403,6 +496,7 @@ function openRequirement(requirementId: number) {
           <button
             v-else-if="column.kind === 'rich'"
             class="rich-cell"
+            :disabled="saving && isEditing(row)"
             @click="openRich(row)"
           >
             <el-icon aria-hidden="true"><FileTextOutlined /></el-icon
@@ -437,12 +531,34 @@ function openRequirement(requirementId: number) {
           <span v-else>{{ valueLabel(row, column.key) }}</span>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="195" fixed="right"
+      <el-table-column label="操作" width="240" fixed="right"
         ><template #default="{ row }"
           ><div v-if="isEditing(row)" class="row-actions">
-            <el-button link type="primary" :loading="saving" @click="save"
-              >保存</el-button
-            ><el-button link :disabled="saving" @click="cancel">取消</el-button>
+            <el-button
+              v-if="!row.draft && saveState === 'error'"
+              link
+              type="primary"
+              @click="retrySave"
+              >重试保存</el-button
+            >
+            <el-button
+              v-if="
+                !row.draft && saveState !== 'error' && saveState !== 'blocked'
+              "
+              link
+              type="primary"
+              @click="save"
+              >完成</el-button
+            >
+            <el-button
+              v-if="
+                row.draft || saveState === 'error' || saveState === 'blocked'
+              "
+              link
+              :disabled="saving"
+              @click="cancel"
+              >{{ row.draft ? "取消" : "放弃未保存修改" }}</el-button
+            >
           </div>
           <div v-else class="row-actions">
             <el-button link type="primary" @click="edit(row)">编辑</el-button
@@ -458,38 +574,42 @@ function openRequirement(requirementId: number) {
               >子需求</el-button
             ><el-button link type="primary" @click="openDetailPage(row)"
               >详情</el-button
+            ><el-button
+              link
+              type="primary"
+              :disabled="pinning !== undefined"
+              @click="setPinned(row)"
+              >{{ row.pinned ? "取消置顶" : "置顶" }}</el-button
             ><el-button link type="danger" @click="remove(row)">删除</el-button>
           </div></template
         ></el-table-column
       >
       <template #empty
-        ><XlyEmpty size="small" type="search" description="还没有符合条件的需求"
-          ><el-button type="primary" plain @click="create()"
-            >添加一条需求</el-button
-          ></XlyEmpty
-        ></template
-      >
+        ><XlyEmpty
+          size="small"
+          type="search"
+          description="还没有符合条件的需求"
+      /></template>
     </el-table>
-    <button class="add-row-button" :disabled="saving" @click="create()">
-      <el-icon aria-hidden="true"><PlusOutlined /></el-icon>在底部新增一行<span
-        >输入名称后保存，其他信息可逐步补充</span
-      >
-    </button>
     <div class="table-footer">
-      <span
-        >{{ list.total }} 个主需求 · {{ list.matchedCount }} 条匹配需求
-        <span v-if="editing" class="unsaved-label">· 有一行尚未保存</span></span
-      ><el-pagination
-        v-model:current-page="filters.page"
-        v-model:page-size="filters.pageSize"
+      <div class="table-summary">
+        <span
+          >{{ list.total }} 个主需求 · {{ list.matchedCount }} 条匹配需求</span
+        >
+        <span
+          v-if="editing && editingId !== null && saveState !== 'idle'"
+          role="status"
+          >{{ saveHint }}</span
+        >
+      </div>
+      <el-pagination
+        :current-page="filters.page"
+        :page-size="filters.pageSize"
         :page-sizes="[10, 20, 50]"
         :total="list.total"
         layout="sizes, prev, pager, next"
-        @current-change="load"
-        @size-change="
-          filters.page = 1;
-          load();
-        "
+        @update:current-page="changePage"
+        @update:page-size="changePageSize"
       />
     </div>
   </section>
@@ -537,6 +657,7 @@ function openRequirement(requirementId: number) {
     :html="form.descriptionHtml"
     :text="form.description"
     :requirement-id="richTarget?.id"
+    :auto-save="editingId !== null"
     @save="saveRich"
     @open-requirement="openRequirement"
   />

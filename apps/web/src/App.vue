@@ -16,7 +16,7 @@ import type { PendingOldData } from "@superpm/shared/data-root-contract";
 import { request } from "./api/client";
 import { changePassword, logout } from "./api/auth";
 import { clearAuthUser } from "./stores/auth";
-import { clearTabs, syncRoute } from "./stores/tabs";
+import { clearTabs, restoreTabs, syncRoute } from "./stores/tabs";
 import AppSidebar from "./components/layout/AppSidebar.vue";
 import AppTopbar from "./components/layout/AppTopbar.vue";
 import GlobalToolbox from "./features/online-tools/GlobalToolbox.vue";
@@ -53,11 +53,14 @@ function onCleanupResolved() {
   pendingCleanup.value = null;
 }
 
+restoreTabs();
+
 watch(
   () => route.path,
   (path) => {
-    if (route.meta.public) clearTabs();
+    if (route.meta.public) clearTabs(true);
     else {
+      restoreTabs();
       syncRoute(path);
       void checkPendingCleanup();
     }

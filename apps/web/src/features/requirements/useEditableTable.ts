@@ -15,11 +15,17 @@ import {
   type RequirementCreateParsed,
   type RequirementListQuery,
   type RequirementListResult,
+  type RequirementUpdate,
   type Stage,
   type StageHistory,
 } from "@superpm/shared";
 import { requirementApi } from "../../api/requirements";
 import { errorMessage } from "../../api/client";
+import {
+  createAutoSave,
+  type AutoSave,
+  type AutoSaveState,
+} from "../meetings/autosave";
 import {
   columnDefaults,
   restoreColumns,
@@ -36,8 +42,10 @@ export function useEditableTable() {
   });
   const loading = ref(false),
     saving = ref(false),
+    pinning = ref<number>(),
     loadError = ref(""),
     formError = ref("");
+  const saveState = ref<AutoSaveState>("idle");
   const filters = reactive<RequirementListQuery>({
     q: "",
     page: 1,
@@ -50,6 +58,7 @@ export function useEditableTable() {
   const editingId = ref<number | null>(null),
     editing = ref(false),
     initial = ref("");
+  let autoSave: AutoSave | undefined;
   const blank = (): RequirementCreateParsed =>
     requirementCreateSchema.parse({
       name: "临时名称",
@@ -61,7 +70,7 @@ export function useEditableTable() {
     dragged = ref<string>();
   const visibleColumns = computed(() =>
     columns.value
-      .filter((c) => c.visible)
+      .filter((c) => c.visible || (editing.value && c.key === "name"))
       .sort(
         (a, b) =>
           ({ left: 0, "": 1, right: 2 })[a.fixed] -
@@ -119,7 +128,8 @@ export function useEditableTable() {
       if (revision === loadRevision) loading.value = false;
     }
   }
-  function applyFilters() {
+  async function applyFilters() {
+    if (!(await finishEditing())) return;
     for (const key of dateFields) {
       const range = dateRanges[key];
       Object.assign(filters, {
@@ -130,7 +140,8 @@ export function useEditableTable() {
     filters.page = 1;
     load();
   }
-  function clearFilters() {
+  async function clearFilters() {
+    if (!(await finishEditing())) return;
     for (const key of Object.keys(filters))
       if (!["pageSize", "sortBy", "sortOrder"].includes(key))
         delete (filters as Record<string, unknown>)[key];
@@ -139,8 +150,13 @@ export function useEditableTable() {
     load();
   }
   const dirty = computed(
-    () => editing.value && JSON.stringify(form) !== initial.value,
+    () =>
+      editing.value &&
+      JSON.stringify(
+        editingId.value === null ? form : { ...form, name: form.name.trim() },
+      ) !== initial.value,
   );
+  watch(form, () => autoSave?.schedule(), { flush: "sync" });
   async function mayDiscard() {
     if (saving.value) return false;
     if (!dirty.value) return true;
@@ -160,16 +176,30 @@ export function useEditableTable() {
     }
   }
   async function cancel() {
-    if (await mayDiscard()) {
-      editing.value = false;
-      formError.value = "";
-    }
+    if (await mayDiscard()) stopEditing();
+  }
+  function stopEditing() {
+    autoSave?.dispose();
+    autoSave = undefined;
+    editing.value = false;
+    editingId.value = null;
+    formError.value = "";
+    saveState.value = "idle";
+  }
+  async function finishEditing() {
+    if (!editing.value) return true;
+    const current = autoSave;
+    if (current) {
+      if (!(await current.flush()) || autoSave !== current) return false;
+    } else if (!(await mayDiscard())) return false;
+    stopEditing();
+    return true;
   }
   async function create(
     parentId: number | null = null,
     preset?: Partial<RequirementCreateParsed>,
   ) {
-    if (editing.value && !(await mayDiscard())) return;
+    if (!(await finishEditing())) return;
     Object.assign(form, blank(), { name: "", parentId }, preset);
     editingId.value = null;
     editing.value = true;
@@ -177,8 +207,8 @@ export function useEditableTable() {
     formError.value = "";
   }
   async function edit(row: Requirement) {
-    if (editing.value && !(await mayDiscard())) return;
-    const data = requirementCreateSchema.parse(
+    if (isEditing(row) || !(await finishEditing())) return;
+    let saved = requirementCreateSchema.parse(
       Object.fromEntries(
         Object.keys(requirementCreateSchema.shape).map((key) => [
           key,
@@ -186,11 +216,52 @@ export function useEditableTable() {
         ]),
       ),
     );
-    Object.assign(form, data);
+    Object.assign(form, saved);
     editingId.value = row.id;
     editing.value = true;
     initial.value = JSON.stringify(form);
     formError.value = "";
+    autoSave = createAutoSave({
+      snapshot() {
+        const result = requirementCreateSchema.safeParse(form);
+        return result.success ? result.data : null;
+      },
+      async persist(snapshot) {
+        const patch = Object.fromEntries(
+          (Object.keys(snapshot) as Array<keyof RequirementCreateParsed>)
+            .filter((key) => snapshot[key] !== saved[key])
+            .map((key) => [key, snapshot[key]]),
+        ) as RequirementUpdate;
+        if (Object.keys(patch).length) {
+          const updated = await requirementApi.update(row.id, patch);
+          saved = snapshot;
+          syncSavedRow(updated);
+        }
+        initial.value = JSON.stringify(snapshot);
+        formError.value = "";
+      },
+      onStateChange(state) {
+        saveState.value = state;
+        if (state === "blocked")
+          formError.value = "请填写有效的需求名称和提出时间";
+      },
+      onError(error) {
+        formError.value = errorMessage(error);
+      },
+    });
+  }
+  function syncSavedRow(updated: Requirement) {
+    for (const root of list.value.items) {
+      const target =
+        root.id === updated.id
+          ? root
+          : root.children.find((child) => child.id === updated.id);
+      if (target) {
+        Object.assign(target, updated);
+        break;
+      }
+    }
+    if (selected.value?.id === updated.id) selected.value = updated;
   }
   const rows = computed(() => {
     const flattened: Array<
@@ -225,6 +296,7 @@ export function useEditableTable() {
           ...form,
           id: -1,
           requirementNo: "待生成",
+          pinned: false,
           createdAt: "",
           updatedAt: "",
           deletedAt: null,
@@ -237,10 +309,11 @@ export function useEditableTable() {
       editingId.value === null &&
       !flattened.some((row) => row.draft)
     )
-      flattened.push({
+      flattened.unshift({
         ...form,
         id: -1,
         requirementNo: "待生成",
+        pinned: false,
         createdAt: "",
         updatedAt: "",
         deletedAt: null,
@@ -274,17 +347,17 @@ export function useEditableTable() {
     }
   }
   async function save() {
-    if (saving.value) return;
+    if (autoSave) {
+      if (await finishEditing()) await load();
+      return;
+    }
+    if (!editing.value || saving.value) return;
     saving.value = true;
     formError.value = "";
     try {
       const parsed = requirementCreateSchema.parse(form);
-      const updated =
-        editingId.value === null
-          ? await requirementApi.create(parsed)
-          : await requirementApi.update(editingId.value, parsed);
-      editing.value = false;
-      if (selected.value?.id === updated.id) selected.value = updated;
+      const updated = await requirementApi.create(parsed);
+      stopEditing();
       await load();
       ElMessage.success(`${updated.requirementNo} 已保存`);
     } catch (e) {
@@ -294,6 +367,30 @@ export function useEditableTable() {
           : errorMessage(e);
     } finally {
       saving.value = false;
+    }
+  }
+  async function retrySave() {
+    await autoSave?.retry();
+  }
+  async function setPinned(row: Requirement) {
+    if (
+      pinning.value !== undefined ||
+      !(await finishEditing()) ||
+      pinning.value !== undefined
+    )
+      return;
+    pinning.value = row.id;
+    try {
+      const updated = await requirementApi.update(row.id, {
+        pinned: !row.pinned,
+      });
+      syncSavedRow(updated);
+      if (!row.parentId && updated.pinned) filters.page = 1;
+      await load();
+    } catch (error) {
+      ElMessage.error(errorMessage(error));
+    } finally {
+      pinning.value = undefined;
     }
   }
   async function changeStage(stage: Stage) {
@@ -317,6 +414,7 @@ export function useEditableTable() {
     }
   }
   async function remove(row: Requirement) {
+    if (!(await finishEditing())) return;
     try {
       await ElMessageBox.confirm(`确定软删除「${row.name}」吗？`, "删除需求", {
         confirmButtonText: "确认删除",
@@ -330,9 +428,9 @@ export function useEditableTable() {
       if (e !== "cancel" && e !== "close") ElMessage.error(errorMessage(e));
     }
   }
-  onBeforeRouteLeave(async () => !editing.value || (await mayDiscard()));
+  onBeforeRouteLeave(finishEditing);
   function beforeUnload(event: BeforeUnloadEvent) {
-    if (dirty.value) {
+    if (dirty.value || saving.value || saveState.value === "saving") {
       event.preventDefault();
       event.returnValue = "";
     }
@@ -341,13 +439,16 @@ export function useEditableTable() {
     load();
     window.addEventListener("beforeunload", beforeUnload);
   });
-  onBeforeUnmount(() =>
-    window.removeEventListener("beforeunload", beforeUnload),
-  );
+  onBeforeUnmount(() => {
+    autoSave?.dispose();
+    window.removeEventListener("beforeunload", beforeUnload);
+  });
   return {
     list,
     loading,
     saving,
+    saveState,
+    pinning,
     loadError,
     formError,
     filters,
@@ -370,6 +471,9 @@ export function useEditableTable() {
     edit,
     cancel,
     save,
+    retrySave,
+    finishEditing,
+    setPinned,
     rows,
     isEditing,
     selected,

@@ -80,6 +80,14 @@
 .requirement-surface {
   overflow: hidden;
 }
+.name-editor {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.pinned-requirement {
+  color: var(--brand);
+}
 .editable-table {
   --el-table-header-bg-color: var(--bg-subtle);
   --el-table-row-hover-bg-color: var(--bg-hover);
@@ -257,28 +265,6 @@
 .row-actions .child-action :deep(span) {
   color: var(--success-text);
 }
-.add-row-button {
-  display: flex;
-  width: 100%;
-  align-items: center;
-  gap: 8px;
-  padding: 15px 20px;
-  border: 0;
-  border-top: 1px solid var(--border-base);
-  background: var(--bg-subtle);
-  color: var(--brand-strong);
-  text-align: left;
-  font-size: 12px;
-  cursor: pointer;
-}
-.add-row-button:hover {
-  background: var(--bg-hover);
-}
-.add-row-button span {
-  margin-left: 12px;
-  color: var(--text-faint);
-  font-size: 11px;
-}
 .table-footer {
   display: flex;
   justify-content: space-between;
@@ -288,8 +274,10 @@
   color: var(--text-muted);
   font-size: 11px;
 }
-.unsaved-label {
-  color: var(--warning-text);
+.table-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
 }
 .column-intro {
   font-size: 12px;
@@ -361,9 +349,6 @@
     align-items: flex-start;
     gap: 15px;
     flex-direction: column;
-  }
-  .add-row-button span {
-    display: none;
   }
 }
 @media (max-width: 420px) {

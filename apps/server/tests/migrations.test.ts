@@ -459,8 +459,7 @@ describe("migrations 0005（资产与问题管理）", () => {
   });
   it("SCHEMA_VERSION 与已应用迁移数一致", () => {
     migrate(db);
-    expect(SCHEMA_VERSION).toBe(20);
-    expect(appliedVersions(db)).toHaveLength(SCHEMA_VERSION);
+    expect(appliedVersions(db)).toEqual(ALL_VERSIONS);
   });
 });
 
@@ -1340,7 +1339,10 @@ describe("migrations 0020（用户隔离）", () => {
 
     migrate(scratch);
 
-    expect(SCHEMA_VERSION).toBe(20);
+    expect(appliedVersions(scratch)).toContain(20);
+    expect(scratch.prepare("SELECT pinned FROM requirements").get()).toEqual({
+      pinned: 0,
+    });
     const admin = scratch
       .prepare("SELECT id, is_admin, status FROM users WHERE username='admin'")
       .get() as { id: number; is_admin: number; status: string };

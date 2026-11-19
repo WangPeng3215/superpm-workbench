@@ -16,6 +16,7 @@ import type {
 export const requirements = sqliteTable("requirements", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   requirementNo: text("requirement_no").notNull().unique(),
+  pinned: integer("pinned", { mode: "boolean" }).notNull().default(false),
   name: text("name").notNull(),
   type: text("type").$type<Requirement["type"]>().notNull(),
   priority: text("priority").$type<Requirement["priority"]>().notNull(),
@@ -168,7 +169,10 @@ export const users = sqliteTable("users", {
   passwordHash: text("password_hash").notNull(),
   passwordSalt: text("password_salt").notNull(),
   // active 正常 / disabled 停用（迁移 0020）：停用账号无法登录，其数据仍保留
-  status: text("status").$type<"active" | "disabled">().notNull().default("active"),
+  status: text("status")
+    .$type<"active" | "disabled">()
+    .notNull()
+    .default("active"),
   // 超管：可查看全部用户数据；admin 账号在迁移中置 1
   isAdmin: integer("is_admin", { mode: "boolean" }).notNull().default(false),
   createdAt: text("created_at").notNull(),

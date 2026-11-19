@@ -7,6 +7,7 @@ import {
   inArray,
   gte,
   lte,
+  sql,
   type SQL,
 } from "drizzle-orm";
 import { dateFields } from "@superpm/shared";
@@ -23,7 +24,7 @@ import { requirements, stageHistory, requirementAudit } from "../db/schema.js";
 import { currentUserScope } from "../db/scope.js";
 import { decodeDescription, encodeDescription } from "./description.js";
 
-type MutableFields = Partial<RequirementCreateParsed>;
+type MutableFields = Partial<RequirementCreateParsed> & { pinned?: boolean };
 function decodeRequirement(row: typeof requirements.$inferSelect) {
   return {
     ...row,
@@ -119,13 +120,18 @@ export class RequirementsRepository {
     return decodeRequirement(row);
   }
   update(id: number, patch: MutableFields) {
+    const contentChanged = Object.keys(patch).some((key) => key !== "pinned");
     const storagePatch =
       patch.description === undefined
         ? patch
         : { ...patch, description: encodeDescription(patch.description) };
     const row = this.orm
       .update(requirements)
-      .set({ ...storagePatch, updatedAt: new Date().toISOString() })
+      .set(
+        contentChanged
+          ? { ...storagePatch, updatedAt: new Date().toISOString() }
+          : storagePatch,
+      )
       .where(and(eq(requirements.id, id), ownerFilter()))
       .returning()
       .get();
@@ -178,6 +184,15 @@ export class RequirementsRepository {
         pageSize: query.pageSize,
       };
     const order = query.sortOrder === "asc" ? asc : desc;
+    const sortColumn =
+      query.sortBy === "requirementNo"
+        ? sql`cast(substr(${requirements.requirementNo}, 5) as integer)`
+        : requirements[query.sortBy];
+    const orderBy = [
+      desc(requirements.pinned),
+      order(sortColumn),
+      asc(requirements.id),
+    ];
     const roots = this.orm
       .select()
       .from(requirements)
@@ -188,7 +203,7 @@ export class RequirementsRepository {
           ownerFilter(),
         ),
       )
-      .orderBy(order(requirements[query.sortBy]), asc(requirements.id))
+      .orderBy(...orderBy)
       .limit(query.pageSize)
       .offset((query.page - 1) * query.pageSize)
       .all();
@@ -205,7 +220,7 @@ export class RequirementsRepository {
               ownerFilter(),
             ),
           )
-          .orderBy(order(requirements[query.sortBy]), asc(requirements.id))
+          .orderBy(...orderBy)
           .all()
       : [];
     const items = roots.map((root) => ({

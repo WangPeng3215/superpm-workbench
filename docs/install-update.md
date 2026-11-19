@@ -16,7 +16,7 @@ superpm-workbench-<version>-win-x64/
   runtime/node.exe         自带 Node 22 运行时
   runtime/LICENSE          Node 许可证
   app/                     可替换程序目录（不保存用户数据）
-  install.json             安装版本、schema 与更新器版本（当前 1.1.2）
+  install.json             安装版本、schema 与更新器版本（当前应用 1.2.0，更新器 1.1.2）
   README.txt
 ```
 
@@ -333,6 +333,12 @@ Skill 面向安装版使用：读取 `references/install-mode.md`，用本页的
 ```powershell
 Update.cmd --manifest https://github.com/WangPeng3215/superpm-workbench/releases/latest/download/update-manifest.json
 ```
+
+### 1.1.2 → 1.2.0
+
+1.2.0 改进工作台页签：支持拖拽排序、固定与取消固定、溢出滚动，以及关闭其他页签或关闭全部页签；顺序、固定状态和详情标题按登录账号保存在本机，刷新、重启和重新登录后恢复。需求列表支持按需求编号排序与置顶，置顶需求排在普通需求之前；列表和详情编辑采用自动保存，并提供保存状态与失败重试；“添加需求”按钮与查询操作并排显示。数据库 schema 升至 21，新增需求置顶标记（迁移 `0021_requirement_pins.sql`），已有需求默认不置顶，业务数据与工作区文件不变。更新器保持 `1.1.2`。清除站点数据会删除浏览器本地页签布局。
+
+已安装 1.1.2 且更新器为 1.1.2 的设备可在「系统设置 → 版本与更新」增量升级，启动时自动执行 schema 21 迁移。若设备的更新器仍为 1.1.0，请先下载本 Release 的完整安装包覆盖安装，或按本 Release 内 `superpm-mcp-updater-repair-1.2.0.zip` 中的说明修复 `bin/updater.mjs` 后更新；程序替换不会覆盖数据根。详情页签布局保存在浏览器本机存储，清除该站点的本地存储后将无法恢复先前的页签布局。
 
 常用参数：
 

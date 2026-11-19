@@ -1,5 +1,12 @@
 <script setup lang="ts">
-import { computed, onActivated, ref } from "vue";
+import {
+  computed,
+  onActivated,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  watch,
+} from "vue";
 import {
   onBeforeRouteLeave,
   onBeforeRouteUpdate,
@@ -33,6 +40,10 @@ import RequirementDocManager from "../features/requirements/RequirementDocManage
 import RequirementIssuesPanel from "../features/requirements/RequirementIssuesPanel.vue";
 import InlineRichTextEditor from "../features/requirements/InlineRichTextEditor.vue";
 import { tagTone } from "../features/requirements/enum-tags";
+import {
+  createAutoSave,
+  type AutoSaveState,
+} from "../features/meetings/autosave";
 import { optimizationStatusTone } from "../features/optimization-points/format";
 type Editable = Pick<
   Requirement,
@@ -54,16 +65,20 @@ const route = useRoute();
 const router = useRouter();
 // 详情路由按 fullPath 缓存（router/index.ts 中的 keepAlive），每个页面实例固定对应一个需求；
 // 不使用全局 route.params，以免缓存页失活时被其他路由的参数变化重新加载覆盖草稿
-const id = ref(Number(route.params.id));
+const id = Number(route.params.id);
+const path = route.path;
 const item = ref<Requirement>();
 const relations = ref<RequirementRelations>();
 // 来源优化点：由优化点转换而来时展示，可点击回到来源记录
 const sourcePoints = ref<RequirementOptimizationPointRef[]>([]);
 const draft = ref<Editable>();
-const initial = ref("");
-const loading = ref(false),
-  saving = ref(false),
-  error = ref("");
+const savedDraft = ref<Editable>();
+const descriptionEditor = ref<InstanceType<typeof InlineRichTextEditor>>();
+const loading = ref(false);
+const saving = ref(false);
+const error = ref("");
+const saveState = ref<AutoSaveState>("idle");
+const saveError = ref("");
 // 顶层页签：固定「需求详情」「文档管理」「问题记录」+ 动态文档页签（doc-<nodeId>）
 const activeTab = ref("detail");
 const propertiesOpen = ref(true);
@@ -127,14 +142,12 @@ function onDocDeleted(nodeId: number) {
     void closeDocTab(nodeId);
 }
 async function flushAnalysis() {
+  if (!(await flushDetail())) return false;
   if (issuesPanel.value && !(await issuesPanel.value.flush())) return false;
   return flushDocs();
 }
 onBeforeRouteLeave(flushAnalysis);
 onBeforeRouteUpdate(flushAnalysis);
-const dirty = computed(
-  () => Boolean(draft.value) && JSON.stringify(draft.value) !== initial.value,
-);
 // 提出时间与开始时间并排一行，其余日期字段两列排布
 const leadDates: string[] = ["proposedAt", "startedAt"];
 const extraDates = dateFields.filter((key) => !leadDates.includes(key));
@@ -170,33 +183,135 @@ function snapshot(source: Requirement): Editable {
     releasedAt,
   };
 }
-function resetDraft(source: Requirement) {
-  draft.value = snapshot(source);
-  initial.value = JSON.stringify(draft.value);
+function editableKeys(source: Editable) {
+  return Object.keys(source) as (keyof Editable)[];
 }
+const dirty = computed(() => {
+  const current = draft.value;
+  const saved = savedDraft.value;
+  return current && saved
+    ? editableKeys(saved).some((key) => current[key] !== saved[key])
+    : false;
+});
+const blockedHint = computed(() =>
+  draft.value && !draft.value.name.trim() ? "填写需求名称后自动保存" : "",
+);
+const saveFailed = computed(() => dirty.value && saveState.value === "error");
+const saveLabel = computed(() => {
+  if (dirty.value && blockedHint.value) return blockedHint.value;
+  if (saving.value) return "正在保存…";
+  if (saveFailed.value) return "保存失败";
+  return dirty.value ? "等待自动保存…" : "已同步到本地";
+});
+
+function applySavedDetail(detail: Requirement, sent?: Editable) {
+  const saved = snapshot(detail);
+  const current = draft.value;
+  const next = { ...saved };
+  if (sent && current) {
+    // 仅回填发出请求后没有再改过的字段，保留正在编辑的内容。
+    for (const key of editableKeys(saved)) {
+      if (current[key] !== sent[key])
+        Object.assign(next, { [key]: current[key] });
+    }
+    if (
+      current.description !== sent.description ||
+      current.descriptionHtml !== sent.descriptionHtml
+    ) {
+      next.description = current.description;
+      next.descriptionHtml = current.descriptionHtml;
+    }
+  }
+  item.value = detail;
+  savedDraft.value = saved;
+  draft.value = next;
+  setTabLabel(path, `${detail.requirementNo} · ${detail.name}`);
+}
+
 let revision = 0;
+const autoSave = createAutoSave({
+  snapshot: () => {
+    const current = draft.value;
+    const saved = savedDraft.value;
+    if (!current || !saved || blockedHint.value) return null;
+    const sent = { ...current };
+    const patch: RequirementUpdate = Object.fromEntries(
+      editableKeys(saved)
+        .filter((key) => sent[key] !== saved[key])
+        .map((key) => [key, sent[key]]),
+    );
+    if ("description" in patch || "descriptionHtml" in patch) {
+      patch.description = sent.description;
+      patch.descriptionHtml = sent.descriptionHtml;
+    }
+    return { sent, patch };
+  },
+  persist: async ({ sent, patch }) => {
+    if (!Object.keys(patch).length) return;
+    // 之前发出的静默刷新不能覆盖这次保存的结果。
+    revision += 1;
+    saving.value = true;
+    try {
+      applySavedDetail(await requirementApi.update(id, patch), sent);
+    } finally {
+      saving.value = false;
+    }
+  },
+  onStateChange: (state) => {
+    saveState.value = state;
+  },
+  onError: (e) => {
+    saveError.value = errorMessage(e);
+  },
+});
+watch(
+  draft,
+  () => {
+    if (dirty.value) autoSave.schedule();
+  },
+  { deep: true },
+);
+
+async function flushDetail() {
+  await descriptionEditor.value?.waitForUpload();
+  if (await autoSave.flush()) return true;
+  ElMessage.warning(blockedHint.value || "需求保存失败，请重试");
+  return false;
+}
+
+function beforeTabLeave(_next: TabPaneName, current: TabPaneName) {
+  return current === "detail" ? flushDetail() : true;
+}
+
+function onBeforeUnload(event: BeforeUnloadEvent) {
+  if (!dirty.value && !saving.value) return;
+  event.preventDefault();
+  event.returnValue = "";
+}
+onMounted(() => window.addEventListener("beforeunload", onBeforeUnload));
+onBeforeUnmount(() => {
+  window.removeEventListener("beforeunload", onBeforeUnload);
+  autoSave.dispose();
+});
+
 async function load() {
-  if (!Number.isInteger(id.value) || id.value <= 0) {
+  if (!Number.isInteger(id) || id <= 0) {
     error.value = "需求 ID 无效";
     return;
   }
   const token = ++revision;
-  const path = route.path;
   loading.value = true;
   error.value = "";
   try {
     const [detail, related, sources] = await Promise.all([
-      requirementApi.get(id.value),
-      requirementApi.relations(id.value),
-      requirementApi.optimizationPoints(id.value),
+      requirementApi.get(id),
+      requirementApi.relations(id),
+      requirementApi.optimizationPoints(id),
     ]);
     if (token !== revision) return;
-    item.value = detail;
     relations.value = related;
     sourcePoints.value = sources;
-    resetDraft(detail);
-    // 顶栏页签回填真实文案「编号 · 名称」（进入时先以「需求 #id」占位）
-    setTabLabel(path, `${detail.requirementNo} · ${detail.name}`);
+    applySavedDetail(detail);
   } catch (e) {
     if (token === revision) error.value = errorMessage(e);
   } finally {
@@ -215,57 +330,37 @@ onActivated(() => {
   if (!dirty.value) void refresh();
 });
 async function refresh() {
-  if (!Number.isInteger(id.value) || id.value <= 0) return;
-  const path = route.path;
+  if (!item.value || saving.value) return;
+  const token = ++revision;
   try {
     const [detail, related, sources] = await Promise.all([
-      requirementApi.get(id.value),
-      requirementApi.relations(id.value),
-      requirementApi.optimizationPoints(id.value),
+      requirementApi.get(id),
+      requirementApi.relations(id),
+      requirementApi.optimizationPoints(id),
     ]);
-    item.value = detail;
+    if (token !== revision || dirty.value) return;
     relations.value = related;
     sourcePoints.value = sources;
-    if (!dirty.value) resetDraft(detail);
-    setTabLabel(path, `${detail.requirementNo} · ${detail.name}`);
+    applySavedDetail(detail);
   } catch {
     // 刷新失败时保留缓存内容，用户仍可继续查看与编辑
   }
 }
-async function save() {
-  if (!item.value || !draft.value || saving.value) return;
-  if (!draft.value.name.trim()) {
-    ElMessage.warning("请填写需求名称");
-    return;
-  }
-  saving.value = true;
-  const path = route.path;
-  try {
-    const updated = await requirementApi.update(item.value.id, {
-      ...draft.value,
-    } as RequirementUpdate);
-    item.value = updated;
-    resetDraft(updated);
-    // 改名/改编号后同步刷新顶栏页签文案
-    setTabLabel(path, `${updated.requirementNo} · ${updated.name}`);
-    ElMessage.success("需求已保存");
-  } catch (e) {
-    ElMessage.error(errorMessage(e));
-  } finally {
-    saving.value = false;
-  }
-}
 async function revert() {
-  if (!item.value || !dirty.value) return;
+  if (!savedDraft.value || !dirty.value || saving.value) return;
+  const resume = saveState.value === "pending";
+  autoSave.cancel();
   try {
     await ElMessageBox.confirm("确定放弃未保存的修改吗？", "未保存的修改", {
       confirmButtonText: "放弃修改",
       cancelButtonText: "继续编辑",
     });
   } catch {
+    if (resume && dirty.value) autoSave.schedule();
     return;
   }
-  resetDraft(item.value);
+  if (!savedDraft.value || saving.value) return;
+  draft.value = { ...savedDraft.value };
 }
 function onDescriptionHtml(html: string) {
   if (draft.value) draft.value.descriptionHtml = html;
@@ -309,8 +404,8 @@ function openSourcePoint(pointId: number) {
             {{ stageLabels[item.currentStage] }}
           </el-tag>
           <div class="head-actions">
-            <span class="detail-save-state" :class="{ dirty }">
-              {{ dirty ? "有未保存的修改" : "已同步到本地" }}
+            <span class="detail-save-state" :class="{ dirty }" role="status">
+              {{ saveLabel }}
             </span>
             <el-button
               size="small"
@@ -323,10 +418,10 @@ function openSourcePoint(pointId: number) {
               size="small"
               type="primary"
               :loading="saving"
-              :disabled="!dirty"
-              @click="save"
+              :disabled="!dirty || !!blockedHint"
+              @click="flushDetail"
             >
-              保存修改
+              {{ saveFailed ? "重试保存" : "立即保存" }}
             </el-button>
             <el-button
               size="small"
@@ -339,8 +434,19 @@ function openSourcePoint(pointId: number) {
           </div>
         </div>
       </section>
+      <el-alert
+        v-if="saveFailed"
+        :title="saveError"
+        type="error"
+        show-icon
+        :closable="false"
+      />
       <section class="surface detail-body">
-        <el-tabs v-model="activeTab" @tab-remove="onTabRemove">
+        <el-tabs
+          v-model="activeTab"
+          :before-leave="beforeTabLeave"
+          @tab-remove="onTabRemove"
+        >
           <el-tab-pane label="需求详情" name="detail">
             <div
               class="detail-grid"
@@ -349,6 +455,7 @@ function openSourcePoint(pointId: number) {
               <article class="detail-desc">
                 <InlineRichTextEditor
                   v-if="draft"
+                  ref="descriptionEditor"
                   fill-card
                   :html="draft.descriptionHtml"
                   :text="draft.description"
@@ -359,7 +466,11 @@ function openSourcePoint(pointId: number) {
                 />
               </article>
               <div v-show="propertiesOpen" class="detail-fields">
-                <form v-if="draft" class="field-form" @submit.prevent="save">
+                <form
+                  v-if="draft"
+                  class="field-form"
+                  @submit.prevent="flushDetail"
+                >
                   <label class="field">
                     <span>需求名称</span>
                     <el-input
@@ -482,6 +593,7 @@ function openSourcePoint(pointId: number) {
                         type="date"
                         value-format="YYYY-MM-DD"
                         placeholder="未设置"
+                        :value-on-clear="null"
                         clearable
                       />
                     </label>
@@ -494,6 +606,7 @@ function openSourcePoint(pointId: number) {
                         type="date"
                         value-format="YYYY-MM-DD"
                         placeholder="未设置"
+                        :value-on-clear="null"
                         clearable
                       />
                     </label>

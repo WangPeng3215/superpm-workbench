@@ -206,6 +206,45 @@ describe("requirements API with real SQLite", () => {
       ).json<RequirementListResult>().items[0].id,
     ).toBe(parent.id);
   });
+  it("orders pinned roots before pagination and pinned children within their parent", async () => {
+    const first = await create(input("最早需求"));
+    const second = await create(input("置顶需求"));
+    const firstChild = await create({
+      ...input("早期子需求"),
+      parentId: second.id,
+    });
+    const secondChild = await create({
+      ...input("置顶子需求"),
+      parentId: second.id,
+    });
+    for (const id of [second.id, secondChild.id]) {
+      const result = await app.inject({
+        method: "PATCH",
+        url: "/api/requirements/" + id,
+        payload: { pinned: true },
+      });
+      expect(result.statusCode).toBe(200);
+      expect(result.json().pinned).toBe(true);
+    }
+    const listUrl =
+      "/api/requirements?sortBy=requirementNo&sortOrder=asc&pageSize=1";
+    const data = (await app.inject(listUrl)).json<RequirementListResult>();
+    expect(data.total).toBe(2);
+    expect(data.items[0].id).toBe(second.id);
+    expect(data.items[0].children.map((child) => child.id)).toEqual([
+      secondChild.id,
+      firstChild.id,
+    ]);
+    const unpin = await app.inject({
+      method: "PATCH",
+      url: "/api/requirements/" + second.id,
+      payload: { pinned: false },
+    });
+    expect(unpin.statusCode).toBe(200);
+    expect(
+      (await app.inject(listUrl)).json<RequirementListResult>().items[0].id,
+    ).toBe(first.id);
+  });
   it("rejects invalid names, dates, enum values and foreign parents", async () => {
     for (const payload of [
       { ...input("  ") },

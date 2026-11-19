@@ -11,6 +11,7 @@ const props = defineProps<{
   text?: string;
   title: string;
   requirementId?: number;
+  autoSave?: boolean;
 }>();
 const emit = defineEmits<{
   "update:modelValue": [value: boolean];
@@ -83,7 +84,10 @@ async function apply() {
       @update:text="onText"
       @open-requirement="emit('open-requirement', $event)"
     />
-    <div class="rich-footer">{{ textLength }} 字 · 应用后仍需保存所在行</div>
+    <div class="rich-footer">
+      {{ textLength }} 字 ·
+      {{ autoSave ? "应用后自动保存" : "创建需求时一并保存" }}
+    </div>
     <template #footer
       ><el-button @click="close()">取消</el-button
       ><el-button type="primary" @click="apply">应用内容</el-button></template

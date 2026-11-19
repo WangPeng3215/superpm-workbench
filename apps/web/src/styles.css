@@ -380,6 +380,7 @@ a,
 }
 .topbar {
   position: sticky;
+  flex: none;
   top: 0;
   z-index: 100;
   display: flex;
@@ -399,20 +400,29 @@ a,
     -webkit-backdrop-filter: blur(18px) saturate(145%);
   }
 }
-/* 顶栏页签：无外层轨道，页签直接立在顶栏基线上；当前项用完整标签面连接内容区 */
+/* 顶栏页签以圆角标签呈现，窄屏与大量页签由两侧按钮控制横向滚动。 */
+.topbar-tab-strip {
+  display: flex;
+  align-items: center;
+  flex: 1 1 0;
+  min-width: 0;
+  height: 100%;
+  gap: 6px;
+}
 .topbar-tabs {
-  flex: 0 1 auto;
+  flex: 1 1 0;
+  width: 0;
   min-width: 0;
   display: flex;
-  align-items: flex-end;
-  align-self: flex-end;
-  gap: 2px;
-  height: calc(var(--app-header-h) + 2px);
-  margin-bottom: -1px;
-  padding-top: 8px;
+  align-items: center;
+  gap: 7px;
+  height: 100%;
+  padding: 0 1px;
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
+  scroll-behavior: auto;
+  overscroll-behavior-x: contain;
 }
 .topbar-tabs::-webkit-scrollbar {
   display: none;
@@ -422,14 +432,13 @@ a,
   flex: none;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  max-width: 210px;
-  height: 32px;
-  padding: 0 7px 0 12px;
-  border: 1px solid transparent;
-  border-bottom: 0;
-  border-radius: 8px 8px 0 0;
-  background: transparent;
+  gap: 7px;
+  max-width: 220px;
+  height: 38px;
+  padding: 0 9px 0 13px;
+  border: 1px solid var(--border-base);
+  border-radius: 8px;
+  background: var(--bg-surface);
   color: var(--text-secondary);
   font-size: 12px;
   cursor: pointer;
@@ -437,23 +446,51 @@ a,
     background var(--duration-fast) var(--ease-standard),
     border-color var(--duration-fast) var(--ease-standard),
     color var(--duration-fast) var(--ease-standard),
-    height var(--duration-normal) var(--ease-standard),
     box-shadow var(--duration-fast) var(--ease-standard);
 }
 .topbar-tab:hover {
-  background: color-mix(in srgb, var(--bg-surface) 46%, transparent);
+  background: var(--bg-hover);
   color: var(--text-title);
 }
 .topbar-tab:active {
   background: var(--bg-active);
 }
 .topbar-tab.active {
-  height: 36px;
-  color: var(--text-heading);
+  color: var(--brand);
   background: var(--bg-surface);
-  border-color: var(--border-base);
-  box-shadow: 0 -3px 10px -8px rgb(16 24 40 / 28%);
+  border-color: var(--brand);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--brand) 10%, transparent);
   font-weight: 600;
+}
+.tab-scroll-button,
+.tab-more-button {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  background: transparent;
+  cursor: pointer;
+}
+.tab-scroll-button:hover:not(:disabled),
+.tab-more-button:hover {
+  color: var(--brand);
+  background: var(--bg-hover);
+}
+.tab-scroll-button:disabled {
+  color: var(--text-faint);
+  cursor: default;
+}
+.tab-more-button {
+  width: 36px;
+  height: 36px;
+  border-left: 1px solid var(--border-soft);
+  border-radius: 0;
+  font-size: 18px;
 }
 .topbar-tab:focus-visible {
   outline-offset: -2px;
@@ -462,6 +499,43 @@ a,
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.tab-pin {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 18px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  color: var(--text-faint);
+  background: transparent;
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard),
+    background var(--duration-fast) var(--ease-standard);
+}
+.topbar-tab:hover .tab-pin,
+.topbar-tab:focus-visible .tab-pin,
+.topbar-tab.active .tab-pin {
+  opacity: 1;
+}
+.tab-pin:hover {
+  color: var(--brand);
+  background: var(--bg-hover);
+}
+.topbar-tab:has(.tab-pin[title="取消固定"]) .tab-pin {
+  color: var(--brand);
+  opacity: 1;
+}
+.topbar-tab[draggable="true"] {
+  cursor: grab;
+}
+.topbar-tab[draggable="true"]:active {
+  cursor: grabbing;
 }
 .tab-close {
   display: grid;
@@ -733,6 +807,22 @@ h2 {
   }
   .topbar-actions {
     gap: 2px;
+  }
+  .topbar-tab-strip {
+    gap: 2px;
+  }
+  .topbar-tab {
+    max-width: 155px;
+    height: 36px;
+    padding-inline: 8px;
+    font-size: 11px;
+  }
+  .tab-scroll-button {
+    width: 28px;
+    height: 30px;
+  }
+  .tab-more-button {
+    width: 30px;
   }
   .topbar-icon-button {
     width: 30px;
