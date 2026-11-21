@@ -132,8 +132,14 @@ test("每日任务：创建、筛选、完成、编辑、小结复制与删除",
 });
 
 test("每日任务：计时、自动生成工时与校正", async ({ page }) => {
-  const hour = new Date().getHours();
-  test.skip(hour >= 18, "业务日 18:00 后不允许开始计时");
+  const clockResponse = await page.request.get("/api/daily-tasks/active");
+  expect(clockResponse.ok()).toBeTruthy();
+  const { today: businessDate } = (await clockResponse.json()) as {
+    today: string;
+  };
+  await page.clock.install({
+    time: new Date(businessDate + "T10:00:00+08:00"),
+  });
 
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
@@ -165,6 +171,7 @@ test("每日任务：计时、自动生成工时与校正", async ({ page }) => 
   await menu.getByText("工时校正", { exact: true }).click();
   const entryDialog = page.getByRole("dialog", { name: "工时校正" });
   await expect(entryDialog).toBeVisible();
+  await expect(entryDialog.locator(".entry-reason")).toHaveText("手动结束");
   const startInput = entryDialog.getByRole("combobox", { name: "开始时间" });
   const endInput = entryDialog.getByRole("combobox", { name: "结束时间" });
   const start = await startInput.inputValue();

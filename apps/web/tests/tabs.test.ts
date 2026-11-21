@@ -42,6 +42,25 @@ afterEach(() => {
 });
 
 describe("页签布局持久化", () => {
+  it("项目详情识别实体并保留独立编号标题", () => {
+    vi.stubGlobal("localStorage", storage);
+    authStore.user = {
+      id: 1,
+      username: "user",
+      displayName: "用户",
+      isAdmin: false,
+    };
+    syncRoute("/projects");
+    syncRoute("/projects/7");
+    setTabLabel("/projects/7", "PRJ-0007 · 项目");
+    clearTabs(true);
+    restoreTabs();
+    expect(tabsStore.tabs[0].label).toBe("项目管理");
+    expect(tabsStore.tabs[1]).toMatchObject({
+      projectId: 7,
+      label: "PRJ-0007 · 项目",
+    });
+  });
   it("按账号隔离布局并持久化详情页签文案", () => {
     vi.stubGlobal("localStorage", storage);
     authStore.user = {

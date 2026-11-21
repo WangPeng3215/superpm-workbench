@@ -6,6 +6,16 @@ export const router = createRouter({
   routes: [
     { path: "/", redirect: "/requirements" },
     {
+      path: "/projects",
+      component: () => import("../pages/ProjectsPage.vue"),
+      meta: { title: "项目管理" },
+    },
+    {
+      path: "/projects/:id",
+      component: () => import("../pages/ProjectDetailPage.vue"),
+      meta: { title: "项目详情", keepAlive: true },
+    },
+    {
       path: "/login",
       component: () => import("../pages/LoginPage.vue"),
       meta: { title: "登录", public: true },

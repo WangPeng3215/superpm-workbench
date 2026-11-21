@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { appVersion, defaultPaths, homePath } from "./config/index.js";
 import { prepareHomeIfConfigured } from "./config/home-migration.js";
 import { appendFileLog } from "./config/logging.js";
@@ -84,7 +85,7 @@ async function main() {
       return;
     }
     if (items.length === 0) {
-      console.info(`暂无备份（目录：${resolveBackupDir(homePath, "")}）`);
+      console.info(`暂无备份（目录：${join(homePath, "backups")}）`);
       return;
     }
     for (const meta of items)

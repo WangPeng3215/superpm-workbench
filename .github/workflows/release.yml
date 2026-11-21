@@ -38,16 +38,24 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           # 清单说明取标签注信息的首行，取不到时回退到通用文案
           notes="$(git tag -l --format='%(contents:subject)' "$GITHUB_REF_NAME" 2>/dev/null)"
+          notes_args=(--notes "${notes:-$GITHUB_REF_NAME 正式发布，详见 GitHub Release。}")
+          if [ -f "docs/releases/${version}.md" ]; then
+            notes_args=(--notes-file "docs/releases/${version}.md")
+          fi
           node scripts/release/build-release.mjs \
             --version "$version" \
             --tag "$GITHUB_REF_NAME" \
-            --notes "${notes:-$GITHUB_REF_NAME 正式发布，详见 GitHub Release。}"
+            "${notes_args[@]}"
       - name: 创建 GitHub Release
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           version="${GITHUB_REF_NAME#v}"
+          notes_args=(--generate-notes)
+          if [ -f "docs/releases/${version}.md" ]; then
+            notes_args=(--notes-file "docs/releases/${version}.md")
+          fi
           gh release create "$GITHUB_REF_NAME" \
             "release/superpm-workbench-${version}-win-x64.zip" \
             "release/superpm-workbench-${version}-update-win-x64.zip" \
@@ -55,4 +63,4 @@ jobs:
             "release/superpm-mcp-updater-repair-${version}.zip" \
             "release/update-manifest.json" \
             --title "superPM Workbench $GITHUB_REF_NAME" \
-            --generate-notes
+            "${notes_args[@]}"

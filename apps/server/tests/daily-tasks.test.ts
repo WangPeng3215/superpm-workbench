@@ -9,6 +9,11 @@ import {
   type DailyTaskDay,
 } from "@superpm/shared";
 import { migrate } from "../src/db/migrate.js";
+import {
+  createScopedDatabase,
+  runAsSystem,
+  runAsUser,
+} from "../src/db/scope.js";
 import { DailyTaskService } from "../src/services/daily-tasks.js";
 import {
   businessDate,
@@ -191,6 +196,35 @@ describe("daily task service", () => {
     expect(entryRows()).toHaveLength(1);
   });
 
+  it.each(["09:00:00", "17:00:00"])(
+    "records a manual stop before the automatic boundary when starting at %s",
+    (start) => {
+      const task = createTask("手动结束");
+      now = zonedDateTime(DATE, start);
+      service.start(task.id);
+      now = new Date(now.getTime() + 600_000);
+      service.stop(task.id);
+      expect(service.listTaskEntries(task.id)[0]).toMatchObject({
+        endedAt: now.toISOString(),
+        durationSeconds: 600,
+        endReason: "manual",
+      });
+    },
+  );
+
+  it("records the automatic reason on a stop at the boundary", () => {
+    const task = createTask("准点结束");
+    now = zonedDateTime(DATE, "17:50:00");
+    service.start(task.id);
+    now = businessDayEnd(DATE);
+    service.stop(task.id);
+    expect(service.listTaskEntries(task.id)[0]).toMatchObject({
+      endedAt: now.toISOString(),
+      durationSeconds: 600,
+      endReason: "auto_18_00",
+    });
+  });
+
   it("rejects starting at or after 18:00", () => {
     const task = createTask("任务");
     now = zonedDateTime(DATE, "18:00:00");
@@ -235,6 +269,37 @@ describe("daily task service", () => {
     });
     // 满额后不能再开始
     expect(() => service.start(task.id)).toThrowError(/8 小时/);
+  });
+
+  it("reconciles concurrent timers against each owner's quota in system scope", () => {
+    service = new DailyTaskService(createScopedDatabase(db), {
+      now: () => now,
+    });
+    const alice = { userId: 101, isAdmin: false };
+    const bob = { userId: 102, isAdmin: false };
+    now = zonedDateTime(DATE, "07:00:00");
+    runAsUser(alice, () => service.start(createTask("甲的已完成工时").id));
+    now = zonedDateTime(DATE, "14:00:00");
+    const aliceTimer = runAsUser(alice, () => {
+      service.stop(service.activeState().activeTimer!.taskId);
+      return service.start(createTask("甲的第二条工时").id).activeTimer!;
+    });
+    const bobTimer = runAsUser(
+      bob,
+      () => service.start(createTask("乙的第一条工时").id).activeTimer!,
+    );
+    now = zonedDateTime(DATE, "15:01:00");
+    expect(runAsSystem(() => service.reconcile())).toEqual([aliceTimer.id]);
+    expect(
+      runAsUser(alice, () => service.listTaskEntries(aliceTimer.taskId)[0]),
+    ).toMatchObject({ durationSeconds: 3600, endReason: "daily_limit" });
+    expect(
+      runAsUser(bob, () => service.activeState().activeTimer),
+    ).toMatchObject({
+      id: bobTimer.id,
+      elapsedSeconds: 3660,
+      autoEndAt: businessDayEnd(DATE).toISOString(),
+    });
   });
 
   it("validates manual corrections, keeps an audit and refreshes statistics", () => {
@@ -300,6 +365,46 @@ describe("daily task service", () => {
         reason: "",
       }),
     ).toThrowError(/8 小时/);
+  });
+
+  it("rejects corrections overlapping elapsed or remaining active time", () => {
+    const first = createTask("已有工时");
+    const second = createTask("计时中");
+    insertCompletedEntry(first.id, "08:00:00", "09:00:00");
+    const entry = service.listTaskEntries(first.id)[0];
+    now = zonedDateTime(DATE, "10:00:00");
+    service.start(second.id);
+    now = zonedDateTime(DATE, "10:30:00");
+
+    const correct = (start: string, end: string) =>
+      service.updateTimeEntry(entry.id, {
+        startedAt: zonedDateTime(DATE, start).toISOString(),
+        endedAt: zonedDateTime(DATE, end).toISOString(),
+      });
+    expect(() => correct("09:30:00", "10:15:00")).toThrowError(/重叠/);
+    expect(() => correct("11:00:00", "11:15:00")).toThrowError(/重叠/);
+    expect(service.listTaskEntries(first.id)[0]).toEqual(entry);
+    expect(correct("09:00:00", "10:00:00").entry.durationSeconds).toBe(3600);
+  });
+
+  it("rejects corrections that would erase already accrued active time", () => {
+    const first = createTask("已有工时");
+    const second = createTask("计时中");
+    insertCompletedEntry(first.id, "01:00:00", "08:00:00");
+    const entry = service.listTaskEntries(first.id)[0];
+    now = zonedDateTime(DATE, "10:00:00");
+    service.start(second.id);
+    now = zonedDateTime(DATE, "10:45:00");
+    expect(() =>
+      service.updateTimeEntry(entry.id, {
+        startedAt: zonedDateTime(DATE, "00:00:00").toISOString(),
+        endedAt: zonedDateTime(DATE, "07:30:00").toISOString(),
+      }),
+    ).toThrowError(/8 小时/);
+    expect(service.activeState().activeTimer).toMatchObject({
+      elapsedSeconds: 2700,
+      autoEndAt: zonedDateTime(DATE, "11:00:00").toISOString(),
+    });
   });
 
   it("archives tasks with history and keeps the hours in statistics", () => {

@@ -156,6 +156,8 @@ export interface DailyTask {
   description: string;
   planDate: string;
   requirementId: number | null;
+  /** Project task source link for this personal plan, when explicitly scheduled from a project task. */
+  projectTaskId?: number | null;
   requirement: DailyTaskRequirementRef | null;
   plannedStartAt: string | null;
   plannedEndAt: string | null;

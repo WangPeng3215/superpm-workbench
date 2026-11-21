@@ -199,11 +199,43 @@ function firstTailClause(masked: string, from: number): number {
   return best < 0 ? masked.length : best;
 }
 
-/** 注入点回退到前一个非空白字符之后，避免写出 "? and user_id = ?ORDER BY" */
-function trimInsertPoint(masked: string, index: number): number {
-  let i = index;
-  while (i > 0 && /\s/.test(masked[i - 1])) i -= 1;
-  return i;
+/** 注入在最后一个 SQL token 后；字面量必须完整保留，尾部注释留在条件之后。 */
+function trimInsertPoint(sql: string, index: number): number {
+  let end = 0;
+  let i = 0;
+  while (i < index) {
+    const ch = sql[i];
+    if (ch === "-" && sql[i + 1] === "-") {
+      while (i < index && sql[i] !== "\n") i += 1;
+      continue;
+    }
+    if (ch === "/" && sql[i + 1] === "*") {
+      i += 2;
+      while (i < index && !(sql[i] === "*" && sql[i + 1] === "/")) i += 1;
+      i = Math.min(index, i + 2);
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === "`" || ch === "[") {
+      const closing = ch === "[" ? "]" : ch;
+      i += 1;
+      while (i < index) {
+        if (sql[i] === closing) {
+          i += 1;
+          if (ch !== "[" && sql[i] === closing) {
+            i += 1;
+            continue;
+          }
+          break;
+        }
+        i += 1;
+      }
+      end = i;
+      continue;
+    }
+    i += 1;
+    if (!/\s/.test(ch)) end = i;
+  }
+  return end;
 }
 
 function countPlaceholdersBefore(masked: string, index: number): number {
@@ -366,8 +398,18 @@ function rewriteFiltered(
     );
 
   const whereIndex = findTopLevel(masked, "where", table.end);
-  const cutoff = trimInsertPoint(masked, firstTailClause(masked, table.end));
+  const cutoff = trimInsertPoint(sql, firstTailClause(masked, table.end));
   if (whereIndex >= 0 && whereIndex < cutoff) {
+    const predicateStart = whereIndex + "where".length;
+    if (findTopLevel(masked.slice(predicateStart, cutoff), "or") >= 0) {
+      const next =
+        sql.slice(0, predicateStart) +
+        " (" +
+        sql.slice(predicateStart, cutoff).trim() +
+        ") and user_id = ?" +
+        sql.slice(cutoff);
+      return { sql: next, paramIndex: countPlaceholdersBefore(masked, cutoff) };
+    }
     const next = sql.slice(0, cutoff) + " and user_id = ?" + sql.slice(cutoff);
     return { sql: next, paramIndex: countPlaceholdersBefore(masked, cutoff) };
   }

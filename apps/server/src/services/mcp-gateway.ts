@@ -65,6 +65,7 @@ import { MeetingService } from "./meetings.js";
 import { NoteService } from "./notes.js";
 import { RequirementProgressService } from "./requirement-progress.js";
 import { McpWriteService, type McpWriteTarget } from "./mcp-writes.js";
+import { runAsUntrustedTool } from "./access-context.js";
 
 /**
  * MCP 服务网关（M3：受控写入）：契约层的唯一执行入口。
@@ -845,6 +846,8 @@ export function buildMcpTools(deps: McpGatewayDeps): McpGateway {
     const payload = mcpWritePayloadSchemas[input.tool].parse(
       input.input,
     ) as Record<string, unknown>;
+    if (typeof payload.requirementId === "number")
+      deps.requirements.get(payload.requirementId);
     const prepared = writes.prepare({
       tool: input.tool,
       payload,
@@ -870,10 +873,11 @@ export function buildMcpTools(deps: McpGatewayDeps): McpGateway {
     tools.set(contract.name, {
       name: contract.name,
       kind: contract.kind,
-      execute: (input, options = {}) => ({
-        notice: MCP_UNTRUSTED_CONTENT_NOTICE,
-        data: handler(contract.input.parse(input), options),
-      }),
+      execute: (input, options = {}) =>
+        runAsUntrustedTool(() => ({
+          notice: MCP_UNTRUSTED_CONTENT_NOTICE,
+          data: handler(contract.input.parse(input), options),
+        })),
     });
   }
 
@@ -884,49 +888,53 @@ export function buildMcpTools(deps: McpGatewayDeps): McpGateway {
   return {
     tools,
     writeEnabled: writes.isEnabled,
-    call: (name, input, options) => {
-      try {
-        if (name === "write.prepare") {
-          if (!writes.isEnabled)
-            throw new DomainError(
-              "FORBIDDEN",
-              "MCP 写入能力未启用：请显式设置 SUPERPM_MCP_WRITE=1 并重启服务",
-              403,
+    call: (name, input, options) =>
+      runAsUntrustedTool(() => {
+        try {
+          if (name === "write.prepare") {
+            if (!writes.isEnabled)
+              throw new DomainError(
+                "FORBIDDEN",
+                "MCP 写入能力未启用：请显式设置 SUPERPM_MCP_WRITE=1 并重启服务",
+                403,
+              );
+            return { ok: true, data: prepare(input, options) };
+          }
+          const tool = tools.get(name as McpToolName);
+          if (!tool) {
+            const contract = mcpToolContracts.find(
+              (item) => item.name === name,
             );
-          return { ok: true, data: prepare(input, options) };
-        }
-        const tool = tools.get(name as McpToolName);
-        if (!tool) {
-          const contract = mcpToolContracts.find((item) => item.name === name);
-          if (contract?.kind === "mutating")
-            throw new DomainError(
-              "FORBIDDEN",
-              "MCP 写入能力未启用：请显式设置 SUPERPM_MCP_WRITE=1 并重启服务",
-              403,
+            if (contract?.kind === "mutating")
+              throw new DomainError(
+                "FORBIDDEN",
+                "MCP 写入能力未启用：请显式设置 SUPERPM_MCP_WRITE=1 并重启服务",
+                403,
+              );
+            throw new DomainError("NOT_FOUND", `未知的 MCP 工具：${name}`, 404);
+          }
+          return { ok: true, data: tool.execute(input, options) };
+        } catch (error) {
+          if (error instanceof z.ZodError) {
+            const issues = error.issues
+              .map(
+                (issue) =>
+                  `${issue.path.join(".") || "input"}: ${issue.message}`,
+              )
+              .join("；");
+            return fail(
+              "VALIDATION_ERROR",
+              `工具 ${name} 入参校验失败：${issues}`,
             );
-          throw new DomainError("NOT_FOUND", `未知的 MCP 工具：${name}`, 404);
+          }
+          if (error instanceof DomainError) {
+            if ((MCP_ERROR_CODES as readonly string[]).includes(error.code))
+              return fail(error.code as McpErrorCode, error.message);
+            // 白名单以外的业务错误不透传原文，避免泄露路径或内部实现细节
+            return fail("INTERNAL_ERROR", "工具执行失败");
+          }
+          throw error;
         }
-        return { ok: true, data: tool.execute(input, options) };
-      } catch (error) {
-        if (error instanceof z.ZodError) {
-          const issues = error.issues
-            .map(
-              (issue) => `${issue.path.join(".") || "input"}: ${issue.message}`,
-            )
-            .join("；");
-          return fail(
-            "VALIDATION_ERROR",
-            `工具 ${name} 入参校验失败：${issues}`,
-          );
-        }
-        if (error instanceof DomainError) {
-          if ((MCP_ERROR_CODES as readonly string[]).includes(error.code))
-            return fail(error.code as McpErrorCode, error.message);
-          // 白名单以外的业务错误不透传原文，避免泄露路径或内部实现细节
-          return fail("INTERNAL_ERROR", "工具执行失败");
-        }
-        throw error;
-      }
-    },
+      }),
   };
 }

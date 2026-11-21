@@ -1,0 +1,186 @@
+{
+  "ok": true,
+  "from": "D:\\project\\superPMWorkbench\\release\\1.2.0\\superpm-workbench-1.2.0-win-x64.zip",
+  "update": "D:\\project\\superPMWorkbench\\release\\1.3.0\\superpm-workbench-1.3.0-update-win-x64.zip",
+  "updaterRepair": "D:\\project\\superPMWorkbench\\release\\1.3.0\\superpm-mcp-updater-repair-1.3.0.zip",
+  "work": "C:\\Users\\Mayn\\AppData\\Local\\Temp\\superpm-update-rehearsal-bJijnG",
+  "scenarios": [
+    {
+      "name": "happy",
+      "port": 57339,
+      "install": "C:\\Users\\Mayn\\AppData\\Local\\Temp\\superpm-update-rehearsal-bJijnG\\happy\\extract\\superpm-workbench-1.2.0-win-x64",
+      "progressSupported": true,
+      "versionA": "1.2.0",
+      "requirementId": 1,
+      "updaterRepair": {
+        "oldUpdaterBlocked": true,
+        "minUpdaterVersion": "1.1.3",
+        "installMetadataPreserved": true
+      },
+      "updater": {
+        "exitCode": 0,
+        "status": "updated"
+      },
+      "mcpExitCode": 0,
+      "progressStatus": "updated",
+      "versionB": "1.3.0",
+      "backupId": "20261121T070813Z-pre-update",
+      "runningVersion": "1.3.0",
+      "ok": true
+    },
+    {
+      "name": "digest",
+      "port": 59525,
+      "install": "C:\\Users\\Mayn\\AppData\\Local\\Temp\\superpm-update-rehearsal-bJijnG\\digest\\extract\\superpm-workbench-1.2.0-win-x64",
+      "progressSupported": true,
+      "versionA": "1.2.0",
+      "requirementId": 1,
+      "updaterRepair": {
+        "oldUpdaterBlocked": true,
+        "minUpdaterVersion": "1.1.3",
+        "installMetadataPreserved": true
+      },
+      "updater": {
+        "exitCode": 1,
+        "status": "failed",
+        "error": "更新包摘要不一致：期望 dda0ff43b85789ae3e37b35fd0dd24ae2a3183abed9cbcafe61dd56e6c94ce58，实际 ff138c7b85c126839a5eb37bce51129bfa0bd2b2ef8b31a2e917af0ad2974cb8"
+      },
+      "progressStatus": "failed",
+      "expectedStatus": "failed",
+      "runningVersion": "1.2.0",
+      "ok": true
+    },
+    {
+      "name": "download",
+      "port": 59539,
+      "install": "C:\\Users\\Mayn\\AppData\\Local\\Temp\\superpm-update-rehearsal-bJijnG\\download\\extract\\superpm-workbench-1.2.0-win-x64",
+      "progressSupported": true,
+      "versionA": "1.2.0",
+      "requirementId": 1,
+      "updaterRepair": {
+        "oldUpdaterBlocked": true,
+        "minUpdaterVersion": "1.1.3",
+        "installMetadataPreserved": true
+      },
+      "updater": {
+        "exitCode": 1,
+        "status": "failed",
+        "error": "注入测试失败：download"
+      },
+      "progressStatus": "failed",
+      "expectedStatus": "failed",
+      "runningVersion": "1.2.0",
+      "ok": true
+    },
+    {
+      "name": "verify",
+      "port": 59550,
+      "install": "C:\\Users\\Mayn\\AppData\\Local\\Temp\\superpm-update-rehearsal-bJijnG\\verify\\extract\\superpm-workbench-1.2.0-win-x64",
+      "progressSupported": true,
+      "versionA": "1.2.0",
+      "requirementId": 1,
+      "updaterRepair": {
+        "oldUpdaterBlocked": true,
+        "minUpdaterVersion": "1.1.3",
+        "installMetadataPreserved": true
+      },
+      "updater": {
+        "exitCode": 1,
+        "status": "failed",
+        "error": "注入测试失败：verify"
+      },
+      "progressStatus": "failed",
+      "expectedStatus": "failed",
+      "runningVersion": "1.2.0",
+      "ok": true
+    },
+    {
+      "name": "backup",
+      "port": 59570,
+      "install": "C:\\Users\\Mayn\\AppData\\Local\\Temp\\superpm-update-rehearsal-bJijnG\\backup\\extract\\superpm-workbench-1.2.0-win-x64",
+      "progressSupported": true,
+      "versionA": "1.2.0",
+      "requirementId": 1,
+      "updaterRepair": {
+        "oldUpdaterBlocked": true,
+        "minUpdaterVersion": "1.1.3",
+        "installMetadataPreserved": true
+      },
+      "updater": {
+        "exitCode": 1,
+        "status": "failed",
+        "error": "注入测试失败：backup"
+      },
+      "progressStatus": "failed",
+      "expectedStatus": "failed",
+      "runningVersion": "1.2.0",
+      "ok": true
+    },
+    {
+      "name": "swap",
+      "port": 59698,
+      "install": "C:\\Users\\Mayn\\AppData\\Local\\Temp\\superpm-update-rehearsal-bJijnG\\swap\\extract\\superpm-workbench-1.2.0-win-x64",
+      "progressSupported": true,
+      "versionA": "1.2.0",
+      "requirementId": 1,
+      "updaterRepair": {
+        "oldUpdaterBlocked": true,
+        "minUpdaterVersion": "1.1.3",
+        "installMetadataPreserved": true
+      },
+      "updater": {
+        "exitCode": 1,
+        "status": "failed",
+        "error": "注入测试失败：swap"
+      },
+      "progressStatus": "failed",
+      "expectedStatus": "failed",
+      "runningVersion": "1.2.0",
+      "ok": true
+    },
+    {
+      "name": "migrate",
+      "port": 59710,
+      "install": "C:\\Users\\Mayn\\AppData\\Local\\Temp\\superpm-update-rehearsal-bJijnG\\migrate\\extract\\superpm-workbench-1.2.0-win-x64",
+      "progressSupported": true,
+      "versionA": "1.2.0",
+      "requirementId": 1,
+      "updaterRepair": {
+        "oldUpdaterBlocked": true,
+        "minUpdaterVersion": "1.1.3",
+        "installMetadataPreserved": true
+      },
+      "updater": {
+        "exitCode": 1,
+        "status": "rolled-back",
+        "error": "注入测试失败：migrate"
+      },
+      "progressStatus": "rolled-back",
+      "expectedStatus": "rolled-back",
+      "runningVersion": "1.2.0",
+      "ok": true
+    },
+    {
+      "name": "health",
+      "port": 59728,
+      "install": "C:\\Users\\Mayn\\AppData\\Local\\Temp\\superpm-update-rehearsal-bJijnG\\health\\extract\\superpm-workbench-1.2.0-win-x64",
+      "progressSupported": true,
+      "versionA": "1.2.0",
+      "requirementId": 1,
+      "updaterRepair": {
+        "oldUpdaterBlocked": true,
+        "minUpdaterVersion": "1.1.3",
+        "installMetadataPreserved": true
+      },
+      "updater": {
+        "exitCode": 1,
+        "status": "rolled-back",
+        "error": "注入测试失败：health"
+      },
+      "progressStatus": "rolled-back",
+      "expectedStatus": "rolled-back",
+      "runningVersion": "1.2.0",
+      "ok": true
+    }
+  ]
+}

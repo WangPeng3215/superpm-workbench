@@ -76,7 +76,7 @@ export function matchesMcpProcess(
   return true;
 }
 
-function processIdentity(pid: number): ProcessIdentity | null {
+export function processIdentity(pid: number): ProcessIdentity | null {
   if (!Number.isInteger(pid) || pid <= 0) return null;
   try {
     if (process.platform === "win32") {

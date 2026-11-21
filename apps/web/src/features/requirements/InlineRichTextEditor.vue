@@ -50,6 +50,7 @@ import { stripPastedColors } from "./paste-clean";
 import RequirementReferenceDialog from "./RequirementReferenceDialog.vue";
 import type { RequirementOption } from "./requirement-options";
 import { RequirementRef, resolveRequirementRefHtml } from "./requirement-ref";
+import { createContentRevision } from "./content-revision";
 
 const props = defineProps<{
   html: string;
@@ -111,6 +112,7 @@ const highlightPalette = computed(() =>
 const uploading = ref(false);
 const input = ref<HTMLInputElement>();
 const lastEmitted = ref("");
+const contentRevision = createContentRevision();
 async function waitForUpload() {
   if (!uploading.value) return;
   await new Promise<void>((resolve) => {
@@ -223,20 +225,19 @@ const editor = useEditor({
     },
   },
   onUpdate: ({ editor: instance }) => {
+    contentRevision.invalidate();
     const html = DOMPurify.sanitize(instance.getHTML(), SANITIZE);
     lastEmitted.value = html;
     emit("update:html", html);
     emit("update:text", instance.getText());
   },
 });
-let contentSeq = 0;
 async function applyExternalContent(raw: string) {
-  const seq = ++contentSeq;
-  const next = await resolveRequirementRefHtml(raw);
-  if (seq !== contentSeq) return;
-  const instance = editor.value;
-  if (!instance) return;
-  instance.commands.setContent(next || "<p></p>", { emitUpdate: false });
+  await contentRevision.resolve(raw, resolveRequirementRefHtml, (next) => {
+    const instance = editor.value;
+    if (!instance) return;
+    instance.commands.setContent(next || "<p></p>", { emitUpdate: false });
+  });
 }
 watch(
   () => `${props.html}\u0000${props.text ?? ""}`,
@@ -548,7 +549,10 @@ async function upload(event: Event) {
   await insertImages([file]);
   if (input.value) input.value.value = "";
 }
-onBeforeUnmount(() => editor.value?.destroy());
+onBeforeUnmount(() => {
+  contentRevision.invalidate();
+  editor.value?.destroy();
+});
 </script>
 <template>
   <div

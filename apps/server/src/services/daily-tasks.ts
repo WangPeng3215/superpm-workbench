@@ -1,10 +1,12 @@
 import type Database from "better-sqlite3";
+import { requirementVisibilitySql } from "./requirement-access.js";
 import {
   dailyLimitSeconds,
   dailyTaskCreateSchema,
   dailyTaskOrderSchema,
   dailyTaskUpdateSchema,
   dailyTimeEntryUpdateSchema,
+  projectTaskDailyPlanSchema,
   type ActiveDailyTimer,
   type DailyTask,
   type DailyTaskActiveState,
@@ -17,6 +19,7 @@ import {
   type DailyTimeEntry,
   type DailyTimeEntryEndReason,
   type DailyTimeEntryStatus,
+  type ProjectTaskDailyPlanInput,
 } from "@superpm/shared";
 import { DomainError } from "./requirements.js";
 import { ownerFilterSql } from "../db/scope.js";
@@ -34,10 +37,12 @@ import {
 
 interface TaskRow {
   id: number;
+  user_id: number;
   title: string;
   description: string;
   plan_date: string;
   requirement_id: number | null;
+  project_task_id: number | null;
   planned_start_at: string | null;
   planned_end_at: string | null;
   estimated_minutes: number;
@@ -52,7 +57,10 @@ interface TaskRow {
 
 interface TimeEntryRow {
   id: number;
+  user_id: number;
   task_id: number;
+  project_id: number | null;
+  project_task_id: number | null;
   started_at: string;
   ended_at: string | null;
   duration_seconds: number;
@@ -69,6 +77,16 @@ interface ActiveTimerRow extends TimeEntryRow {
 
 export interface DailyTaskServiceOptions {
   now?: () => Date;
+  projectTaskAccess?: (
+    taskId: number,
+    purpose: "plan" | "start",
+  ) => {
+    id: number;
+    projectId: number;
+    requirementId: number | null;
+    assigneeUserId: number;
+    version: number;
+  };
 }
 
 function toTimeEntry(row: TimeEntryRow): DailyTimeEntry {
@@ -95,12 +113,75 @@ function floorSeconds(milliseconds: number) {
 
 export class DailyTaskService {
   private readonly now: () => Date;
+  private readonly projectTaskAccess?: DailyTaskServiceOptions["projectTaskAccess"];
 
   constructor(
     private readonly db: Database.Database,
     options: DailyTaskServiceOptions = {},
   ) {
     this.now = options.now ?? (() => new Date());
+    this.projectTaskAccess = options.projectTaskAccess;
+  }
+
+  planProjectTask(taskId: number, input: unknown): DailyTask {
+    const parsed = projectTaskDailyPlanSchema.parse(input);
+    if (!this.projectTaskAccess)
+      throw new DomainError(
+        "PROJECT_TASKS_UNAVAILABLE",
+        "项目任务安排暂不可用",
+        503,
+      );
+    return this.transaction(() => {
+      const source = this.projectTaskAccess!(taskId, "plan");
+      if (source.version !== parsed.expectedVersion)
+        throw new DomainError(
+          "VERSION_CONFLICT",
+          "项目任务已更新，请刷新后重新安排",
+          409,
+        );
+      const existing = this.db
+        .prepare(
+          "SELECT id FROM daily_tasks WHERE project_task_id=? AND plan_date=? AND deleted_at IS NULL",
+        )
+        .get(taskId, parsed.date) as { id: number } | undefined;
+      if (existing) return this.getTask(existing.id);
+      const projectTask = this.db
+        .prepare(
+          "SELECT title,description FROM project_tasks WHERE id=? AND project_id=?",
+        )
+        .get(taskId, source.projectId) as
+        { title: string; description: string } | undefined;
+      if (!projectTask)
+        throw new DomainError("NOT_FOUND", "项目任务不存在", 404);
+      const timestamp = this.now().toISOString();
+      const sortOrder = (
+        this.db
+          .prepare(
+            "SELECT COALESCE(MAX(sort_order), -1) + 1 AS next FROM daily_tasks WHERE plan_date=? AND deleted_at IS NULL",
+          )
+          .get(parsed.date) as { next: number }
+      ).next;
+      const result = this.db
+        .prepare(
+          `INSERT INTO daily_tasks
+            (title,description,plan_date,requirement_id,project_task_id,planned_start_at,planned_end_at,estimated_minutes,status,sort_order,created_at,updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
+        )
+        .run(
+          projectTask.title,
+          projectTask.description,
+          parsed.date,
+          source.requirementId,
+          taskId,
+          parsed.plannedStartAt ?? null,
+          parsed.plannedEndAt ?? null,
+          parsed.estimatedMinutes,
+          sortOrder,
+          timestamp,
+          timestamp,
+        );
+      return this.getTask(Number(result.lastInsertRowid));
+    });
   }
 
   create(input: unknown) {
@@ -371,6 +452,10 @@ export class DailyTaskService {
     this.reconcile(now);
     this.transaction(() => {
       const task = this.taskRowOrThrow(taskId);
+      const projectTask =
+        task.project_task_id === null
+          ? null
+          : this.requireProjectTaskAccess(task.project_task_id, "start");
       const active = this.activeRow();
       if (active)
         throw new DomainError(
@@ -381,7 +466,7 @@ export class DailyTaskService {
       const today = businessDate(now);
       if (now.getTime() >= businessDayEnd(today).getTime())
         throw new DomainError("CONFLICT", "今天 18:00 后不能开始新的计时", 409);
-      const usedSeconds = this.completedSecondsForDate(today);
+      const usedSeconds = this.completedSecondsForDate(today, task.user_id);
       if (usedSeconds >= dailyLimitSeconds)
         throw new DomainError(
           "CONFLICT",
@@ -392,10 +477,17 @@ export class DailyTaskService {
       this.db
         .prepare(
           `INSERT INTO daily_time_entries
-            (task_id, started_at, ended_at, duration_seconds, status, end_reason, created_at, updated_at)
-           VALUES (?, ?, NULL, 0, 'active', NULL, ?, ?)`,
+            (task_id, project_id, project_task_id, started_at, ended_at, duration_seconds, status, end_reason, created_at, updated_at)
+           VALUES (?, ?, ?, ?, NULL, 0, 'active', NULL, ?, ?)`,
         )
-        .run(task.id, timestamp, timestamp, timestamp);
+        .run(
+          task.id,
+          projectTask?.projectId ?? null,
+          projectTask?.id ?? null,
+          timestamp,
+          timestamp,
+          timestamp,
+        );
       this.db
         .prepare(
           "UPDATE daily_tasks SET status = 'in_progress', updated_at = ? WHERE id = ? AND deleted_at IS NULL",
@@ -421,7 +513,11 @@ export class DailyTaskService {
       const boundary = this.activeBoundary(active);
       const endedAt =
         now.getTime() >= boundary.endAt.getTime() ? boundary.endAt : now;
-      this.closeEntry(active, endedAt, boundary.endReason, now);
+      const endReason =
+        now.getTime() >= boundary.endAt.getTime()
+          ? boundary.endReason
+          : "manual";
+      this.closeEntry(active, endedAt, endReason, now);
     });
     return this.activeState();
   }
@@ -466,14 +562,18 @@ export class DailyTaskService {
       const others = this.db
         .prepare(
           `SELECT * FROM daily_time_entries
-           WHERE status = 'completed' AND id <> ? AND started_at >= ? AND started_at < ?`,
+           WHERE status IN ('completed', 'active') AND id <> ?
+             AND started_at >= ? AND started_at < ? AND user_id = ?`,
         )
-        .all(entry.id, dayStart, dayEnd) as TimeEntryRow[];
+        .all(entry.id, dayStart, dayEnd, entry.user_id) as TimeEntryRow[];
       for (const other of others) {
         const otherStart = new Date(other.started_at).getTime();
-        const otherEnd = other.ended_at
-          ? new Date(other.ended_at).getTime()
-          : otherStart + other.duration_seconds * 1000;
+        const otherEnd =
+          other.status === "active"
+            ? this.activeBoundary(other).endAt.getTime()
+            : other.ended_at
+              ? new Date(other.ended_at).getTime()
+              : otherStart + other.duration_seconds * 1000;
         if (startedAt.getTime() < otherEnd && endedAt.getTime() > otherStart)
           throw new DomainError(
             "CONFLICT",
@@ -485,8 +585,14 @@ export class DailyTaskService {
         endedAt.getTime() - startedAt.getTime(),
       );
       const usedSeconds =
-        others.reduce((sum, other) => sum + other.duration_seconds, 0) +
-        durationSeconds;
+        others.reduce(
+          (sum, other) =>
+            sum +
+            (other.status === "active"
+              ? this.elapsedSeconds(other, now)
+              : other.duration_seconds),
+          0,
+        ) + durationSeconds;
       if (usedSeconds > dailyLimitSeconds)
         throw new DomainError(
           "CONFLICT",
@@ -600,7 +706,7 @@ export class DailyTaskService {
       .prepare(
         `SELECT t.*, r.requirement_no AS requirement_no, r.name AS requirement_name
          FROM daily_tasks t
-         LEFT JOIN requirements r ON r.id = t.requirement_id AND r.deleted_at IS NULL AND r.user_id = t.user_id
+         LEFT JOIN requirements r ON r.id = t.requirement_id AND r.deleted_at IS NULL AND (${requirementVisibilitySql("r")})
          WHERE t.plan_date = ? AND t.deleted_at IS NULL${owner.sql}
          ORDER BY t.sort_order, t.id`,
       )
@@ -650,6 +756,7 @@ export class DailyTaskService {
       description: row.description,
       planDate: row.plan_date,
       requirementId: row.requirement_id,
+      projectTaskId: row.project_task_id,
       requirement:
         row.requirement_id !== null && row.requirement_no
           ? {
@@ -734,6 +841,19 @@ export class DailyTaskService {
     return floorSeconds(end - startedAt);
   }
 
+  /** Current actual seconds, using the same limits as the personal timer. */
+  worklogSeconds(
+    entry: Pick<
+      TimeEntryRow,
+      "id" | "user_id" | "started_at" | "duration_seconds" | "status"
+    >,
+    now = this.now(),
+  ) {
+    return entry.status === "completed"
+      ? entry.duration_seconds
+      : this.elapsedSeconds(entry as TimeEntryRow, now);
+  }
+
   /**
    * 活动计时的结束边界：18:00 与“当日剩余额度用完的时刻”取较早者。
    * 结束原因按先到达的边界判定。
@@ -742,7 +862,11 @@ export class DailyTaskService {
     const startedAt = new Date(entry.started_at);
     const date = businessDate(startedAt);
     const dayEnd = businessDayEnd(date);
-    const usedSeconds = this.completedSecondsForDate(date, entry.id);
+    const usedSeconds = this.completedSecondsForDate(
+      date,
+      entry.user_id,
+      entry.id,
+    );
     const limitAt = new Date(
       startedAt.getTime() + Math.max(0, dailyLimitSeconds - usedSeconds) * 1000,
     );
@@ -756,18 +880,23 @@ export class DailyTaskService {
     };
   }
 
-  private completedSecondsForDate(date: string, excludeEntryId?: number) {
+  private completedSecondsForDate(
+    date: string,
+    userId: number,
+    excludeEntryId?: number,
+  ) {
     const rows = this.db
       .prepare(
         `SELECT COALESCE(SUM(duration_seconds), 0) AS total
          FROM daily_time_entries
          WHERE status = 'completed'
-           AND started_at >= ? AND started_at < ?
+           AND started_at >= ? AND started_at < ? AND user_id = ?
            AND id <> ?`,
       )
       .get(
         businessDayStart(date).toISOString(),
         nextBusinessDayStart(date).toISOString(),
+        userId,
         excludeEntryId ?? 0,
       ) as { total: number };
     return rows.total;
@@ -886,7 +1015,7 @@ export class DailyTaskService {
       .prepare(
         `SELECT t.*, r.requirement_no AS requirement_no, r.name AS requirement_name
          FROM daily_tasks t
-         LEFT JOIN requirements r ON r.id = t.requirement_id AND r.deleted_at IS NULL AND r.user_id = t.user_id
+         LEFT JOIN requirements r ON r.id = t.requirement_id AND r.deleted_at IS NULL AND (${requirementVisibilitySql("r")})
          WHERE t.id = ? AND t.deleted_at IS NULL${owner.sql}`,
       )
       .get(id, ...owner.params) as TaskRow | undefined;
@@ -903,11 +1032,21 @@ export class DailyTaskService {
     if (requirementId === null || requirementId === undefined) return;
     const row = this.db
       .prepare(
-        "SELECT id FROM requirements WHERE id = ? AND deleted_at IS NULL",
+        `SELECT r.id FROM requirements r WHERE r.id = ? AND r.deleted_at IS NULL AND (${requirementVisibilitySql("r")})`,
       )
       .get(requirementId);
     if (!row)
       throw new DomainError("VALIDATION_ERROR", "关联需求不存在或已删除");
+  }
+
+  private requireProjectTaskAccess(taskId: number, purpose: "plan" | "start") {
+    if (!this.projectTaskAccess)
+      throw new DomainError(
+        "PROJECT_TASKS_UNAVAILABLE",
+        "项目任务权限校验暂不可用",
+        503,
+      );
+    return this.projectTaskAccess(taskId, purpose);
   }
 
   private assertPlannedRange(

@@ -1,4 +1,5 @@
 import type Database from "better-sqlite3";
+import { requirementVisibilitySql } from "./requirement-access.js";
 import { ownerFilterSql } from "../db/scope.js";
 import {
   optimizationPointConvertSchema,
@@ -35,8 +36,8 @@ const selectColumns = `p.id, p.name, p.module, p.description, p.description_html
   p.remark, p.status, p.requirement_id, p.created_at, p.updated_at,
   r.requirement_no, r.name AS requirement_name, r.deleted_at AS requirement_deleted_at`;
 // 联查关联需求属于多表语句，隔离条件显式书写：关联行必须与优化点同属一人
-const fromClause =
-  "FROM optimization_points p LEFT JOIN requirements r ON r.id = p.requirement_id AND r.user_id = p.user_id";
+const fromClause = () =>
+  `FROM optimization_points p LEFT JOIN requirements r ON r.id = p.requirement_id AND (${requirementVisibilitySql("r")})`;
 
 // 可更新字段：契约字段名 → 数据库列名
 const mutableFields = [
@@ -96,7 +97,7 @@ export class OptimizationPointService {
       : `WHERE 1=1${owner.sql}`;
     const rows = this.db
       .prepare(
-        `SELECT ${selectColumns} ${fromClause}
+        `SELECT ${selectColumns} ${fromClause()}
          ${where}
          ORDER BY p.updated_at DESC, p.id DESC`,
       )
@@ -230,7 +231,7 @@ export class OptimizationPointService {
     const owner = ownerFilterSql("p");
     const row = this.db
       .prepare(
-        `SELECT ${selectColumns} ${fromClause} WHERE p.id = ?${owner.sql}`,
+        `SELECT ${selectColumns} ${fromClause()} WHERE p.id = ?${owner.sql}`,
       )
       .get(...([id, ...owner.params] as number[])) as
       OptimizationPointRow | undefined;

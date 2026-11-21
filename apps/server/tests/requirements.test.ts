@@ -95,7 +95,8 @@ describe("requirements API with real SQLite", () => {
         fromStage: "analysis",
         toStage: "online",
         note: "上线验收",
-        actor: "local-user",
+        actor: "管理员",
+        actorUserId: 1,
       }),
     ]);
     await app.inject({

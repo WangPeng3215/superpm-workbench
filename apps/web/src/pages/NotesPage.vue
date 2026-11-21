@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from "vue";
-import { useRouter } from "vue-router";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { onBeforeRouteLeave, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import {
   ArrowLeftOutlined,
@@ -20,12 +20,15 @@ import { noteApi } from "../api/notes";
 import XlyEmpty from "../components/ease-ui/xly-empty/index.vue";
 import { decorative } from "../components/decorativeIcon";
 import NoteCard from "../features/notes/NoteCard.vue";
+import { registerEditingSession } from "../stores/editing-sessions";
+import { authStore } from "../stores/auth";
+import { recoverNoteDrafts } from "../features/notes/note-draft";
 
 const SearchIcon = decorative(SearchOutlined);
 const PlusIcon = decorative(PlusOutlined);
 const ReloadIcon = decorative(ReloadOutlined);
 
-type CardNote = Note & { clientKey: string };
+type CardNote = Note & { clientKey: string; unavailable?: boolean };
 type FilterValue = "all" | NoteType | "pinned";
 
 const router = useRouter();
@@ -36,7 +39,9 @@ const keyword = ref("");
 const filter = ref<FilterValue>("all");
 const archivedView = ref(false);
 const cardRefs = ref<Array<InstanceType<typeof NoteCard>>>([]);
+const cardsByKey = new Map<string, InstanceType<typeof NoteCard>>();
 let loadSeq = 0;
+let localRevision = 0;
 let draftSeq = 0;
 
 const filterOptions: Array<{ value: FilterValue; label: string }> = [
@@ -52,9 +57,19 @@ const hasFilters = computed(
   () => Boolean(keyword.value.trim()) || filter.value !== "all",
 );
 
+const sortedNotes = computed(() =>
+  [...notes.value].sort((a, b) => {
+    if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1;
+    return (
+      new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime() ||
+      b.id - a.id
+    );
+  }),
+);
+
 const visibleNotes = computed(() => {
   const query = keyword.value.trim().toLowerCase();
-  const filtered = notes.value.filter((note) => {
+  return sortedNotes.value.filter((note) => {
     const isDraft = note.id < 0;
     if (!isDraft && query) {
       if (
@@ -68,13 +83,6 @@ const visibleNotes = computed(() => {
     if (filter.value !== "all") return note.type === filter.value;
     return true;
   });
-  return [...filtered].sort((a, b) => {
-    if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1;
-    return (
-      new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime() ||
-      b.id - a.id
-    );
-  });
 });
 
 const countLabel = computed(() =>
@@ -87,13 +95,53 @@ function toCardNote(note: Note): CardNote {
   return { ...note, clientKey: `note-${note.id}` };
 }
 
+function rememberCard(key: string, card: unknown) {
+  // A filtered card stays cached so failed edits remain part of the leave guard.
+  if (!card) return;
+  cardsByKey.set(key, card as InstanceType<typeof NoteCard>);
+  cardRefs.value = [...cardsByKey.values()];
+}
+
 async function load() {
   const seq = ++loadSeq;
+  const revision = localRevision;
   loading.value = true;
   loadError.value = "";
   try {
     const items = await noteApi.list(archivedView.value);
-    if (seq === loadSeq) notes.value = items.map(toCardNote);
+    if (seq === loadSeq && revision === localRevision) {
+      const nextNotes: CardNote[] = items.map(toCardNote);
+      if (!archivedView.value) {
+        for (const note of notes.value) {
+          if (
+            !items.some((item) => item.id === note.id) &&
+            cardsByKey.get(note.clientKey)?.hasUnsavedChanges()
+          ) {
+            nextNotes.unshift({ ...note, unavailable: note.id > 0 });
+          }
+        }
+      }
+      const accountId = authStore.user?.id;
+      if (!archivedView.value && accountId != null) {
+        try {
+          for (const note of recoverNoteDrafts(sessionStorage, accountId)) {
+            if (!nextNotes.some((item) => item.id === note.id))
+              nextNotes.unshift({
+                ...toCardNote(note),
+                unavailable: note.id > 0,
+              });
+          }
+        } catch {
+          ElMessage.warning("无法读取会话草稿，请确认便签已保存后再关闭。");
+        }
+      }
+      for (const key of cardsByKey.keys()) {
+        if (!nextNotes.some((item) => key === item.clientKey))
+          cardsByKey.delete(key);
+      }
+      cardRefs.value = [...cardsByKey.values()];
+      notes.value = nextNotes;
+    }
   } catch (error) {
     if (seq === loadSeq) loadError.value = errorMessage(error);
   } finally {
@@ -107,6 +155,18 @@ async function flushCards() {
   );
   return results.every(Boolean);
 }
+
+async function leaveNotes() {
+  if (await flushCards()) return true;
+  ElMessage.warning("有便签尚未保存，请处理保存错误或冲突后再离开。");
+  return false;
+}
+
+onBeforeRouteLeave(leaveNotes);
+const unregisterSession = registerEditingSession("/notes", {
+  flush: leaveNotes,
+});
+onBeforeUnmount(unregisterSession);
 
 async function reloadNotes() {
   if (!(await flushCards())) {
@@ -132,8 +192,12 @@ function clearFilters() {
   filter.value = "all";
 }
 
-function createNote() {
+async function createNote() {
   if (archivedView.value) return;
+  if (!(await flushCards())) {
+    ElMessage.warning("有便签尚未保存，请重试后再新建。");
+    return;
+  }
   notes.value = notes.value.filter(
     (note) => note.id > 0 || note.title || note.content,
   );
@@ -154,6 +218,7 @@ function createNote() {
     clientKey: `draft-${draftSeq}-${Date.now()}`,
   };
   notes.value.unshift(draft);
+  localRevision += 1;
   clearFilters();
   void nextTick(() => {
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -163,10 +228,14 @@ function createNote() {
 function onSaved(key: string, note: Note) {
   const index = notes.value.findIndex((item) => item.clientKey === key);
   if (index < 0) return;
+  localRevision += 1;
   notes.value[index] = { ...note, clientKey: key };
 }
 
 function removeCard(key: string) {
+  localRevision += 1;
+  cardsByKey.delete(key);
+  cardRefs.value = [...cardsByKey.values()];
   notes.value = notes.value.filter((item) => item.clientKey !== key);
 }
 
@@ -250,21 +319,25 @@ onMounted(load);
     </div>
 
     <div v-loading="loading" class="notes-board">
-      <template v-if="visibleNotes.length">
-        <NoteCard
-          v-for="note in visibleNotes"
-          :key="note.clientKey"
-          ref="cardRefs"
-          :note="note"
-          :card-key="note.clientKey"
-          :archived-view="archivedView"
-          @saved="onSaved"
-          @archived="removeCard"
-          @removed="removeCard"
-          @discarded="removeCard"
-          @restored="onRestored"
-          @open-task="openTask"
-        />
+      <template v-if="notes.length">
+        <KeepAlive v-for="note in sortedNotes" :key="note.clientKey" :max="1">
+          <NoteCard
+            v-if="
+              visibleNotes.some((item) => item.clientKey === note.clientKey)
+            "
+            :ref="(card) => rememberCard(note.clientKey, card)"
+            :note="note"
+            :card-key="note.clientKey"
+            :archived-view="archivedView"
+            :unavailable="note.unavailable"
+            @saved="onSaved"
+            @archived="removeCard"
+            @removed="removeCard"
+            @discarded="removeCard"
+            @restored="onRestored"
+            @open-task="openTask"
+          />
+        </KeepAlive>
         <button
           v-if="!archivedView && !hasFilters"
           type="button"
@@ -276,7 +349,7 @@ onMounted(load);
         </button>
       </template>
 
-      <div v-else-if="!loading" class="notes-empty">
+      <div v-if="!visibleNotes.length && !loading" class="notes-empty">
         <XlyEmpty
           v-if="hasFilters"
           type="search"

@@ -183,6 +183,100 @@ describe("隔离数据库代理", () => {
     });
   });
 
+  it.each([
+    "SELECT title FROM notes WHERE title='甲'",
+    "SELECT title FROM notes WHERE title LIKE '甲%' ESCAPE '\\'",
+    "SELECT title FROM notes WHERE title='甲' -- trailing comment",
+    "SELECT title FROM notes WHERE title='甲' /* trailing comment */",
+    "SELECT title FROM notes WHERE title='甲' ORDER BY id LIMIT 3 -- tail",
+  ])("字面量、ESCAPE 和尾部注释在真实执行时保持隔离：%s", (sql) => {
+    const db = createDatabase();
+    try {
+      runAsUser({ userId: 1, isAdmin: false }, () =>
+        db.prepare("INSERT INTO notes(title) VALUES (?)").run("甲"),
+      );
+      runAsUser({ userId: 2, isAdmin: false }, () => {
+        expect(db.prepare(sql).all()).toEqual([]);
+      });
+      runAsUser({ userId: 1, isAdmin: false }, () => {
+        expect(db.prepare(sql).all()).toEqual([{ title: "甲" }]);
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("尾部注释与字面量 UPDATE/DELETE 不允许改动其他账号", () => {
+    const db = createDatabase();
+    try {
+      const id = runAsUser({ userId: 1, isAdmin: false }, () =>
+        Number(
+          db.prepare("INSERT INTO notes(title) VALUES (?)").run("甲")
+            .lastInsertRowid,
+        ),
+      );
+      runAsUser({ userId: 2, isAdmin: false }, () => {
+        expect(
+          db
+            .prepare("UPDATE notes SET title='乙' WHERE title='甲' -- tail")
+            .run().changes,
+        ).toBe(0);
+        expect(
+          db.prepare("DELETE FROM notes WHERE title='甲' /* tail */").run()
+            .changes,
+        ).toBe(0);
+      });
+      runAsUser({ userId: 1, isAdmin: false }, () => {
+        expect(
+          db
+            .prepare(
+              "SELECT title FROM notes WHERE id=? ORDER BY id LIMIT ? -- tail",
+            )
+            .all(id, 1),
+        ).toEqual([{ title: "甲" }]);
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("顶层 OR 条件不能绕过账号边界，且保留ORDER/LIMIT参数顺序", () => {
+    const db = createDatabase();
+    try {
+      runAsUser({ userId: 1, isAdmin: false }, () =>
+        db.prepare("INSERT INTO notes(title) VALUES (?)").run("甲"),
+      );
+      runAsUser({ userId: 2, isAdmin: false }, () => {
+        expect(
+          db
+            .prepare(
+              "SELECT title FROM notes WHERE title='甲' OR title=? ORDER BY id LIMIT ? -- tail",
+            )
+            .all("乙", 10),
+        ).toEqual([]);
+        expect(
+          db
+            .prepare(
+              "UPDATE notes SET title='恶改' WHERE title='甲' OR title='乙' /* tail */",
+            )
+            .run().changes,
+        ).toBe(0);
+        expect(
+          db
+            .prepare("DELETE FROM notes WHERE title='甲' OR title='乙' -- tail")
+            .run().changes,
+        ).toBe(0);
+      });
+      runAsUser({ userId: 1, isAdmin: false }, () =>
+        expect(db.prepare("SELECT title FROM notes").all()).toEqual([
+          { title: "甲" },
+        ]),
+      );
+    } finally {
+      db.close();
+    }
+  });
+
   it("超管可见全部用户数据", () => {
     const db = createDatabase();
     runAsUser({ userId: 1, isAdmin: false }, () =>

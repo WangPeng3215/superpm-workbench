@@ -503,6 +503,81 @@ describe("artifact service", () => {
     expect(node.status).toBe("normal");
   });
 
+  it("正文读取在文件未变化时保留元数据与版本", async () => {
+    const file = (await createFile("只读笔记.md", null, "# 初始\n")).json();
+    const listed = (await list()).files.find(
+      (node: { id: number }) => node.id === file.id,
+    );
+    expect(listed).toBeDefined();
+
+    for (let index = 0; index < 2; index += 1) {
+      const read = await app.inject({
+        method: "GET",
+        url: `/api/artifacts/nodes/${file.id}/content`,
+      });
+      expect(read.statusCode).toBe(200);
+      expect(read.json().content).toBe("# 初始\n");
+      expect(read.json().node).toEqual(listed);
+    }
+  });
+
+  it("正文读取后可沿用目录列表版本重命名", async () => {
+    const file = (await createFile("补充方案.MD", null, "# 方案\n")).json();
+    const listed = (await list()).files.find(
+      (node: { id: number }) => node.id === file.id,
+    );
+    const read = await app.inject({
+      method: "GET",
+      url: `/api/artifacts/nodes/${file.id}/content`,
+    });
+    expect(read.statusCode).toBe(200);
+
+    const renamed = await app.inject({
+      method: "PATCH",
+      url: `/api/artifacts/nodes/${file.id}`,
+      payload: { name: "无扩展名的补充方案", expectedVersion: listed.version },
+    });
+    expect(renamed.statusCode).toBe(200);
+    expect(renamed.json()).toMatchObject({
+      name: "无扩展名的补充方案",
+      version: listed.version + 1,
+    });
+  });
+
+  it("正文读取仍同步外部修改的大小与时间", async () => {
+    const file = (await createFile("外部同步.md", null, "v1")).json();
+    const externalPath = join(requirementRoot(), file.name);
+    const content = "外部改动后的内容";
+    const future = new Date("2026-12-01T10:00:00.000Z");
+    writeFileSync(externalPath, content, "utf8");
+    utimesSync(externalPath, future, future);
+
+    const read = await app.inject({
+      method: "GET",
+      url: `/api/artifacts/nodes/${file.id}/content`,
+    });
+    expect(read.statusCode).toBe(200);
+    expect(read.json().content).toBe(content);
+    expect(read.json().node).toMatchObject({
+      version: file.version + 1,
+      sizeBytes: Buffer.byteLength(content),
+      modifiedAt: future.toISOString(),
+      status: "normal",
+    });
+    const repeated = await app.inject({
+      method: "GET",
+      url: `/api/artifacts/nodes/${file.id}/content`,
+    });
+    expect(repeated.statusCode).toBe(200);
+    expect(repeated.json().node).toEqual(read.json().node);
+    const staleRename = await app.inject({
+      method: "PATCH",
+      url: `/api/artifacts/nodes/${file.id}`,
+      payload: { name: "过期版本.md", expectedVersion: file.version },
+    });
+    expect(staleRename.statusCode).toBe(409);
+  });
+
   it("编辑器按 nodeId 读写；外部修改后保存需 force 确认（不静默覆盖）", async () => {
     const file = (await createFile("笔记.md", null, "# 初始\n")).json();
     const saved = await app.inject({

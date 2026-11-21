@@ -27,58 +27,73 @@ import {
   statusLabels,
   typeLabels,
   type ArtifactNode,
+  type ProjectDetail,
   type Requirement,
   type RequirementOptimizationPointRef,
   type RequirementRelations,
   type RequirementUpdate,
+  type Stage,
 } from "@superpm/shared";
 import { requirementApi } from "../api/requirements";
-import { errorMessage } from "../api/client";
+import { projectApi } from "../api/projects";
+import { ApiError, errorMessage } from "../api/client";
 import { setTabLabel } from "../stores/tabs";
+import { authStore } from "../stores/auth";
+import { registerEditingSession } from "../stores/editing-sessions";
 import DocTabEditor from "../features/requirements/DocTabEditor.vue";
 import RequirementDocManager from "../features/requirements/RequirementDocManager.vue";
 import RequirementIssuesPanel from "../features/requirements/RequirementIssuesPanel.vue";
 import InlineRichTextEditor from "../features/requirements/InlineRichTextEditor.vue";
 import { tagTone } from "../features/requirements/enum-tags";
 import {
-  createAutoSave,
-  type AutoSaveState,
-} from "../features/meetings/autosave";
+  createVersionedAutoSave,
+  type VersionedSaveState,
+} from "../features/editing/versioned-autosave";
+import {
+  mergeRequirementDraft,
+  readRequirementDraft,
+  requirementDraftKey,
+  requirementSnapshot as snapshot,
+  writeRequirementDraft,
+  type RequirementDraft as Editable,
+} from "../features/requirements/requirement-draft";
 import { optimizationStatusTone } from "../features/optimization-points/format";
-type Editable = Pick<
-  Requirement,
-  | "name"
-  | "type"
-  | "priority"
-  | "status"
-  | "currentStage"
-  | "description"
-  | "descriptionHtml"
-  | "proposedAt"
-  | "expectedAt"
-  | "startedAt"
-  | "completedAt"
-  | "plannedReleaseAt"
-  | "releasedAt"
->;
+import { requirementResponsibilityMembers } from "../features/requirements/project-members";
+import { stageTransitionNeedsNote } from "../features/requirements/stage-transition";
+import ProjectTasksPanel from "../features/projects/ProjectTasksPanel.vue";
+import { clearResourceDrafts } from "../features/requirements/resource-draft";
 const route = useRoute();
 const router = useRouter();
 // 详情路由按 fullPath 缓存（router/index.ts 中的 keepAlive），每个页面实例固定对应一个需求；
 // 不使用全局 route.params，以免缓存页失活时被其他路由的参数变化重新加载覆盖草稿
 const id = Number(route.params.id);
 const path = route.path;
+const accountId = authStore.user?.id;
 const item = ref<Requirement>();
+const projectContext = ref<ProjectDetail>();
+const projectLoading = ref(false);
+const projectError = ref("");
+let projectRevision = 0;
 const relations = ref<RequirementRelations>();
 // 来源优化点：由优化点转换而来时展示，可点击回到来源记录
 const sourcePoints = ref<RequirementOptimizationPointRef[]>([]);
 const draft = ref<Editable>();
 const savedDraft = ref<Editable>();
+const stageNote = ref("");
 const descriptionEditor = ref<InstanceType<typeof InlineRichTextEditor>>();
 const loading = ref(false);
-const saving = ref(false);
 const error = ref("");
-const saveState = ref<AutoSaveState>("idle");
+const saveState = ref<VersionedSaveState>("idle");
+const saving = computed(() => saveState.value === "saving");
 const saveError = ref("");
+const storageError = ref("");
+const conflictServer = ref<Requirement>();
+const accessLost = ref(false);
+let draftVersion = 0;
+let storageKey: string | undefined;
+let disposed = false;
+let unregisterSession: (() => void) | undefined;
+let permissionTimer: ReturnType<typeof setInterval> | undefined;
 // 顶层页签：固定「需求详情」「文档管理」「问题记录」+ 动态文档页签（doc-<nodeId>）
 const activeTab = ref("detail");
 const propertiesOpen = ref(true);
@@ -142,6 +157,7 @@ function onDocDeleted(nodeId: number) {
     void closeDocTab(nodeId);
 }
 async function flushAnalysis() {
+  if (accessLost.value) return true;
   if (!(await flushDetail())) return false;
   if (issuesPanel.value && !(await issuesPanel.value.flush())) return false;
   return flushDocs();
@@ -151,38 +167,6 @@ onBeforeRouteUpdate(flushAnalysis);
 // 提出时间与开始时间并排一行，其余日期字段两列排布
 const leadDates: string[] = ["proposedAt", "startedAt"];
 const extraDates = dateFields.filter((key) => !leadDates.includes(key));
-function snapshot(source: Requirement): Editable {
-  const {
-    name,
-    type,
-    priority,
-    status,
-    currentStage,
-    description,
-    descriptionHtml,
-    proposedAt,
-    expectedAt,
-    startedAt,
-    completedAt,
-    plannedReleaseAt,
-    releasedAt,
-  } = source;
-  return {
-    name,
-    type,
-    priority,
-    status,
-    currentStage,
-    description,
-    descriptionHtml,
-    proposedAt,
-    expectedAt,
-    startedAt,
-    completedAt,
-    plannedReleaseAt,
-    releasedAt,
-  };
-}
 function editableKeys(source: Editable) {
   return Object.keys(source) as (keyof Editable)[];
 }
@@ -193,11 +177,73 @@ const dirty = computed(() => {
     ? editableKeys(saved).some((key) => current[key] !== saved[key])
     : false;
 });
-const blockedHint = computed(() =>
-  draft.value && !draft.value.name.trim() ? "填写需求名称后自动保存" : "",
+const needsStageNote = computed(
+  () =>
+    !!draft.value &&
+    !!savedDraft.value &&
+    stageTransitionNeedsNote(
+      savedDraft.value.currentStage,
+      draft.value.currentStage,
+    ),
 );
+const blockedHint = computed(() => {
+  if (draft.value && !draft.value.name.trim()) return "填写需求名称后自动保存";
+  if (needsStageNote.value && !stageNote.value.trim())
+    return "跳过或退回阶段需填写原因后自动保存";
+  return "";
+});
 const saveFailed = computed(() => dirty.value && saveState.value === "error");
+const responsibilityMembers = computed(() =>
+  requirementResponsibilityMembers(projectContext.value?.members),
+);
+function hasResponsibilityMember(userId: number) {
+  return responsibilityMembers.value.some((member) => member.userId === userId);
+}
+const projectFieldsEditable = computed(
+  () =>
+    !!projectContext.value?.capabilities.canManageRequirements &&
+    !projectContext.value.project.archivedAt &&
+    !["closed", "cancelled"].includes(projectContext.value.project.status) &&
+    !["conflict", "unauthorized", "forbidden"].includes(saveState.value),
+);
+const detailEditable = computed(
+  () => item.value?.projectId === null || projectFieldsEditable.value,
+);
+function unavailableMemberLabel(userId: number) {
+  const member = projectContext.value?.members.find((m) => m.userId === userId);
+  return `${member?.displayName || member?.username || `成员 #${userId}`}（不可再分配）`;
+}
+async function refreshProjectContext(projectId = item.value?.projectId) {
+  if (disposed || accessLost.value) return;
+  const token = ++projectRevision;
+  if (projectContext.value?.project.id !== projectId)
+    projectContext.value = undefined;
+  projectError.value = "";
+  if (projectId == null) {
+    projectLoading.value = false;
+    return;
+  }
+  projectLoading.value = true;
+  try {
+    const current = await projectApi.get(projectId);
+    if (token !== projectRevision || disposed || accessLost.value) return;
+    projectContext.value = current;
+  } catch (e) {
+    if (token !== projectRevision || disposed || accessLost.value) return;
+    projectContext.value = undefined;
+    if (e instanceof ApiError && [403, 404].includes(e.status))
+      invalidateDetail();
+    else projectError.value = `无法读取项目成员：${errorMessage(e)}`;
+  } finally {
+    if (token === projectRevision) projectLoading.value = false;
+  }
+}
+function onMembersVisible(visible: boolean) {
+  if (visible) void refreshProjectContext();
+}
 const saveLabel = computed(() => {
+  if (saveState.value === "conflict") return "版本冲突，草稿已保留";
+  if (saveState.value === "unauthorized") return "登录已失效，草稿已保留";
   if (dirty.value && blockedHint.value) return blockedHint.value;
   if (saving.value) return "正在保存…";
   if (saveFailed.value) return "保存失败";
@@ -207,74 +253,150 @@ const saveLabel = computed(() => {
 function applySavedDetail(detail: Requirement, sent?: Editable) {
   const saved = snapshot(detail);
   const current = draft.value;
-  const next = { ...saved };
-  if (sent && current) {
-    // 仅回填发出请求后没有再改过的字段，保留正在编辑的内容。
-    for (const key of editableKeys(saved)) {
-      if (current[key] !== sent[key])
-        Object.assign(next, { [key]: current[key] });
-    }
-    if (
-      current.description !== sent.description ||
-      current.descriptionHtml !== sent.descriptionHtml
-    ) {
-      next.description = current.description;
-      next.descriptionHtml = current.descriptionHtml;
-    }
-  }
+  if (!sent || current?.currentStage === sent.currentStage)
+    stageNote.value = "";
+  const next =
+    sent && current
+      ? mergeRequirementDraft(detail, sent, current)
+      : { ...saved };
   item.value = detail;
+  draftVersion = detail.version;
   savedDraft.value = saved;
   draft.value = next;
   setTabLabel(path, `${detail.requirementNo} · ${detail.name}`);
 }
 
 let revision = 0;
-const autoSave = createAutoSave({
-  snapshot: () => {
-    const current = draft.value;
-    const saved = savedDraft.value;
-    if (!current || !saved || blockedHint.value) return null;
-    const sent = { ...current };
-    const patch: RequirementUpdate = Object.fromEntries(
-      editableKeys(saved)
-        .filter((key) => sent[key] !== saved[key])
-        .map((key) => [key, sent[key]]),
-    );
-    if ("description" in patch || "descriptionHtml" in patch) {
-      patch.description = sent.description;
-      patch.descriptionHtml = sent.descriptionHtml;
+let autoSave:
+  ReturnType<typeof createVersionedAutoSave<Requirement, Editable>> | undefined;
+function prepareAutoSave(detail: Requirement) {
+  autoSave?.dispose();
+  autoSave = createVersionedAutoSave<Requirement, Editable>({
+    initial: detail,
+    snapshot: () =>
+      draft.value &&
+      !blockedHint.value &&
+      !accessLost.value &&
+      detailEditable.value
+        ? { ...draft.value }
+        : null,
+    persist: (changes, expectedVersion) => {
+      revision += 1;
+      const patch: RequirementUpdate = { ...changes, expectedVersion };
+      if (patch.currentStage && stageNote.value.trim())
+        patch.stageNote = stageNote.value.trim();
+      if (
+        ("description" in patch || "descriptionHtml" in patch) &&
+        draft.value
+      ) {
+        patch.description = draft.value.description;
+        patch.descriptionHtml = draft.value.descriptionHtml;
+      }
+      return requirementApi.update(id, patch);
+    },
+    apply: applySavedDetail,
+    onStateChange: (state) => {
+      saveState.value = state;
+    },
+    onError: handleSaveError,
+  });
+}
+function clearStoredDraft() {
+  try {
+    if (storageKey) sessionStorage.removeItem(storageKey);
+    if (accountId == null) return;
+    const prefix = `superpm.requirement-draft.v1.${accountId}.`;
+    for (let index = sessionStorage.length - 1; index >= 0; index--) {
+      const key = sessionStorage.key(index);
+      if (key?.startsWith(prefix) && key.endsWith(`.${id}`))
+        sessionStorage.removeItem(key);
     }
-    return { sent, patch };
-  },
-  persist: async ({ sent, patch }) => {
-    if (!Object.keys(patch).length) return;
-    // 之前发出的静默刷新不能覆盖这次保存的结果。
-    revision += 1;
-    saving.value = true;
+  } catch {
+    storageError.value = "无法清理本次会话草稿，请关闭当前标签页。";
+  }
+}
+function invalidateDetail() {
+  accessLost.value = true;
+  loading.value = false;
+  revision += 1;
+  autoSave?.invalidate();
+  issuesPanel.value?.invalidate();
+  for (const editor of docEditors.values()) editor.invalidate();
+  clearStoredDraft();
+  if (accountId !== undefined) {
     try {
-      applySavedDetail(await requirementApi.update(id, patch), sent);
-    } finally {
-      saving.value = false;
+      for (const kind of ["artifact", "issue"] as const)
+        clearResourceDrafts(sessionStorage, {
+          accountId,
+          projectId: null,
+          requirementId: id,
+          kind,
+        });
+    } catch {
+      storageError.value = "无法清理本次会话草稿，请关闭当前标签页。";
     }
-  },
-  onStateChange: (state) => {
-    saveState.value = state;
-  },
-  onError: (e) => {
-    saveError.value = errorMessage(e);
-  },
-});
+  }
+  conflictServer.value = undefined;
+  docTabs.value = [];
+  draft.value = undefined;
+  savedDraft.value = undefined;
+  stageNote.value = "";
+  item.value = undefined;
+  relations.value = undefined;
+  sourcePoints.value = [];
+  projectRevision += 1;
+  projectContext.value = undefined;
+  projectError.value = "";
+  error.value = "该需求已不可访问，已清理内容和本地草稿。";
+}
+function handleSaveError(e: unknown) {
+  saveError.value = errorMessage(e);
+  if (!(e instanceof ApiError)) return;
+  if (e.status === 403 || e.status === 404) {
+    invalidateDetail();
+    return;
+  }
+  if (e.status === 409) {
+    const current = (e.details as { current?: Requirement } | undefined)
+      ?.current;
+    if (current?.id === id) conflictServer.value = current;
+  }
+}
 watch(
-  draft,
+  [draft, stageNote],
   () => {
-    if (dirty.value) autoSave.schedule();
+    if (accessLost.value || disposed || !draft.value) return;
+    try {
+      if (storageKey && dirty.value)
+        writeRequirementDraft(
+          sessionStorage,
+          storageKey,
+          draftVersion,
+          draft.value,
+          stageNote.value,
+        );
+      else if (storageKey) sessionStorage.removeItem(storageKey);
+    } catch {
+      storageError.value = "会话草稿存储失败，刷新前请复制未保存内容。";
+    }
+    if (
+      dirty.value &&
+      !["conflict", "unauthorized", "forbidden"].includes(saveState.value)
+    )
+      autoSave?.schedule();
   },
-  { deep: true },
+  { deep: true, flush: "sync" },
 );
 
 async function flushDetail() {
+  if (accessLost.value) return true;
+  if (["conflict", "unauthorized", "forbidden"].includes(saveState.value)) {
+    ElMessage.warning(saveLabel.value);
+    return false;
+  }
   await descriptionEditor.value?.waitForUpload();
-  if (await autoSave.flush()) return true;
+  if (!dirty.value && !saving.value) return true;
+  if (!autoSave || (await autoSave.flush())) return true;
   ElMessage.warning(blockedHint.value || "需求保存失败，请重试");
   return false;
 }
@@ -288,10 +410,24 @@ function onBeforeUnload(event: BeforeUnloadEvent) {
   event.preventDefault();
   event.returnValue = "";
 }
-onMounted(() => window.addEventListener("beforeunload", onBeforeUnload));
+function onVisibilityChange() {
+  if (!document.hidden) void refresh();
+}
+onMounted(() => {
+  window.addEventListener("beforeunload", onBeforeUnload);
+  document.addEventListener("visibilitychange", onVisibilityChange);
+  permissionTimer = setInterval(() => {
+    if (!document.hidden) void refresh();
+  }, 30000);
+});
 onBeforeUnmount(() => {
+  disposed = true;
+  revision += 1;
   window.removeEventListener("beforeunload", onBeforeUnload);
-  autoSave.dispose();
+  document.removeEventListener("visibilitychange", onVisibilityChange);
+  clearInterval(permissionTimer);
+  unregisterSession?.();
+  autoSave?.dispose();
 });
 
 async function load() {
@@ -308,12 +444,43 @@ async function load() {
       requirementApi.relations(id),
       requirementApi.optimizationPoints(id),
     ]);
-    if (token !== revision) return;
+    if (token !== revision || disposed) return;
+    await refreshProjectContext(detail.projectId);
+    if (token !== revision || disposed || accessLost.value) return;
     relations.value = related;
     sourcePoints.value = sources;
     applySavedDetail(detail);
+    prepareAutoSave(detail);
+    unregisterSession?.();
+    unregisterSession = registerEditingSession(path, {
+      projectId: detail.projectId,
+      flush: flushAnalysis,
+      invalidate: invalidateDetail,
+      dispose: () => autoSave?.dispose(),
+    });
+    if (accountId != null) {
+      storageKey = requirementDraftKey(accountId, detail.projectId, id);
+      try {
+        const stored = readRequirementDraft(sessionStorage, storageKey);
+        if (stored) {
+          draftVersion = stored.version;
+          stageNote.value = stored.stageNote ?? "";
+          if (stored.version !== detail.version) {
+            conflictServer.value = detail;
+            saveState.value = "conflict";
+          }
+          draft.value = stored.values;
+        }
+      } catch {
+        storageError.value = "无法读取会话草稿，请在关闭前确认内容已保存。";
+      }
+    }
   } catch (e) {
-    if (token === revision) error.value = errorMessage(e);
+    if (token === revision && !disposed) {
+      if (e instanceof ApiError && [403, 404].includes(e.status))
+        invalidateDetail();
+      else error.value = errorMessage(e);
+    }
   } finally {
     if (token === revision) loading.value = false;
   }
@@ -327,10 +494,10 @@ onActivated(() => {
     firstActivation = false;
     return;
   }
-  if (!dirty.value) void refresh();
+  void refresh();
 });
 async function refresh() {
-  if (!item.value || saving.value) return;
+  if (!item.value || saving.value || accessLost.value || disposed) return;
   const token = ++revision;
   try {
     const [detail, related, sources] = await Promise.all([
@@ -338,29 +505,124 @@ async function refresh() {
       requirementApi.relations(id),
       requirementApi.optimizationPoints(id),
     ]);
-    if (token !== revision || dirty.value) return;
+    if (token !== revision || disposed) return;
+    await refreshProjectContext(detail.projectId);
+    if (token !== revision || disposed || accessLost.value) return;
+    if (dirty.value) {
+      if (detail.version !== item.value?.version) {
+        autoSave?.dispose();
+        conflictServer.value = detail;
+        saveState.value = "conflict";
+      }
+      return;
+    }
     relations.value = related;
     sourcePoints.value = sources;
     applySavedDetail(detail);
-  } catch {
+    autoSave?.reset(detail);
+  } catch (e) {
+    if (token !== revision || disposed) return;
+    if (e instanceof ApiError && [403, 404].includes(e.status))
+      invalidateDetail();
     // 刷新失败时保留缓存内容，用户仍可继续查看与编辑
   }
 }
 async function revert() {
   if (!savedDraft.value || !dirty.value || saving.value) return;
   const resume = saveState.value === "pending";
-  autoSave.cancel();
+  autoSave?.cancel();
   try {
     await ElMessageBox.confirm("确定放弃未保存的修改吗？", "未保存的修改", {
       confirmButtonText: "放弃修改",
       cancelButtonText: "继续编辑",
     });
   } catch {
-    if (resume && dirty.value) autoSave.schedule();
+    if (resume && dirty.value) autoSave?.schedule();
     return;
   }
   if (!savedDraft.value || saving.value) return;
   draft.value = { ...savedDraft.value };
+  stageNote.value = "";
+}
+async function onStageChange(value: Stage) {
+  if (
+    !draft.value ||
+    !savedDraft.value ||
+    !detailEditable.value ||
+    value === draft.value.currentStage
+  )
+    return;
+  let note = "";
+  if (stageTransitionNeedsNote(savedDraft.value.currentStage, value)) {
+    try {
+      const result = await ElMessageBox.prompt(
+        `将阶段调整为「${stageLabels[value]}」，请说明跳过或退回的原因。`,
+        "阶段变更原因",
+        {
+          inputType: "textarea",
+          inputValue: stageNote.value,
+          inputValidator: (text) =>
+            (Boolean(text?.trim()) && text.trim().length <= 2000) ||
+            "请填写 1—2000 字的原因",
+          confirmButtonText: "确认变更",
+          cancelButtonText: "取消",
+        },
+      );
+      note = result.value.trim();
+    } catch {
+      return;
+    }
+  }
+  if (!draft.value || accessLost.value || disposed) return;
+  stageNote.value = note;
+  draft.value.currentStage = value;
+}
+async function copyDraft() {
+  if (!draft.value) return;
+  try {
+    await navigator.clipboard.writeText(
+      JSON.stringify(
+        {
+          ...draft.value,
+          ...(stageNote.value ? { stageNote: stageNote.value } : {}),
+        },
+        null,
+        2,
+      ),
+    );
+    ElMessage.success("草稿已复制");
+  } catch {
+    ElMessage.error("复制失败，请手动复制正文后再重载。");
+  }
+}
+async function reloadLatest() {
+  try {
+    await ElMessageBox.confirm(
+      "读取最新内容会替换本地草稿，请先复制需要保留的修改。",
+      "读取最新版本",
+      {
+        confirmButtonText: "替换草稿",
+        cancelButtonText: "继续保留",
+        type: "warning",
+      },
+    );
+  } catch {
+    return;
+  }
+  try {
+    const detail = await requirementApi.get(id);
+    if (disposed || accessLost.value) return;
+    await refreshProjectContext(detail.projectId);
+    if (disposed || accessLost.value) return;
+    saveState.value = "idle";
+    conflictServer.value = undefined;
+    applySavedDetail(detail);
+    prepareAutoSave(detail);
+    clearStoredDraft();
+    saveError.value = "";
+  } catch (e) {
+    handleSaveError(e);
+  }
 }
 function onDescriptionHtml(html: string) {
   if (draft.value) draft.value.descriptionHtml = html;
@@ -409,7 +671,13 @@ function openSourcePoint(pointId: number) {
             </span>
             <el-button
               size="small"
-              :disabled="!dirty || saving"
+              :disabled="
+                !dirty ||
+                !detailEditable ||
+                saving ||
+                saveState === 'conflict' ||
+                saveState === 'unauthorized'
+              "
               @click="revert"
             >
               重置
@@ -418,7 +686,13 @@ function openSourcePoint(pointId: number) {
               size="small"
               type="primary"
               :loading="saving"
-              :disabled="!dirty || !!blockedHint"
+              :disabled="
+                !dirty ||
+                !detailEditable ||
+                !!blockedHint ||
+                saveState === 'conflict' ||
+                saveState === 'unauthorized'
+              "
               @click="flushDetail"
             >
               {{ saveFailed ? "重试保存" : "立即保存" }}
@@ -433,6 +707,41 @@ function openSourcePoint(pointId: number) {
             </el-button>
           </div>
         </div>
+      </section>
+      <el-alert
+        v-if="storageError"
+        :title="storageError"
+        type="warning"
+        :closable="false"
+        show-icon
+      />
+      <el-alert
+        v-if="item.projectId !== null && projectContext && !detailEditable"
+        title="当前项目角色或状态仅允许查看需求。"
+        type="info"
+        :closable="false"
+        show-icon
+      />
+      <el-alert
+        v-if="saveState === 'unauthorized'"
+        title="登录已失效，已暂停保存；重新登录同一账号并验证权限后可恢复会话草稿。"
+        type="warning"
+        :closable="false"
+        show-icon
+      />
+      <section
+        v-if="saveState === 'conflict'"
+        class="surface conflict-panel"
+        role="alert"
+      >
+        <strong>内容已被其他成员修改，本地草稿已保留。</strong>
+        <p v-if="conflictServer">
+          服务器版本 {{ conflictServer.version }}：{{ conflictServer.name }}
+        </p>
+        <pre v-if="conflictServer">{{ conflictServer.description }}</pre>
+        <p>请复制草稿，读取最新内容后手动合并修改。</p>
+        <el-button size="small" @click="copyDraft">复制本地草稿</el-button>
+        <el-button size="small" @click="reloadLatest">读取最新内容</el-button>
       </section>
       <el-alert
         v-if="saveFailed"
@@ -460,15 +769,17 @@ function openSourcePoint(pointId: number) {
                   :html="draft.descriptionHtml"
                   :text="draft.description"
                   :requirement-id="item.id"
+                  :readonly="saveState === 'unauthorized' || !detailEditable"
                   @update:html="onDescriptionHtml"
                   @update:text="onDescriptionText"
                   @open-requirement="openRequirement"
                 />
               </article>
               <div v-show="propertiesOpen" class="detail-fields">
-                <form
+                <el-form
                   v-if="draft"
                   class="field-form"
+                  :disabled="!detailEditable || saveState === 'unauthorized'"
                   @submit.prevent="flushDetail"
                 >
                   <label class="field">
@@ -553,7 +864,9 @@ function openSourcePoint(pointId: number) {
                     </label>
                     <label class="field">
                       <span>当前阶段</span>
-                      <el-select v-model="draft.currentStage"
+                      <el-select
+                        :model-value="draft.currentStage"
+                        @change="onStageChange"
                         ><template #label="{ label, value }"
                           ><el-tag
                             size="small"
@@ -575,6 +888,102 @@ function openSourcePoint(pointId: number) {
                       >
                     </label>
                   </div>
+                  <label v-if="needsStageNote" class="field">
+                    <span>阶段变更原因</span>
+                    <el-input
+                      v-model="stageNote"
+                      type="textarea"
+                      :rows="2"
+                      maxlength="2000"
+                      placeholder="说明跳过或退回阶段的原因"
+                    />
+                  </label>
+                  <template v-if="item.projectId !== null">
+                    <el-alert
+                      v-if="projectError"
+                      :title="projectError"
+                      type="warning"
+                      :closable="false"
+                    >
+                      <el-button size="small" @click="refreshProjectContext()">
+                        重新读取成员
+                      </el-button>
+                    </el-alert>
+                    <div class="field-row">
+                      <label class="field">
+                        <span>需求负责人</span>
+                        <el-select
+                          v-model="draft.assigneeUserId"
+                          filterable
+                          placeholder="选择需求负责人"
+                          :disabled="!projectFieldsEditable"
+                          :loading="projectLoading"
+                          @visible-change="onMembersVisible"
+                        >
+                          <el-option
+                            v-if="
+                              draft.assigneeUserId &&
+                              !hasResponsibilityMember(draft.assigneeUserId)
+                            "
+                            :label="
+                              unavailableMemberLabel(draft.assigneeUserId)
+                            "
+                            :value="draft.assigneeUserId"
+                            disabled
+                          />
+                          <el-option
+                            v-for="member in responsibilityMembers"
+                            :key="member.userId"
+                            :label="member.displayName || member.username"
+                            :value="member.userId"
+                          />
+                        </el-select>
+                      </label>
+                      <label class="field">
+                        <span>开发负责人</span>
+                        <el-select
+                          v-model="draft.developerUserId"
+                          filterable
+                          clearable
+                          :value-on-clear="null"
+                          placeholder="未设置"
+                          :disabled="!projectFieldsEditable"
+                          :loading="projectLoading"
+                          @visible-change="onMembersVisible"
+                        >
+                          <el-option
+                            v-if="
+                              draft.developerUserId &&
+                              !hasResponsibilityMember(draft.developerUserId)
+                            "
+                            :label="
+                              unavailableMemberLabel(draft.developerUserId)
+                            "
+                            :value="draft.developerUserId"
+                            disabled
+                          />
+                          <el-option
+                            v-for="member in responsibilityMembers"
+                            :key="member.userId"
+                            :label="member.displayName || member.username"
+                            :value="member.userId"
+                          />
+                        </el-select>
+                      </label>
+                    </div>
+                    <label class="field">
+                      <span>验收标准</span>
+                      <el-input
+                        v-model="draft.acceptanceCriteria"
+                        type="textarea"
+                        :rows="4"
+                        maxlength="50000"
+                        show-word-limit
+                        placeholder="填写可验证的验收标准"
+                        :disabled="!projectFieldsEditable"
+                      />
+                    </label>
+                  </template>
                   <div class="field-row">
                     <label class="field">
                       <span>{{ dateLabels.proposedAt }}</span>
@@ -683,9 +1092,26 @@ function openSourcePoint(pointId: number) {
                       </div>
                     </div>
                   </div>
-                </form>
+                </el-form>
               </div>
             </div>
+          </el-tab-pane>
+          <el-tab-pane
+            v-if="
+              item.projectId !== null &&
+              projectContext &&
+              !relations?.children.length
+            "
+            label="项目任务"
+            name="tasks"
+            lazy
+          >
+            <ProjectTasksPanel
+              :project-id="item.projectId"
+              :members="projectContext.members"
+              :requirement-id="item.id"
+              :requirement-name="item.requirementNo + ' · ' + item.name"
+            />
           </el-tab-pane>
           <el-tab-pane label="文档管理" name="progress">
             <!-- 文件面板直接铺满页签；md 文件（含需求记忆）点击后在顶层新增文档页签打开 -->
@@ -703,8 +1129,10 @@ function openSourcePoint(pointId: number) {
               ref="issuesPanel"
               :key="item.id"
               :requirement-id="item.id"
+              :project-id="item.projectId"
               :current-stage="item.currentStage"
               @open-requirement="openRequirement"
+              @access-lost="invalidateDetail"
             />
           </el-tab-pane>
           <el-tab-pane
@@ -717,8 +1145,10 @@ function openSourcePoint(pointId: number) {
             <DocTabEditor
               :ref="(el) => setDocEditor(tab.node.id, el)"
               :requirement-id="item.id"
+              :project-id="item.projectId"
               :node="tab.node"
               @open-requirement="openRequirement"
+              @access-lost="invalidateDetail"
             />
           </el-tab-pane>
         </el-tabs>
@@ -727,6 +1157,17 @@ function openSourcePoint(pointId: number) {
   </div>
 </template>
 <style scoped>
+.conflict-panel {
+  padding: 12px 18px;
+}
+.conflict-panel p {
+  margin: 8px 0;
+}
+.conflict-panel pre {
+  white-space: pre-wrap;
+  max-height: 120px;
+  overflow: auto;
+}
 .doc-manager-pane {
   min-width: 0;
   min-height: 0;

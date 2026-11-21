@@ -11,6 +11,7 @@ export interface WorkTab {
   requirementId?: number; // 需求详情页签关联的需求 id
   meetingId?: number; // 会议详情页签关联的会议 id
   optimizationPointId?: number; // 优化点详情页签关联的优化点 id
+  projectId?: number;
   pinned?: boolean; // 固定页签始终排在最左侧
 }
 
@@ -97,6 +98,7 @@ function sortTabs() {
 
 // 菜单功能路由 → 页签文案：首次进入对应功能后开出页签
 const FEATURE_TAB_LABELS: Record<string, string> = {
+  "/projects": "项目管理",
   "/requirements": "需求列表",
   "/optimization-points": "优化点管理",
   "/optimization-points/new": "新建优化点",
@@ -116,9 +118,11 @@ export const tabsStore = reactive<{
 
 // 详情路由 → 实体 id（非详情路径返回 null）
 function detailId(path: string): {
-  kind: "requirement" | "meeting" | "optimizationPoint";
+  kind: "requirement" | "meeting" | "optimizationPoint" | "project";
   id: number;
 } | null {
+  const project = /^\/projects\/(\d+)$/.exec(path);
+  if (project) return { kind: "project", id: Number(project[1]) };
   const requirement = /^\/requirements\/(\d+)$/.exec(path);
   if (requirement) return { kind: "requirement", id: Number(requirement[1]) };
   const meeting = /^\/meetings\/(\d+)$/.exec(path);
@@ -134,6 +138,17 @@ export function syncRoute(path: string) {
   tabsStore.activePath = path;
   if (tabsStore.tabs.some((tab) => tab.path === path)) return;
   const detail = detailId(path);
+  if (detail?.kind === "project") {
+    tabsStore.tabs.push({
+      key: path,
+      path,
+      label: `项目 #${detail.id}`,
+      projectId: detail.id,
+    });
+    sortTabs();
+    persistLayout();
+    return;
+  }
   if (detail?.kind === "requirement") {
     tabsStore.tabs.push({
       key: path,
@@ -288,6 +303,8 @@ export function restoreTabs() {
     };
     if (detail?.kind === "requirement")
       tabsStore.tabs.push({ ...common, requirementId: detail.id });
+    else if (detail?.kind === "project")
+      tabsStore.tabs.push({ ...common, projectId: detail.id });
     else if (detail?.kind === "meeting")
       tabsStore.tabs.push({ ...common, meetingId: detail.id });
     else if (detail?.kind === "optimizationPoint")

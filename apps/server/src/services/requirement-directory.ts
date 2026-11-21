@@ -22,6 +22,10 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { DomainError } from "./requirements.js";
+import {
+  assertRequirementAccess,
+  type RequirementAction,
+} from "./requirement-access.js";
 
 export interface RequirementDirectoryRow {
   requirement_id: number;
@@ -54,6 +58,7 @@ export class RequirementDirectoryResolver {
 
   /** 需求行（仅取命名所需字段）；不存在时抛 404 */
   private requirementRow(requirementId: number) {
+    assertRequirementAccess(this.db, requirementId, "read");
     const row = this.db
       .prepare("SELECT id, requirement_no, name FROM requirements WHERE id=?")
       .get(requirementId) as
@@ -63,6 +68,7 @@ export class RequirementDirectoryResolver {
   }
 
   row(requirementId: number): RequirementDirectoryRow | undefined {
+    assertRequirementAccess(this.db, requirementId, "read");
     return this.db
       .prepare("SELECT * FROM requirement_directories WHERE requirement_id=?")
       .get(requirementId) as RequirementDirectoryRow | undefined;
@@ -73,7 +79,11 @@ export class RequirementDirectoryResolver {
    * 存量数字目录（requirements/{id}）在首次解析时被「收养」：整体重命名到可读名，
    * 文件随目录一起迁移，随后改写 requirement_files 中记录的相对路径。
    */
-  ensureMapping(requirementId: number): RequirementDirectoryRow {
+  ensureMapping(
+    requirementId: number,
+    action: RequirementAction = "edit",
+  ): RequirementDirectoryRow {
+    assertRequirementAccess(this.db, requirementId, action);
     const existing = this.row(requirementId);
     if (existing) return existing;
     const requirement = this.requirementRow(requirementId);
@@ -216,8 +226,11 @@ export class RequirementDirectoryResolver {
   }
 
   /** 需求目录相对工作区根的路径（正斜杠分隔），如 requirements/REQ-0001 名称 */
-  relativeRoot(requirementId: number): string {
-    return this.ensureMapping(requirementId).relative_path;
+  relativeRoot(
+    requirementId: number,
+    action: RequirementAction = "edit",
+  ): string {
+    return this.ensureMapping(requirementId, action).relative_path;
   }
 
   /** 需求根目录的绝对路径（要求已存在） */
@@ -236,9 +249,12 @@ export class RequirementDirectoryResolver {
     requirementId: number,
     relativePath: string,
     create: boolean,
+    action: RequirementAction = "edit",
   ): string {
+    if (!create) return this.resolveReadOnly(requirementId, relativePath);
+    assertRequirementAccess(this.db, requirementId, action);
     const rootAbs = realpathSync(this.root);
-    const segments = this.relativeRoot(requirementId).split("/");
+    const segments = this.relativeRoot(requirementId, action).split("/");
     if (relativePath) {
       for (const segment of relativePath.split("/")) {
         if (!segment || segment === "." || segment === "..")
@@ -265,28 +281,9 @@ export class RequirementDirectoryResolver {
 
   /** 初始化状态 + 磁盘比对（缺失的系统级资源与默认目录名） */
   state(requirementId: number): RequirementWorkspaceState {
-    this.requirementRow(requirementId);
-    const mapping = this.ensureMapping(requirementId);
-    const rootAbs = this.resolve(requirementId, "", false);
-    const directoryExists = existsSync(rootAbs);
-    const missingResources: string[] = [];
-    if (directoryExists) {
-      for (const name of [artifactMemoryName, ...defaultWorkspaceFolders])
-        if (!existsSync(join(rootAbs, name))) missingResources.push(name);
-    } else {
-      missingResources.push(artifactMemoryName, ...defaultWorkspaceFolders);
-    }
-    return {
-      requirementId,
-      directoryName: mapping.directory_name,
-      relativePath: mapping.relative_path,
-      status: mapping.status,
-      failureStage: mapping.failure_stage,
-      failureReason: mapping.failure_reason,
-      initializedAt: mapping.initialized_at,
-      directoryExists,
-      missingResources,
-    };
+    if (assertRequirementAccess(this.db, requirementId).project_id === null)
+      this.ensureMapping(requirementId);
+    return this.stateReadOnly(requirementId);
   }
 
   private markStatus(
@@ -317,6 +314,7 @@ export class RequirementDirectoryResolver {
    * 已存在的文件/目录一律不覆盖、不重建；失败时记录阶段与原因并保持非 completed 状态。
    */
   initialize(requirementId: number): RequirementWorkspaceState {
+    assertRequirementAccess(this.db, requirementId, "edit");
     const requirement = this.requirementRow(requirementId);
     let stage: RequirementWorkspaceStage = "resolve";
     try {
@@ -359,6 +357,7 @@ export class RequirementDirectoryResolver {
    * 普通刷新不会重新创建用户主动删除的目录。
    */
   repair(requirementId: number): RequirementWorkspaceState {
+    assertRequirementAccess(this.db, requirementId, "edit");
     const requirement = this.requirementRow(requirementId);
     this.ensureMapping(requirementId);
     const rootAbs = this.resolve(requirementId, "", true);

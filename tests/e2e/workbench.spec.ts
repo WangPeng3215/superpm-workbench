@@ -16,6 +16,8 @@ async function addRequirement(page: Page, name: string) {
 // 通过详情表单切换当前阶段（头部步骤条已移除）：下拉选择阶段并保存
 async function switchStage(page: Page, label: string) {
   await page.getByRole("tab", { name: "需求详情" }).click();
+  const order = ["需求分析", "UI 设计", "开发跟进", "需求测试", "已上线"];
+  const before = (await page.locator(".head-stage").innerText()).trim();
   await page
     .locator("label.field")
     .filter({ hasText: "当前阶段" })
@@ -25,6 +27,11 @@ async function switchStage(page: Page, label: string) {
     .locator(".el-select-dropdown__item:visible")
     .filter({ hasText: label })
     .click();
+  if (before !== label && order.indexOf(label) !== order.indexOf(before) + 1) {
+    const prompt = page.getByRole("dialog", { name: "阶段变更原因" });
+    await prompt.getByRole("textbox").fill("浏览器验收按当前用例调整阶段");
+    await prompt.getByRole("button", { name: "确认变更", exact: true }).click();
+  }
   await expect(page.locator(".head-stage")).toHaveText(label);
 }
 
@@ -903,6 +910,7 @@ test("workbench shell uses compact native theme and collapsed navigation", async
 }) => {
   await page.goto("/requirements");
   await expect(page.locator('nav[aria-label="主导航"] > a')).toHaveText([
+    "项目管理",
     "需求列表",
     "优化点",
     "每日任务",

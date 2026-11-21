@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { dateSchema } from "./dates.js";
+export { dateSchema } from "./dates.js";
 import type { DataRootSystemInfo } from "./data-root-contract.js";
 
 export const requirementTypes = [
@@ -43,15 +45,6 @@ export const stageLabels: Record<Stage, string> = {
   online: "已上线",
 };
 
-export const dateSchema = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, "日期格式应为 YYYY-MM-DD")
-  .refine((value) => {
-    const date = new Date(`${value}T00:00:00Z`);
-    return (
-      !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value
-    );
-  }, "无效日期");
 const nullableDate = dateSchema.nullable();
 export const dateFields = [
   "proposedAt",
@@ -81,9 +74,13 @@ export const requirementCreateSchema = z
     priority: z.enum(priorities).default("P2"),
     description: z.string().max(50000, "描述最多 50000 字").default(""),
     descriptionHtml: z.string().max(200000).default(""),
+    acceptanceCriteria: z.string().max(50000).default(""),
     status: z.enum(requirementStatuses).default("not_started"),
     currentStage: z.enum(stages).default("analysis"),
     parentId: z.number().int().positive().nullable().default(null),
+    projectId: z.number().int().positive().nullable().default(null),
+    assigneeUserId: z.number().int().positive().nullable().default(null),
+    developerUserId: z.number().int().positive().nullable().default(null),
     proposedAt: dateSchema,
     expectedAt: nullableDate.default(null),
     startedAt: nullableDate.default(null),
@@ -93,14 +90,19 @@ export const requirementCreateSchema = z
   })
   .strict();
 export const requirementUpdateSchema = requirementCreateSchema
+  .omit({ projectId: true })
   .partial()
   .extend({
     stageNote: z.string().trim().max(2000).optional(),
     pinned: z.boolean().optional(),
+    expectedVersion: z.number().int().positive().optional(),
   })
   .strict()
   .refine(
-    (value) => Object.keys(value).some((key) => key !== "stageNote"),
+    (value) =>
+      Object.keys(value).some(
+        (key) => key !== "stageNote" && key !== "expectedVersion",
+      ),
     "请提交需要更新的字段",
   );
 export const requirementListSchema = z
@@ -110,6 +112,14 @@ export const requirementListSchema = z
     priority: z.enum(priorities).optional(),
     status: z.enum(requirementStatuses).optional(),
     currentStage: z.enum(stages).optional(),
+    projectId: z.coerce.number().int().positive().optional(),
+    unassigned: z
+      .preprocess(
+        (value) =>
+          value === "true" ? true : value === "false" ? false : value,
+        z.boolean(),
+      )
+      .optional(),
     proposedAtFrom: dateSchema.optional(),
     proposedAtTo: dateSchema.optional(),
     startedAtFrom: dateSchema.optional(),
@@ -144,7 +154,11 @@ export const requirementListSchema = z
       .default("updatedAt"),
     sortOrder: z.enum(["asc", "desc"]).default("desc"),
   })
-  .strict();
+  .strict()
+  .refine(
+    (value) => value.projectId === undefined || value.unassigned === undefined,
+    "项目与未关联筛选不能同时使用",
+  );
 export type RequirementCreate = z.input<typeof requirementCreateSchema>;
 export type RequirementCreateParsed = z.output<typeof requirementCreateSchema>;
 export type RequirementUpdate = z.input<typeof requirementUpdateSchema>;
@@ -154,6 +168,7 @@ export type RequirementListParsed = z.output<typeof requirementListSchema>;
 export interface Requirement extends RequirementCreateParsed {
   id: number;
   requirementNo: string;
+  version: number;
   pinned: boolean;
   createdAt: string;
   updatedAt: string;
@@ -173,6 +188,33 @@ export interface RequirementRelations {
   parent: Requirement | null;
   children: Requirement[];
 }
+
+export const requirementShareSchema = z
+  .object({
+    token: z.string().min(1),
+    confirmed: z.literal(true),
+    expectedVersion: z.number().int().positive(),
+    assigneeUserId: z.number().int().positive().optional(),
+    developerUserId: z.number().int().positive().nullable().optional(),
+  })
+  .strict();
+export type ShareInput = z.input<typeof requirementShareSchema>;
+export type RequirementShareInput = ShareInput;
+export interface SharePreview {
+  rootRequirementId: number;
+  projectId: number;
+  token: string;
+  requirements: {
+    id: number;
+    requirementNo: string;
+    name: string;
+    version: number;
+  }[];
+  issueCount: number;
+  artifactCount: number;
+  expiresAt: string;
+}
+export type RequirementSharePreview = SharePreview;
 export const fileCategories = [
   "record",
   "mindMap",
@@ -334,6 +376,7 @@ export const requirementFileCreateSchema = z
   });
 export const requirementFileUpdateSchema = z
   .object({
+    expectedVersion: z.number().int().positive().optional(),
     name: z.string().trim().min(1, "请输入文件名称").max(200).optional(),
     isFinal: z.boolean().optional(),
     description: z.string().trim().max(2000).optional(),
@@ -341,19 +384,29 @@ export const requirementFileUpdateSchema = z
     status: z.enum(["draft", "final", "archived"]).optional(),
   })
   .strict()
-  .refine((value) => Object.keys(value).length > 0, "请提交需要更新的字段")
+  .refine(
+    (value) => Object.keys(value).some((key) => key !== "expectedVersion"),
+    "请提交需要更新的字段",
+  )
   .refine(
     (value) => !(value.isFinal !== undefined && value.status !== undefined),
     "isFinal 与 status 只能二选一",
   );
 export const requirementFileContentSchema = z
-  .object({ content: z.string().max(200000) })
+  .object({
+    expectedVersion: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/)
+      .optional(),
+    content: z.string().max(200000),
+  })
   .strict();
 export type AssetResourceType = "file" | "link" | "text";
 export type AssetStorageType = "local" | "database" | "external";
 export type AssetStatus = "draft" | "final" | "archived" | "missing";
 export interface RequirementFile {
   id: number;
+  version: number;
   requirementId: number;
   phase: Stage;
   category: FileCategory;
@@ -454,6 +507,7 @@ export const issueCreateSchema = z
   .strict();
 export const issueUpdateSchema = z
   .object({
+    expectedVersion: z.number().int().positive().optional(),
     title: z.string().trim().min(1, "请输入问题标题").max(200).optional(),
     description: z.string().max(200000).optional(),
     stage: z.enum(issueStages).optional(),
@@ -463,12 +517,16 @@ export const issueUpdateSchema = z
     solution: z.string().max(200000).optional(),
   })
   .strict()
-  .refine((value) => Object.keys(value).length > 0, "请提交需要更新的字段");
+  .refine(
+    (value) => Object.keys(value).some((key) => key !== "expectedVersion"),
+    "请提交需要更新的字段",
+  );
 export const issueCommentSchema = z
   .object({ content: z.string().trim().min(1, "请输入处理说明").max(10000) })
   .strict();
 export interface Issue {
   id: number;
+  version: number;
   requirementId: number;
   stage: IssueStage;
   issueKey: string | null;
@@ -721,19 +779,34 @@ export const artifactFileCreateSchema = z
   })
   .strict();
 export const artifactRenameSchema = z
-  .object({ name: z.string().min(1, "请输入名称").max(200, "名称最多 200 字") })
+  .object({
+    expectedVersion: z.number().int().positive().optional(),
+    name: z.string().min(1, "请输入名称").max(200, "名称最多 200 字"),
+  })
   .strict();
 export const artifactMoveSchema = z
-  .object({ targetParentId: z.number().int().positive().nullable() })
+  .object({
+    expectedVersion: z.number().int().positive().optional(),
+    targetParentId: z.number().int().positive().nullable(),
+  })
   .strict();
 // 最终确认版本：仅文件与链接可标记，文件夹由服务层拒绝
-export const artifactFinalSchema = z.object({ isFinal: z.boolean() }).strict();
+export const artifactFinalSchema = z
+  .object({
+    expectedVersion: z.number().int().positive().optional(),
+    isFinal: z.boolean(),
+  })
+  .strict();
 // 文档管理上传：单文件上限，前端预检与服务端请求体限制共用
 export const artifactUploadMaxBytes = 50 * 1024 * 1024;
 export const artifactUploadMaxLabel = "50 MB";
 // force：磁盘修改时间与索引不一致（外部修改）时，需显式确认才能覆盖保存
 export const artifactContentSaveSchema = z
   .object({
+    expectedVersion: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/)
+      .optional(),
     content: z.string().max(200000),
     force: z.boolean().default(false),
   })
@@ -795,18 +868,23 @@ export const artifactLinkCreateSchema = z
   .strict();
 export const artifactLinkUpdateSchema = z
   .object({
+    expectedVersion: z.number().int().positive().optional(),
     folderNodeId: z.number().int().positive().nullable().optional(),
     name: z.string().trim().min(1, "请输入链接名称").max(200).optional(),
     url: z.string().trim().max(2000).optional(),
     description: z.string().trim().max(2000).nullable().optional(),
   })
   .strict()
-  .refine((value) => Object.keys(value).length > 0, "请提交需要更新的字段");
+  .refine(
+    (value) => Object.keys(value).some((key) => key !== "expectedVersion"),
+    "请提交需要更新的字段",
+  );
 export const artifactRefreshSchema = z
   .object({ relativePath: z.string().max(2000).optional() })
   .strict();
 export interface ArtifactNode {
   id: number;
+  version: number;
   requirementId: number;
   parentId: number | null;
   nodeType: ArtifactNodeType;
@@ -828,6 +906,7 @@ export interface ArtifactNode {
 }
 export interface ArtifactLink {
   id: number;
+  version: number;
   requirementId: number;
   folderNodeId: number | null;
   name: string;
@@ -1026,3 +1105,6 @@ export * from "./online-tools.js";
 export * from "./meetings.js";
 export * from "./optimization-points.js";
 export * from "./notes.js";
+export * from "./projects.js";
+export * from "./project-tasks.js";
+export * from "./deliveries.js";

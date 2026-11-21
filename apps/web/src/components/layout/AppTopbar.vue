@@ -21,6 +21,7 @@ import {
 } from "@ant-design/icons-vue";
 import { authStore } from "../../stores/auth";
 import ThemeSwitch from "../ThemeSwitch.vue";
+import { closeEditingSessions } from "../../features/editing/close-editing-sessions";
 import {
   closeTab,
   closeOtherTabsWithPolicy,
@@ -72,7 +73,16 @@ function scrollTabs(direction: -1 | 1) {
 }
 
 async function closeOtherTabs(keepPinned: boolean) {
-  closeOtherTabsWithPolicy(tabsStore.activePath || route.path, keepPinned);
+  const keep = tabsStore.activePath || route.path;
+  const paths = tabsStore.tabs
+    .filter((tab) => tab.key !== keep && !(keepPinned && tab.pinned))
+    .map((tab) => tab.path);
+  if (
+    !(await closeEditingSessions(paths, () => {
+      closeOtherTabsWithPolicy(keep, keepPinned);
+    }))
+  )
+    return;
   await nextTick();
   updateScrollState();
 }
@@ -94,12 +104,16 @@ function onDrop(event: DragEvent, tab: WorkTab) {
 
 async function closeAllTabs() {
   const target = "/requirements";
-  if (route.path !== target) {
-    const failure = await router.push(target);
-    if (failure) return;
-  }
-  clearTabs();
-  syncRoute(target);
+  const paths = tabsStore.tabs.map((tab) => tab.path);
+  if (
+    !(await closeEditingSessions(paths, async () => {
+      if (route.path !== target && (await router.push(target))) return false;
+      clearTabs();
+      syncRoute(target);
+      return true;
+    }))
+  )
+    return;
   await nextTick();
   updateScrollState();
 }
@@ -113,17 +127,15 @@ function handleTabCommand(command: string | number | object) {
 // 先完成导航再移除激活页签：未保存确认被取消时，页签必须保留在原页面
 async function onCloseTab(tab: WorkTab) {
   const active = tabsStore.activePath === tab.key || route.path === tab.key;
-  if (!active) {
-    closeTab(tab.key);
-    return;
-  }
-  const target = siblingTabPath(tab.key) ?? "/requirements";
-  if (route.path !== target) {
-    const failure = await router.push(target);
-    if (failure) return;
-  }
-  const fallback = closeTab(tab.key);
-  if (fallback && route.path === fallback) syncRoute(fallback);
+  await closeEditingSessions([tab.path], async () => {
+    if (active) {
+      const target = siblingTabPath(tab.key) ?? "/requirements";
+      if (route.path !== target && (await router.push(target))) return false;
+    }
+    const fallback = closeTab(tab.key);
+    if (fallback && route.path === fallback) syncRoute(fallback);
+    return true;
+  });
 }
 
 function handleUserCommand(command: string | number | object) {

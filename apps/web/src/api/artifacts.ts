@@ -9,6 +9,14 @@ import type {
 } from "@superpm/shared";
 import { request } from "./client";
 
+function removalQuery(expectedVersion?: number, recursive = false) {
+  const query = new URLSearchParams();
+  if (recursive) query.set("recursive", "1");
+  if (expectedVersion !== undefined)
+    query.set("expectedVersion", String(expectedVersion));
+  return query.size ? `?${query}` : "";
+}
+
 // 需求知识库 API（artifact_nodes / artifact_links；文档管理 tab 专用）
 export const artifactApi = {
   list: (requirementId: number, parentId: number | null, q = "") => {
@@ -65,34 +73,43 @@ export const artifactApi = {
     ),
   node: (nodeId: number) =>
     request<ArtifactNodeDetails>(`/artifacts/nodes/${nodeId}`),
-  rename: (nodeId: number, name: string) =>
+  rename: (nodeId: number, name: string, expectedVersion?: number) =>
     request<ArtifactNode>(`/artifacts/nodes/${nodeId}`, {
       method: "PATCH",
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name, expectedVersion }),
     }),
-  setNodeFinal: (nodeId: number, isFinal: boolean) =>
+  setNodeFinal: (nodeId: number, isFinal: boolean, expectedVersion?: number) =>
     request<ArtifactNode>(`/artifacts/nodes/${nodeId}/final`, {
       method: "PATCH",
-      body: JSON.stringify({ isFinal }),
+      body: JSON.stringify({ isFinal, expectedVersion }),
     }),
-  move: (nodeId: number, targetParentId: number | null) =>
+  move: (
+    nodeId: number,
+    targetParentId: number | null,
+    expectedVersion?: number,
+  ) =>
     request<ArtifactNode>(`/artifacts/nodes/${nodeId}/move`, {
       method: "POST",
-      body: JSON.stringify({ targetParentId }),
+      body: JSON.stringify({ targetParentId, expectedVersion }),
     }),
-  remove: (nodeId: number, recursive: boolean) =>
+  remove: (nodeId: number, recursive: boolean, expectedVersion?: number) =>
     request<void>(
-      `/artifacts/nodes/${nodeId}${recursive ? "?recursive=1" : ""}`,
+      `/artifacts/nodes/${nodeId}${removalQuery(expectedVersion, recursive)}`,
       { method: "DELETE" },
     ),
   content: (nodeId: number) =>
-    request<{ node: ArtifactNode; content: string }>(
+    request<{ node: ArtifactNode; content: string; version: string }>(
       `/artifacts/nodes/${nodeId}/content`,
     ),
-  saveContent: (nodeId: number, content: string, force = false) =>
+  saveContent: (
+    nodeId: number,
+    content: string,
+    force = false,
+    expectedVersion?: string,
+  ) =>
     request<ArtifactNode>(`/artifacts/nodes/${nodeId}/content`, {
       method: "PUT",
-      body: JSON.stringify({ content, force }),
+      body: JSON.stringify({ content, force, expectedVersion }),
     }),
   rawUrl: (nodeId: number, download = false) =>
     `/api/artifacts/nodes/${nodeId}/raw${download ? "?download=1" : ""}`,
@@ -127,18 +144,22 @@ export const artifactApi = {
       name?: string;
       url?: string;
       description?: string | null;
+      expectedVersion?: number;
     },
   ) =>
     request<ArtifactLink>(`/artifacts/links/${linkId}`, {
       method: "PATCH",
       body: JSON.stringify(patch),
     }),
-  removeLink: (linkId: number) =>
-    request<void>(`/artifacts/links/${linkId}`, { method: "DELETE" }),
-  setLinkFinal: (linkId: number, isFinal: boolean) =>
+  removeLink: (linkId: number, expectedVersion?: number) =>
+    request<void>(
+      `/artifacts/links/${linkId}${removalQuery(expectedVersion)}`,
+      { method: "DELETE" },
+    ),
+  setLinkFinal: (linkId: number, isFinal: boolean, expectedVersion?: number) =>
     request<ArtifactLink>(`/artifacts/links/${linkId}/final`, {
       method: "PATCH",
-      body: JSON.stringify({ isFinal }),
+      body: JSON.stringify({ isFinal, expectedVersion }),
     }),
   memory: (requirementId: number) =>
     request<ArtifactNode>(`/requirements/${requirementId}/memory`),

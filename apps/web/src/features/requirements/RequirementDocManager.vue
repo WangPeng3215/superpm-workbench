@@ -411,7 +411,7 @@ async function submitRename() {
     return;
   }
   try {
-    await artifactApi.rename(node.id, renameForm.value.name);
+    await artifactApi.rename(node.id, renameForm.value.name, node.version);
     renameVisible.value = false;
     renameTarget.value = undefined;
     ElMessage.success("已重命名");
@@ -438,6 +438,7 @@ async function submitLinkEdit() {
   }
   try {
     await artifactApi.updateLink(link.id, {
+      expectedVersion: link.version,
       name: linkEditForm.value.name,
       url: linkEditForm.value.url.trim(),
       description: linkEditForm.value.description.trim() || null,
@@ -489,9 +490,14 @@ async function submitMove() {
   moveSaving.value = true;
   try {
     if (moveTargetNode.value)
-      await artifactApi.move(moveTargetNode.value.id, targetParentId);
+      await artifactApi.move(
+        moveTargetNode.value.id,
+        targetParentId,
+        moveTargetNode.value.version,
+      );
     else if (moveTargetLink.value)
       await artifactApi.updateLink(moveTargetLink.value.id, {
+        expectedVersion: moveTargetLink.value.version,
         folderNodeId: targetParentId,
       });
     moveVisible.value = false;
@@ -527,7 +533,7 @@ async function removeNode(node: ArtifactNode) {
   }
   try {
     // 非空目录第一次请求会得到 409 与影响范围，再二次确认后递归删除
-    await artifactApi.remove(node.id, false);
+    await artifactApi.remove(node.id, false, node.version);
   } catch (e) {
     if (!(e instanceof ApiError) || e.code !== "CONFLICT") {
       ElMessage.error(errorMessage(e));
@@ -547,7 +553,7 @@ async function removeNode(node: ArtifactNode) {
       return;
     }
     try {
-      await artifactApi.remove(node.id, true);
+      await artifactApi.remove(node.id, true, node.version);
     } catch (retryError) {
       ElMessage.error(errorMessage(retryError));
       return;
@@ -572,7 +578,7 @@ async function removeLink(link: ArtifactLink) {
     return;
   }
   try {
-    await artifactApi.removeLink(link.id);
+    await artifactApi.removeLink(link.id, link.version);
     ElMessage.success("链接已删除");
     await load();
   } catch (e) {
@@ -609,8 +615,13 @@ async function toggleNodeFinal(node: ArtifactNode) {
   if (finalPending.has(key)) return;
   finalPending.add(key);
   try {
-    const updated = await artifactApi.setNodeFinal(node.id, !node.isFinal);
+    const updated = await artifactApi.setNodeFinal(
+      node.id,
+      !node.isFinal,
+      node.version,
+    );
     node.isFinal = updated.isFinal;
+    node.version = updated.version;
   } catch (e) {
     ElMessage.error(errorMessage(e));
   } finally {
@@ -622,8 +633,13 @@ async function toggleLinkFinal(link: ArtifactLink) {
   if (finalPending.has(key)) return;
   finalPending.add(key);
   try {
-    const updated = await artifactApi.setLinkFinal(link.id, !link.isFinal);
+    const updated = await artifactApi.setLinkFinal(
+      link.id,
+      !link.isFinal,
+      link.version,
+    );
     link.isFinal = updated.isFinal;
+    link.version = updated.version;
   } catch (e) {
     ElMessage.error(errorMessage(e));
   } finally {

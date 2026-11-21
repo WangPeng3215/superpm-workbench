@@ -25,6 +25,12 @@ import {
 } from "./config/index.js";
 import { SCHEMA_VERSION } from "./db/migrate.js";
 import { DomainError } from "./services/requirements.js";
+import { registerProjectRoutes } from "./routes/projects.js";
+import { registerProjectTaskRoutes } from "./routes/project-tasks.js";
+import { registerProjectTaskRequirementRoutes } from "./routes/project-task-requirements.js";
+import { registerProjectWorklogRoutes } from "./routes/project-worklog.js";
+import { registerDeliveryRoutes } from "./routes/deliveries.js";
+import { registerProjectDocumentRoutes } from "./routes/project-documents.js";
 import {
   createServiceContainer,
   type ServiceContainerOptions,
@@ -201,9 +207,13 @@ export async function createApp(
         },
       });
     if (error instanceof DomainError)
-      return reply
-        .status(error.status)
-        .send({ error: { code: error.code, message: error.message } });
+      return reply.status(error.status).send({
+        error: {
+          code: error.code,
+          message: error.message,
+          ...(error.details === undefined ? {} : { details: error.details }),
+        },
+      });
     if (
       error instanceof Error &&
       "code" in error &&
@@ -444,6 +454,12 @@ export async function createApp(
   app.get("/api/requirements", async (request) =>
     service.list(request.query ?? {}),
   );
+  registerProjectRoutes(app, container.projects, container.deliveries);
+  registerProjectTaskRoutes(app, container.projectTasks, dailyTasks);
+  registerProjectTaskRequirementRoutes(app, container.projectTasks);
+  registerProjectWorklogRoutes(app, container.projectWorklog);
+  registerDeliveryRoutes(app, container.deliveries);
+  registerProjectDocumentRoutes(app, container.projectDocuments);
   app.post("/api/requirements", async (request, reply) => {
     // 建需与目录初始化走同一入口（优化点转换也调用它），
     // 初始化失败不阻断建需：状态落库为 failed 并记录阶段，前端可见并可重试。
@@ -464,7 +480,13 @@ export async function createApp(
   app.delete<{ Params: { id: string } }>(
     "/api/requirements/:id",
     async (request, reply) => {
-      service.remove(parseId(request.params.id));
+      const input = z
+        .object({
+          expectedVersion: z.coerce.number().int().positive().optional(),
+        })
+        .strict()
+        .parse(request.body ?? request.query ?? {});
+      service.remove(parseId(request.params.id), input.expectedVersion);
       return reply.status(204).send();
     },
   );
@@ -479,8 +501,10 @@ export async function createApp(
   // 反查来源优化点：优化点转正式需求后，需求详情可回看来源记录
   app.get<{ Params: { id: string } }>(
     "/api/requirements/:id/optimization-points",
-    async (request) =>
-      optimizationPoints.byRequirement(parseId(request.params.id)),
+    async (request) => {
+      service.get(parseId(request.params.id));
+      return optimizationPoints.byRequirement(parseId(request.params.id));
+    },
   );
   const fileListQuery = z.object({
     phase: z.union([z.enum(stages), z.literal("all")]).default("analysis"),
@@ -532,6 +556,7 @@ export async function createApp(
         parseId(request.params.fileId),
       );
       return reply
+        .header("Cache-Control", "private, no-store")
         .header("X-Content-Type-Options", "nosniff")
         .type(raw.mime)
         .send(raw.data);
@@ -570,6 +595,7 @@ export async function createApp(
       fileService.remove(
         parseId(request.params.id),
         parseId(request.params.fileId),
+        parseResourceVersion(request.body ?? request.query),
       );
       return reply.status(204).send();
     },
@@ -641,6 +667,10 @@ export async function createApp(
         parseId(request.params.id),
         parseId(request.params.issueId),
         request.body,
+        undefined,
+        typeof request.headers["idempotency-key"] === "string"
+          ? request.headers["idempotency-key"]
+          : undefined,
       ),
   );
   app.delete<{ Params: { id: string; issueId: string } }>(
@@ -649,6 +679,7 @@ export async function createApp(
       issueService.remove(
         parseId(request.params.id),
         parseId(request.params.issueId),
+        parseResourceVersion(request.body ?? request.query),
       );
       return reply.status(204).send();
     },
@@ -881,6 +912,7 @@ export async function createApp(
         request.params.filename,
       );
       return reply
+        .header("Cache-Control", "private, no-store")
         .header("X-Content-Type-Options", "nosniff")
         .type(image.mime)
         .send(image.data);
@@ -984,7 +1016,10 @@ export async function createApp(
   app.delete<{ Params: { linkId: string } }>(
     "/api/artifacts/links/:linkId",
     async (request, reply) => {
-      artifactService.deleteLink(parseId(request.params.linkId));
+      artifactService.deleteLink(
+        parseId(request.params.linkId),
+        parseResourceVersion(request.body ?? request.query),
+      );
       return reply.status(204).send();
     },
   );
@@ -1016,7 +1051,11 @@ export async function createApp(
     async (request, reply) => {
       const query = (request.query ?? {}) as Record<string, unknown>;
       const recursive = query.recursive === "1" || query.recursive === "true";
-      artifactService.deleteNode(parseId(request.params.nodeId), recursive);
+      artifactService.deleteNode(
+        parseId(request.params.nodeId),
+        recursive,
+        parseResourceVersion(request.body ?? request.query),
+      );
       return reply.status(204).send();
     },
   );
@@ -1042,6 +1081,7 @@ export async function createApp(
         );
       }
       return reply
+        .header("Cache-Control", "private, no-store")
         .header("X-Content-Type-Options", "nosniff")
         .type(raw.mime)
         .send(raw.data);
@@ -1125,6 +1165,7 @@ export async function createApp(
       relativePath,
     );
     return reply
+      .header("Cache-Control", "private, no-store")
       .header("X-Content-Type-Options", "nosniff")
       .header("Cache-Control", "private, max-age=300")
       .type(image.mime)
@@ -1175,6 +1216,12 @@ function isLoopbackAddress(address: string | undefined): boolean {
     address === "::1" ||
     address === "::ffff:127.0.0.1"
   );
+}
+function parseResourceVersion(input: unknown): number | undefined {
+  return z
+    .object({ expectedVersion: z.coerce.number().int().positive().optional() })
+    .passthrough()
+    .parse(input ?? {}).expectedVersion;
 }
 function parseId(value: string) {
   if (!/^[1-9]\d*$/.test(value))

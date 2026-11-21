@@ -8,6 +8,8 @@
 - **工具清单与参数/返回说明**：32 个工具（`system.info` + 15 只读 + 15 写入 + `write.prepare`）的入参、默认值、返回字段与错误码；
 - **权限与安全说明**、**自动化测试说明**与**版本兼容性说明**。
 
+1.3.0 新增项目协作，但 MCP 工具数量与既有私人数据工具契约不变。当前 stdio 入口没有可信项目账号身份，客户端名只用于审计；项目共享需求及其问题、文档、记忆和引用不能通过 MCP 读写，也不能借用 HTTP 请求身份。项目、任务、交付与项目资料只通过登录后的 Web／HTTP 权限入口操作。
+
 ## 架构
 
 ```text
@@ -60,7 +62,7 @@ npm run mcp:dev -w @superpm/server
 
 数据与迁移：
 
-- 启动时执行与 HTTP 服务相同的迁移（当前 `SCHEMA_VERSION = 21`，最新迁移 `apps/server/drizzle/0021_requirement_pins.sql`）；`mcp_audit`、`mcp_write_confirmations` 由 `0012_mcp_write_audit.sql` 建立。会议与便签工具直接复用 `0016_meetings.sql`、`0017_notes.sql` 建立的业务表；`0021_requirement_pins.sql` 仅为需求列表增加置顶标记，本轮未新增 MCP 工具。
+- 启动时执行与 HTTP 服务相同的迁移（当前 `SCHEMA_VERSION = 27`，最新迁移 `apps/server/drizzle/0027_project_documents.sql`）；`mcp_audit`、`mcp_write_confirmations` 由 `0012_mcp_write_audit.sql` 建立。会议与便签工具直接复用 `0016_meetings.sql`、`0017_notes.sql` 建立的业务表；`0022`—`0027` 新增项目域结构，但本轮未新增 MCP 工具，项目域仍拒绝无可信账号的 MCP 访问。
 - 只跑迁移不启动 MCP：`npm run db:migrate -w @superpm/server`。
 - SQLite 以 WAL 模式打开，并设置 `busy_timeout`。**同一数据目录不建议同时启动多个 MCP 进程并发起写入**；只读并发可以，写并发会退化为串行等待甚至 `SQLITE_BUSY`。若需并行，请为每个进程指定独立的 `SUPERPM_DATA_DIR`。
 - 运行账号需对数据目录（含 `-wal`/`-shm` 文件）和工作区目录有读写权限；权限不足会在 stderr 报错并以非零码退出。
@@ -891,14 +893,14 @@ CI 流水线位于 `.github/workflows/ci.yml`（与模板 `docs/ci/ci.yml` 一�
 
 ## 版本兼容性
 
-| 组件        | 当前值                                                  | 说明                                                                                 |
-| ----------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| Node.js     | `>=22.12.0 <25`                                         | `better-sqlite3` 为原生模块，跨主版本需重装/重建                                     |
-| MCP SDK     | `@modelcontextprotocol/sdk ^1.32.1`                     | 使用 `McpServer.registerTool` + `StdioServerTransport`，协议版本由 SDK 协商          |
-| Server 标识 | name `superpm`，version `1.1.0`                         | version 读取 `apps/server/package.json`，缺失时回退 `0.0.0`                          |
-| 数据库      | `SCHEMA_VERSION = 20`，迁移至 `0020_user_isolation.sql` | 只向前、按 `schema_migrations` 幂等；MCP 与 HTTP 共用同一迁移；1.1.0 未新增 MCP 工具 |
-| 校验库      | `zod ^3.25.76`                                          | 工具入参 schema 与 HTTP 层同源；SDK 依赖 zod v3 shape，升级 zod v4 需同步适配        |
-| 传输        | 仅 `stdio`                                              | 不提供 HTTP/SSE，因此没有跨机器版本协商问题                                          |
+| 组件        | 当前值                                                     | 说明                                                                                 |
+| ----------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| Node.js     | `>=22.12.0 <25`                                            | `better-sqlite3` 为原生模块，跨主版本需重装/重建                                     |
+| MCP SDK     | `@modelcontextprotocol/sdk ^1.32.1`                        | 使用 `McpServer.registerTool` + `StdioServerTransport`，协议版本由 SDK 协商          |
+| Server 标识 | name `superpm`，version `1.3.0`                            | version 读取 `apps/server/package.json`，缺失时回退 `0.0.0`                          |
+| 数据库      | `SCHEMA_VERSION = 27`，迁移至 `0027_project_documents.sql` | 只向前、按 `schema_migrations` 幂等；MCP 与 HTTP 共用同一迁移；1.3.0 未新增 MCP 工具 |
+| 校验库      | `zod ^3.25.76`                                             | 工具入参 schema 与 HTTP 层同源；SDK 依赖 zod v3 shape，升级 zod v4 需同步适配        |
+| 传输        | 仅 `stdio`                                                 | 不提供 HTTP/SSE，因此没有跨机器版本协商问题                                          |
 
 兼容策略：
 
@@ -916,6 +918,7 @@ CI 流水线位于 `.github/workflows/ci.yml`（与模板 `docs/ci/ci.yml` 一�
 | 能力                                              | 是否开放 | 前置条件                                                       | 是否审计           |
 | ------------------------------------------------- | -------- | -------------------------------------------------------------- | ------------------ |
 | 需求/问题/产出物/会议/便签只读查询                | 是       | 无（默认开启）                                                 | 否                 |
+| 项目共享需求及资源、项目/任务/交付/项目资料       | 否       | 当前 stdio 无可信项目账号，不能借用 HTTP 身份                  | —                  |
 | 问题字段更新、评论、关联与取消关联                | 是       | `SUPERPM_MCP_WRITE=1` + `write.prepare` 令牌 + 幂等键          | `mcp_audit` 全过程 |
 | 会议创建/更新/删除                                | 是       | 同上                                                           | `mcp_audit` 全过程 |
 | 便签创建/更新/归档恢复/转换任务/删除              | 是       | 同上                                                           | `mcp_audit` 全过程 |
@@ -942,7 +945,7 @@ CI 流水线位于 `.github/workflows/ci.yml`（与模板 `docs/ci/ci.yml` 一�
 - 未捕获异常收敛为 `INTERNAL_ERROR`，响应不含堆栈、表名、SQL、数据库或工作区绝对路径；日志只写 stderr。
 - AI 写入在问题活动中标记 `actor_type="ai"`、`actor_name="mcp:<客户端名>"`；会议与便签没有活动表，来源记录在 `mcp_audit.actor_name`。Web 端问题详情展示最近一次 AI 写入来源，可追溯到具体 MCP 客户端。
 - **归还不是清理**：`note.archive` 只切换归档标记，仅在用户明确要求时调用；AI 不得把归档当作默认清理或批量整理手段，也不得用 `note.delete` / `meeting.delete` 代替归档。
-- **授权边界预留**：所有写工具只从 MCP 握手与进程环境获取操作者信息，权限判断集中在 `McpWriteService` 与业务服务层，不把用户身份、角色或权限硬编码进单个 MCP 工具。未来接入多用户权限时在该统一入口扩展。
+- **项目授权边界**：MCP 握手提供的客户端名只是审计标签，不是可信登录账号。所有网关及公开执行器都在不可信工具上下文执行；项目共享需求的 list/get、引用、prepare 和 execute 均重新检查，不能继承 HTTP 请求身份。项目域默认拒绝，未来接入可信账号授权需要单独评审。
 - HTTP 侧 `/api/system` 已收敛为登录后可访问，未认证调用者拿不到数据库与工作区绝对路径；`/api/health` 保持公开。
 - **正式问题创建与需求创建仍只能由用户操作**；AI 的建议与正式落库分属两个会话链路，写入必须已获得用户明确授权。
 

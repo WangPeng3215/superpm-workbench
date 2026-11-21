@@ -22,6 +22,7 @@ import type {
 } from "@superpm/shared";
 import { requirements, stageHistory, requirementAudit } from "../db/schema.js";
 import { currentUserScope } from "../db/scope.js";
+import { isUntrustedToolContext } from "../services/access-context.js";
 import { decodeDescription, encodeDescription } from "./description.js";
 
 type MutableFields = Partial<RequirementCreateParsed> & { pinned?: boolean };
@@ -40,8 +41,9 @@ function decodeRequirement(row: typeof requirements.$inferSelect) {
  */
 function ownerFilter() {
   const scope = currentUserScope();
-  if (!scope || scope.isAdmin) return undefined;
-  return eq(requirements.userId, scope.userId);
+  if (!scope || isUntrustedToolContext()) return isNull(requirements.projectId);
+  if (scope.isAdmin) return undefined;
+  return sql`((${requirements.projectId} IS NULL AND ${requirements.userId} = ${scope.userId}) OR (${requirements.projectId} IS NOT NULL AND EXISTS (SELECT 1 FROM project_members pm JOIN users u ON u.id=pm.user_id WHERE pm.project_id=${requirements.projectId} AND pm.user_id=${scope.userId} AND pm.status='active' AND u.status='active')))`;
 }
 
 /** 新增行时的归属值；系统身份落 0，只有超管可见 */
@@ -119,7 +121,7 @@ export class RequirementsRepository {
       .get();
     return decodeRequirement(row);
   }
-  update(id: number, patch: MutableFields) {
+  update(id: number, patch: MutableFields, expectedVersion?: number) {
     const contentChanged = Object.keys(patch).some((key) => key !== "pinned");
     const storagePatch =
       patch.description === undefined
@@ -129,20 +131,44 @@ export class RequirementsRepository {
       .update(requirements)
       .set(
         contentChanged
-          ? { ...storagePatch, updatedAt: new Date().toISOString() }
-          : storagePatch,
+          ? {
+              ...storagePatch,
+              updatedAt: new Date().toISOString(),
+              version: sql`${requirements.version} + 1`,
+            }
+          : { ...storagePatch, version: sql`${requirements.version} + 1` },
       )
-      .where(and(eq(requirements.id, id), ownerFilter()))
+      .where(
+        and(
+          eq(requirements.id, id),
+          ownerFilter(),
+          expectedVersion === undefined
+            ? undefined
+            : eq(requirements.version, expectedVersion),
+        ),
+      )
       .returning()
       .get();
     return row ? decodeRequirement(row) : undefined;
   }
-  softDelete(id: number) {
+  softDelete(id: number, expectedVersion?: number) {
     const now = new Date().toISOString();
     this.orm
       .update(requirements)
-      .set({ deletedAt: now, updatedAt: now })
-      .where(and(eq(requirements.id, id), ownerFilter()))
+      .set({
+        deletedAt: now,
+        updatedAt: now,
+        version: sql`${requirements.version} + 1`,
+      })
+      .where(
+        and(
+          eq(requirements.id, id),
+          ownerFilter(),
+          expectedVersion === undefined
+            ? undefined
+            : eq(requirements.version, expectedVersion),
+        ),
+      )
       .run();
   }
   list(query: RequirementListParsed) {
@@ -151,6 +177,9 @@ export class RequirementsRepository {
     const filters: SQL[] = [isNull(requirements.deletedAt)];
     const owner = ownerFilter();
     if (owner) filters.push(owner);
+    if (query.projectId !== undefined)
+      filters.push(eq(requirements.projectId, query.projectId));
+    if (query.unassigned) filters.push(isNull(requirements.projectId));
     for (const key of ["type", "priority", "status", "currentStage"] as const) {
       if (query[key]) filters.push(eq(requirements[key], query[key]!));
     }
@@ -242,25 +271,21 @@ export class RequirementsRepository {
     };
   }
   history(id: number) {
-    const scope = currentUserScope();
     return this.orm
       .select()
       .from(stageHistory)
-      .where(
-        and(
-          eq(stageHistory.requirementId, id),
-          scope && !scope.isAdmin
-            ? eq(stageHistory.userId, scope.userId)
-            : undefined,
-        ),
-      )
+      .where(and(eq(stageHistory.requirementId, id)))
       .orderBy(asc(stageHistory.id))
       .all();
   }
   addHistory(record: typeof stageHistory.$inferInsert) {
     this.orm
       .insert(stageHistory)
-      .values({ ...record, userId: record.userId ?? ownerValue() })
+      .values({
+        ...record,
+        userId: record.userId ?? ownerValue(),
+        actorUserId: currentUserScope()?.userId ?? null,
+      })
       .run();
   }
   audit(id: number, action: string, payload: unknown) {
@@ -269,6 +294,7 @@ export class RequirementsRepository {
       .values({
         requirementId: id,
         action,
+        actorUserId: currentUserScope()?.userId ?? null,
         payload: JSON.stringify(payload),
         createdAt: new Date().toISOString(),
         userId: ownerValue(),

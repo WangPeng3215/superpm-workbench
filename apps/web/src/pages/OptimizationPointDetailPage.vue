@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import {
   onBeforeRouteLeave,
   onBeforeRouteUpdate,
@@ -46,7 +46,9 @@ const deleting = ref(false);
 const converting = ref(false);
 const convertVisible = ref(false);
 const form = ref<InstanceType<typeof OptimizationPointForm>>();
+const formVersion = ref(0);
 let revision = 0;
+let editRevision = 0;
 
 // 已转换且关联有效时不能再转；关联需求被删除后可重新转换
 const convertBlocked = computed(
@@ -64,17 +66,21 @@ const linkedRequirement = computed(() => {
 });
 
 async function load() {
+  const token = ++revision;
+  saving.value = false;
+  saveError.value = "";
   if (!Number.isInteger(id.value) || id.value <= 0) {
+    loading.value = false;
     loadError.value = "优化点 ID 无效";
     return;
   }
-  const token = ++revision;
   loading.value = true;
   loadError.value = "";
   try {
     const detail = await optimizationPointApi.get(id.value);
     if (token !== revision) return;
     point.value = detail;
+    formVersion.value += 1;
     dirty.value = false;
     setTabLabel(route.path, detail.name);
     // 列表操作列的「转为正式需求」带着 ?convert=1 进来：加载完直接打开确认弹窗，
@@ -99,8 +105,12 @@ watch(
     if (next !== id.value) id.value = next;
   },
 );
+onBeforeUnmount(() => {
+  revision += 1;
+});
 
 function onFormChange() {
+  editRevision += 1;
   dirty.value = true;
   saveError.value = "";
 }
@@ -109,6 +119,8 @@ async function save() {
   if (!point.value || saving.value) return;
   const payload = form.value?.validate();
   if (!payload) return;
+  const token = revision;
+  const savedRevision = editRevision;
   saving.value = true;
   saveError.value = "";
   try {
@@ -116,14 +128,17 @@ async function save() {
       point.value.id,
       payload as OptimizationPointUpdate,
     );
+    if (token !== revision) return;
     point.value = updated;
-    dirty.value = false;
+    // 响应只确认提交时的修订；保留请求期间输入的新草稿及其表单实例。
+    dirty.value = editRevision !== savedRevision;
+    if (!dirty.value) formVersion.value += 1;
     setTabLabel(route.path, updated.name);
     ElMessage.success("优化点已保存");
   } catch (error) {
-    saveError.value = errorMessage(error);
+    if (token === revision) saveError.value = errorMessage(error);
   } finally {
-    saving.value = false;
+    if (token === revision) saving.value = false;
   }
 }
 
@@ -197,6 +212,7 @@ async function convert(payload: OptimizationPointConvert) {
   try {
     const result = await optimizationPointApi.convert(point.value.id, payload);
     point.value = result.point;
+    formVersion.value += 1;
     dirty.value = false;
     convertVisible.value = false;
     setTabLabel(route.path, result.point.name);
@@ -287,11 +303,10 @@ async function convert(payload: OptimizationPointConvert) {
       <section class="surface edit-surface">
         <OptimizationPointForm
           ref="form"
-          :key="`${point.id}-${point.updatedAt}`"
+          :key="`${point.id}-${formVersion}`"
           :point="point"
           show-status
           fill
-          :disabled="saving"
           @change="onFormChange"
         >
           <template #side>

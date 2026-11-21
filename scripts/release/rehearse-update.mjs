@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 // 使用真实发布包演练：安装 vA、写入数据、运行 MCP，再升级到 vB 并验证失败回滚。
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
+  copyFileSync,
   createWriteStream,
   existsSync,
   mkdirSync,
@@ -42,6 +44,8 @@ function parseArgs(argv) {
     if (item === "--from") options.from = resolve(argv[++index]);
     else if (item === "--manifest") options.manifest = resolve(argv[++index]);
     else if (item === "--update") options.update = resolve(argv[++index]);
+    else if (item === "--updater-repair")
+      options.updaterRepair = resolve(argv[++index]);
     else if (item === "--work") options.work = resolve(argv[++index]);
     else if (item === "--scenarios")
       options.scenarios = argv[++index].split(",").filter(Boolean);
@@ -265,6 +269,64 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+function runUpdater(install, home, manifestPath, timeoutMs, failure = "") {
+  return new Promise((done, fail) => {
+    const child = spawn(
+      join(install, "runtime", "node.exe"),
+      [
+        join(install, "bin", "updater.mjs"),
+        "--manifest",
+        manifestPath,
+        "--install-root",
+        install,
+        "--home",
+        home,
+        "--json",
+      ],
+      {
+        env: {
+          ...process.env,
+          SUPERPM_UPDATE_TESTING: failure ? "1" : "",
+          SUPERPM_UPDATE_FAIL_AT: failure,
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+      },
+    );
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => (stdout += chunk));
+    child.stderr.on("data", (chunk) => (stderr += chunk));
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      fail(new Error("更新器未在限定时间内退出"));
+    }, timeoutMs);
+    child.once("error", (error) => {
+      clearTimeout(timer);
+      fail(error);
+    });
+    child.once("close", (code) => {
+      clearTimeout(timer);
+      try {
+        done({ code, result: JSON.parse(stdout.trim().split("\n").pop()) });
+      } catch {
+        fail(
+          new Error(`更新器未返回 JSON（exit ${code}）：${stderr || stdout}`),
+        );
+      }
+    });
+  });
+}
+
+function databaseSnapshot(home) {
+  return ["superpm.sqlite", "superpm.sqlite-wal"].map((file) => {
+    const path = join(home, "data", file);
+    return existsSync(path)
+      ? createHash("sha256").update(readFileSync(path)).digest("hex")
+      : null;
+  });
+}
+
 async function runScenario(name, options, context) {
   const scenarioRoot = join(context.work, name);
   const extractRoot = join(scenarioRoot, "extract");
@@ -304,7 +366,7 @@ async function runScenario(name, options, context) {
     details.install = install;
     const versionA = packageVersion(join(install, "app"));
     // 0.2.0 自带的更新器没有 M3 进度写入；旧更新器升级只验证兼容与回退。
-    const updaterSupportsProgress = readFileSync(
+    let updaterSupportsProgress = readFileSync(
       join(install, "bin", "updater.mjs"),
       "utf8",
     ).includes("update-progress.json");
@@ -340,6 +402,73 @@ async function runScenario(name, options, context) {
     details.versionA = versionA;
     details.requirementId = requirementId;
 
+    if (options.updaterRepair) {
+      const originalInfo = readFileSync(join(install, "install.json"), "utf8");
+      const originalPid = readJson(join(home, "runtime", "server.json")).pid;
+      const originalDatabase = databaseSnapshot(home);
+      const blocked = await runUpdater(
+        install,
+        home,
+        manifestPath,
+        options.timeoutMs,
+      );
+      assert(blocked.code === 1, "旧更新器未拒绝新版本门槛");
+      assert(blocked.result.status === "failed", "旧更新器拒绝状态异常");
+      assert(
+        blocked.result.error?.includes(
+          `低于要求 ${manifest.minUpdaterVersion}`,
+        ),
+        `旧更新器未因最低版本拒绝：${blocked.result.error}`,
+      );
+      assert(
+        JSON.stringify(databaseSnapshot(home)) ===
+          JSON.stringify(originalDatabase),
+        "旧更新器拒绝后数据库发生变化",
+      );
+      assert(
+        (await health(port))?.version === versionA &&
+          readJson(join(home, "runtime", "server.json")).pid === originalPid,
+        "旧更新器拒绝后服务未保持原进程运行",
+      );
+      assert(
+        packageVersion(join(install, "app")) === versionA,
+        "旧更新器拒绝后程序版本发生变化",
+      );
+      assert(
+        !existsSync(join(install, "app.previous")),
+        "旧更新器拒绝后替换了程序目录",
+      );
+      assert(
+        readFileSync(
+          join(home, "workspace", "rehearsal-marker.txt"),
+          "utf8",
+        ) === marker,
+        "旧更新器拒绝后工作区文件发生变化",
+      );
+      assert(
+        !existsSync(join(home, "runtime", "update.lock")),
+        "旧更新器拒绝后残留更新锁",
+      );
+      const repairRoot = join(scenarioRoot, "updater-repair");
+      await extractZip(options.updaterRepair, repairRoot);
+      const repairUpdater = join(repairRoot, "updater.mjs");
+      assert(existsSync(repairUpdater), "修复包缺少独立更新器");
+      copyFileSync(repairUpdater, join(install, "bin", "updater.mjs"));
+      assert(
+        readFileSync(join(install, "install.json"), "utf8") === originalInfo,
+        "修复包演练不应修改安装元数据",
+      );
+      updaterSupportsProgress = readFileSync(repairUpdater, "utf8").includes(
+        "update-progress.json",
+      );
+      details.progressSupported = updaterSupportsProgress;
+      details.updaterRepair = {
+        oldUpdaterBlocked: true,
+        minUpdaterVersion: manifest.minUpdaterVersion,
+        installMetadataPreserved: true,
+      };
+    }
+
     if (name === "happy") {
       mcp = startMcp(install, home, output);
       await waitFor(
@@ -349,37 +478,15 @@ async function runScenario(name, options, context) {
       );
     }
 
-    const updater = spawn(
-      join(install, "runtime", "node.exe"),
-      [
-        join(install, "bin", "updater.mjs"),
-        "--manifest",
-        manifestPath,
-        "--install-root",
-        install,
-        "--home",
-        home,
-        "--json",
-      ],
-      {
-        env: {
-          ...process.env,
-          SUPERPM_UPDATE_TESTING:
-            name === "happy" || name === "digest" ? "" : "1",
-          SUPERPM_UPDATE_FAIL_AT:
-            name === "happy" || name === "digest" ? "" : name,
-        },
-        stdio: ["ignore", "pipe", "pipe"],
-        windowsHide: true,
-      },
+    const completed = await runUpdater(
+      install,
+      home,
+      manifestPath,
+      options.timeoutMs,
+      name === "happy" || name === "digest" ? "" : name,
     );
-    let updaterOut = "";
-    let updaterErr = "";
-    updater.stdout.on("data", (chunk) => (updaterOut += chunk));
-    updater.stderr.on("data", (chunk) => (updaterErr += chunk));
-    const updaterCode = await waitExit(updater, options.timeoutMs);
-    const lastLine = updaterOut.trim().split("\n").pop();
-    updaterResult = JSON.parse(lastLine);
+    const updaterCode = completed.code;
+    updaterResult = completed.result;
     details.updater = {
       exitCode: updaterCode,
       status: updaterResult.status,
@@ -567,6 +674,7 @@ async function main() {
     console.log(`用法：node scripts/release/rehearse-update.mjs --from <vA 完整包> --manifest <vB 清单> [选项]
 
   --update <文件>       vB 更新包（默认取清单同目录下的 update.file）
+  --updater-repair <包> 验证旧更新器版本门槛后，在临时安装替换修复包的 updater.mjs
   --scenarios <列表>    默认 happy,digest,download,verify,backup,swap,migrate,health
   --work <目录>         演练目录（默认系统临时目录）
   --timeout <秒>        单次更新超时（默认 180）
@@ -576,6 +684,8 @@ async function main() {
   }
   if (!options.from) throw new Error("缺少 --from");
   if (!options.manifest) throw new Error("缺少 --manifest");
+  if (options.updaterRepair && !existsSync(options.updaterRepair))
+    throw new Error(`更新器修复包不存在：${options.updaterRepair}`);
   const sourceManifest = readJson(options.manifest);
   const updateZip =
     options.update ??
@@ -589,6 +699,7 @@ async function main() {
     ok: false,
     from: options.from,
     update: updateZip,
+    ...(options.updaterRepair ? { updaterRepair: options.updaterRepair } : {}),
     work,
     scenarios: [],
   };

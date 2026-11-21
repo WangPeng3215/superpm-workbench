@@ -5,6 +5,7 @@ export class ApiError extends Error {
     message: string,
     public code: string,
     public status: number,
+    public details?: unknown,
   ) {
     super(message);
   }
@@ -40,14 +41,13 @@ export async function request<T>(
       !window.location.pathname.startsWith("/login")
     ) {
       const target = `${window.location.pathname}${window.location.search}`;
-      window.location.assign(
-        `/login?redirect=${encodeURIComponent(target)}`,
-      );
+      window.location.assign(`/login?redirect=${encodeURIComponent(target)}`);
     }
     throw new ApiError(
       payload?.error?.message ?? "请求失败，请稍后重试。",
       payload?.error?.code ?? "HTTP_ERROR",
       response.status,
+      payload?.error?.details,
     );
   }
   if (response.status === 204) return undefined as T;

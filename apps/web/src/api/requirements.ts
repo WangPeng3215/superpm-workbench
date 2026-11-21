@@ -1,5 +1,6 @@
 import type {
   Requirement,
+  RequirementFileList,
   RequirementCreate,
   RequirementListQuery,
   RequirementListResult,
@@ -30,8 +31,11 @@ export const requirementApi = {
       method: "PATCH",
       body: JSON.stringify(data),
     }),
-  remove: (id: number) =>
-    request<void>(`/requirements/${id}`, { method: "DELETE" }),
+  remove: (id: number, expectedVersion: number) =>
+    request<void>(`/requirements/${id}`, {
+      method: "DELETE",
+      body: JSON.stringify({ expectedVersion }),
+    }),
   history: (id: number) =>
     request<StageHistory[]>(`/requirements/${id}/history`),
   relations: (id: number) =>
@@ -40,6 +44,10 @@ export const requirementApi = {
   optimizationPoints: (id: number) =>
     request<RequirementOptimizationPointRef[]>(
       `/requirements/${id}/optimization-points`,
+    ),
+  files: (id: number) =>
+    request<RequirementFileList>(
+      "/requirements/" + id + "/files?phase=all&all=true",
     ),
   references: (ids: number[]) => {
     if (!ids.length) return Promise.resolve([] as RequirementReferenceState[]);

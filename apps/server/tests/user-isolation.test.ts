@@ -50,6 +50,7 @@ describe("用户数据隔离", () => {
       workspacePath: join(directory, "workspace"),
       logger: false,
       serveWeb: false,
+      dailyTaskNow: () => new Date("2026-11-13T10:00:00+08:00"),
     });
     alice = await register("alice", "爱丽丝");
     bob = await register("bob", "鲍勃");

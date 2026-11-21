@@ -1,5 +1,12 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  watch,
+} from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import {
   ArrowRightOutlined,
@@ -23,14 +30,23 @@ import {
 } from "@superpm/shared";
 import { errorMessage } from "../../api/client";
 import { noteApi } from "../../api/notes";
+import { authStore } from "../../stores/auth";
+import {
+  noteDraftKey,
+  noteEditableFields as editableFields,
+  noteValues as valuesFromNote,
+  readNoteDraft,
+  type NoteValues,
+} from "./note-draft";
 
 const props = withDefaults(
   defineProps<{
     note: Note;
     cardKey: string;
     archivedView?: boolean;
+    unavailable?: boolean;
   }>(),
-  { archivedView: false },
+  { archivedView: false, unavailable: false },
 );
 
 const emit = defineEmits<{
@@ -55,6 +71,9 @@ const persistedId = ref<number | null>(
 const isDraft = ref(persistedId.value === null);
 
 const dirty = ref(false);
+const conflict = ref(false);
+const unavailable = ref(false);
+const draftError = ref("");
 const saving = ref(false);
 const saveError = ref("");
 const busy = ref(false);
@@ -69,18 +88,151 @@ let debounceTimer: number | undefined;
 let activeSave: Promise<boolean> | null = null;
 let queuedSave = false;
 let version = 0;
+let savedValues = valuesFromNote(props.note);
+const accountId = authStore.user?.id;
+let draftStorageKey =
+  accountId == null ? undefined : noteDraftKey(accountId, props.note.id);
+
+function currentValues(): NoteValues {
+  return {
+    title: title.value,
+    content: content.value,
+    type: type.value,
+    color: color.value,
+    isPinned: isPinned.value,
+  };
+}
+
+function applyValues(values: NoteValues) {
+  title.value = values.title;
+  content.value = values.content;
+  type.value = values.type;
+  color.value = values.color;
+  isPinned.value = values.isPinned;
+}
+
+function applyServerNote(note: Note, sent?: NoteValues) {
+  const incoming = valuesFromNote(note);
+  const local = currentValues();
+  const baseline = sent ?? savedValues;
+  if (
+    !sent &&
+    (conflict.value ||
+      editableFields.some(
+        (field) =>
+          local[field] !== baseline[field] &&
+          incoming[field] !== baseline[field] &&
+          local[field] !== incoming[field],
+      ))
+  ) {
+    conflict.value = true;
+    dirty.value = true;
+    cancelTimer();
+    return;
+  }
+  const merged = Object.fromEntries(
+    editableFields.map((field) => [
+      field,
+      local[field] === baseline[field] ? incoming[field] : local[field],
+    ]),
+  ) as NoteValues;
+  applyValues(merged);
+  savedValues = incoming;
+  persistedId.value = note.id > 0 ? note.id : null;
+  isDraft.value = persistedId.value === null;
+  updatedAt.value = note.updatedAt;
+  convertedTask.value = note.convertedTask;
+  dirty.value = editableFields.some(
+    (field) => merged[field] !== incoming[field],
+  );
+  if (!dirty.value) saveError.value = "";
+}
+
+function clearDraft() {
+  if (!draftStorageKey) return;
+  try {
+    sessionStorage.removeItem(draftStorageKey);
+    draftError.value = "";
+  } catch {
+    draftError.value = "无法更新会话草稿，请确认便签保存成功后再关闭。";
+  }
+}
+
+function persistDraft() {
+  if (!draftStorageKey || props.archivedView) return;
+  if (removed.value || (!dirty.value && !saving.value && !conflict.value)) {
+    clearDraft();
+    return;
+  }
+  try {
+    sessionStorage.setItem(
+      draftStorageKey,
+      JSON.stringify({
+        id: persistedId.value ?? props.note.id,
+        createdAt: props.note.createdAt,
+        base: savedValues,
+        values: currentValues(),
+      }),
+    );
+    draftError.value = "";
+  } catch {
+    draftError.value = "无法保留会话草稿，请确认便签保存成功后再关闭。";
+  }
+}
+
+if (draftStorageKey && !props.archivedView) {
+  try {
+    const stored = readNoteDraft(sessionStorage, draftStorageKey);
+    if (stored?.id === props.note.id) {
+      savedValues = stored.base;
+      applyValues(stored.values);
+      dirty.value = true;
+      if (persistedId.value) applyServerNote(props.note);
+      if (dirty.value && !conflict.value)
+        saveError.value = "会话草稿已恢复，请重试保存。";
+      persistDraft();
+    }
+  } catch {
+    draftError.value = "无法读取会话草稿，请确认内容已保存后再关闭。";
+  }
+}
+
+watch(
+  () => props.unavailable,
+  (value) => {
+    if (!value) return;
+    unavailable.value = true;
+    conflict.value = true;
+    dirty.value = true;
+    cancelTimer();
+    persistDraft();
+  },
+  { immediate: true },
+);
+
+watch(
+  () => props.note,
+  (note) => {
+    applyServerNote(note);
+    persistDraft();
+  },
+);
 
 const blankDraft = computed(
   () => !persistedId.value && !title.value.trim() && !content.value.trim(),
 );
 
-const saveState = computed<"error" | "saving" | "saved" | "auto">(() => {
-  if (saveError.value) return "error";
-  if (saving.value || dirty.value) return "saving";
-  return isDraft.value ? "auto" : "saved";
-});
+const saveState = computed<"conflict" | "error" | "saving" | "saved" | "auto">(
+  () => {
+    if (conflict.value) return "conflict";
+    if (saveError.value) return "error";
+    if (saving.value || dirty.value) return "saving";
+    return isDraft.value ? "auto" : "saved";
+  },
+);
 
 const saveLabel = computed(() => {
+  if (saveState.value === "conflict") return "保存冲突";
   if (saveState.value === "error") return "保存失败";
   if (saveState.value === "saving") return "保存中…";
   if (saveState.value === "saved") return "已保存";
@@ -115,6 +267,8 @@ function scheduleSave() {
   dirty.value = true;
   saveError.value = "";
   version += 1;
+  persistDraft();
+  if (conflict.value) return;
   if (debounceTimer) window.clearTimeout(debounceTimer);
   debounceTimer = window.setTimeout(() => {
     debounceTimer = undefined;
@@ -132,6 +286,7 @@ function onFieldBlur(event: FocusEvent) {
   if (blankDraft.value) {
     cancelTimer();
     removed.value = true;
+    clearDraft();
     emit("discarded", props.cardKey);
     return;
   }
@@ -161,29 +316,42 @@ function triggerSave(): Promise<boolean> {
 }
 
 async function performSave(): Promise<boolean> {
+  if (conflict.value) return false;
   if (!dirty.value) return true;
   if (!persistedId.value && !title.value.trim() && !content.value.trim())
     return true;
   cancelTimer();
   const snapshot = version;
-  const payload = {
-    title: title.value,
-    content: content.value,
-    type: type.value,
-    color: color.value,
-    isPinned: isPinned.value,
-  };
+  const sent = currentValues();
+  const payload = persistedId.value
+    ? Object.fromEntries(
+        editableFields
+          .filter((field) => sent[field] !== savedValues[field])
+          .map((field) => [field, sent[field]]),
+      )
+    : sent;
+  if (!Object.keys(payload).length) {
+    dirty.value = false;
+    saveError.value = "";
+    clearDraft();
+    return true;
+  }
   saving.value = true;
   saveError.value = "";
-  dirty.value = false;
+  persistDraft();
   try {
     const saved = persistedId.value
       ? await noteApi.update(persistedId.value, payload)
       : await noteApi.create(payload);
-    persistedId.value = saved.id;
-    isDraft.value = false;
-    updatedAt.value = saved.updatedAt;
-    convertedTask.value = saved.convertedTask;
+    if (conflict.value) return false;
+    if (
+      accountId != null &&
+      saved.id !== (persistedId.value ?? props.note.id)
+    ) {
+      clearDraft();
+      draftStorageKey = noteDraftKey(accountId, saved.id);
+    }
+    applyServerNote(saved, sent);
     if (version !== snapshot) dirty.value = true;
     emit("saved", props.cardKey, saved);
     return true;
@@ -193,13 +361,16 @@ async function performSave(): Promise<boolean> {
     return false;
   } finally {
     saving.value = false;
+    persistDraft();
   }
 }
 
 async function flush(): Promise<boolean> {
   cancelTimer();
+  if (conflict.value) return false;
   if (!persistedId.value && !title.value.trim() && !content.value.trim()) {
     removed.value = true;
+    clearDraft();
     emit("discarded", props.cardKey);
     return true;
   }
@@ -218,11 +389,13 @@ async function togglePin() {
   isPinned.value = !previous;
   version += 1;
   dirty.value = true;
+  persistDraft();
   const ok = await flush();
   if (!ok) {
     isPinned.value = previous;
     version += 1;
     dirty.value = true;
+    persistDraft();
   }
   busy.value = false;
 }
@@ -234,11 +407,13 @@ async function changeType(next: NoteType) {
   type.value = next;
   version += 1;
   dirty.value = true;
+  persistDraft();
   const ok = await flush();
   if (!ok) {
     type.value = previous;
     version += 1;
     dirty.value = true;
+    persistDraft();
   }
   busy.value = false;
 }
@@ -251,11 +426,13 @@ async function applyColor(next: NoteColor) {
   color.value = next;
   version += 1;
   dirty.value = true;
+  persistDraft();
   const ok = await flush();
   if (!ok) {
     color.value = previous;
     version += 1;
     dirty.value = true;
+    persistDraft();
   }
   busy.value = false;
 }
@@ -276,6 +453,7 @@ async function archiveNote() {
   try {
     await noteApi.update(persistedId.value!, { isArchived: true });
     removed.value = true;
+    clearDraft();
     emit("archived", props.cardKey);
     ElMessage.success("便签已归档");
   } catch (error) {
@@ -293,6 +471,7 @@ async function restoreNote() {
       isArchived: false,
     });
     removed.value = true;
+    clearDraft();
     emit("restored", props.cardKey, restored);
     ElMessage.success("便签已恢复");
   } catch (error) {
@@ -321,8 +500,9 @@ async function removeNote() {
   busy.value = true;
   cancelTimer();
   if (activeSave) await activeSave;
-  if (!persistedId.value) {
+  if (!persistedId.value || unavailable.value) {
     removed.value = true;
+    clearDraft();
     emit("discarded", props.cardKey);
     busy.value = false;
     return;
@@ -330,6 +510,7 @@ async function removeNote() {
   try {
     await noteApi.remove(persistedId.value);
     removed.value = true;
+    clearDraft();
     emit("removed", props.cardKey);
     ElMessage.success("便签已删除");
   } catch (error) {
@@ -381,18 +562,73 @@ function onTitleEnter() {
   contentEl.value?.focus();
 }
 
+async function reloadLatest() {
+  try {
+    await ElMessageBox.confirm(
+      "读取最新便签会替换本地草稿，请先复制需要保留的内容。",
+      "读取最新便签",
+      {
+        confirmButtonText: "替换草稿",
+        cancelButtonText: "继续保留",
+        type: "warning",
+      },
+    );
+  } catch {
+    return;
+  }
+  try {
+    const latest = (await noteApi.list()).find(
+      (note) => note.id === persistedId.value,
+    );
+    if (!latest) {
+      ElMessage.error("便签已不可访问，请先复制保留本地草稿。");
+      return;
+    }
+    cancelTimer();
+    if (activeSave) await activeSave;
+    conflict.value = false;
+    unavailable.value = false;
+    saveError.value = "";
+    applyValues(valuesFromNote(latest));
+    savedValues = valuesFromNote(latest);
+    applyServerNote(latest);
+    clearDraft();
+    emit("saved", props.cardKey, latest);
+  } catch (error) {
+    ElMessage.error(errorMessage(error));
+  }
+}
+
+function hasUnsavedChanges() {
+  return (
+    !removed.value &&
+    !blankDraft.value &&
+    (dirty.value || saving.value || conflict.value)
+  );
+}
+
+function onBeforeUnload(event: BeforeUnloadEvent) {
+  persistDraft();
+  if (!hasUnsavedChanges()) return;
+  event.preventDefault();
+  event.returnValue = "";
+}
+
 onMounted(() => {
+  window.addEventListener("beforeunload", onBeforeUnload);
   if (isDraft.value) void nextTick(() => contentEl.value?.focus());
 });
 
 onBeforeUnmount(() => {
+  persistDraft();
+  window.removeEventListener("beforeunload", onBeforeUnload);
   if (!removed.value && !props.archivedView) {
     cancelTimer();
-    if (dirty.value) void triggerSave();
+    if (dirty.value && !conflict.value) void triggerSave();
   }
 });
 
-defineExpose({ flush });
+defineExpose({ flush, hasUnsavedChanges });
 </script>
 
 <template>
@@ -540,6 +776,28 @@ defineExpose({ flush });
     </template>
 
     <footer class="note-foot">
+      <div v-if="draftError" class="save-conflict" role="alert">
+        {{ draftError }}
+      </div>
+      <div v-if="conflict" class="save-conflict" role="alert">
+        <template v-if="unavailable">
+          便签已不在当前列表中，已保留本地草稿并暂停保存。请先复制需要保留的内容。
+        </template>
+        <template v-else>
+          便签已被其他会话更新，已保留本地草稿并暂停保存。请先复制草稿，再读取最新内容。
+        </template>
+        <button
+          v-if="unavailable"
+          type="button"
+          class="retry-btn"
+          @click="removeNote"
+        >
+          移除草稿
+        </button>
+        <button v-else type="button" class="retry-btn" @click="reloadLatest">
+          读取最新
+        </button>
+      </div>
       <div class="note-meta">
         <span class="save-state" :class="saveState">
           <i aria-hidden="true" />
@@ -937,6 +1195,12 @@ html.dark .note-card.color-slate {
 }
 .save-state.error {
   color: #cb4f4f;
+}
+.save-conflict,
+.save-state.conflict {
+  color: #cb4f4f;
+  font-size: 11px;
+  line-height: 1.6;
 }
 html.dark .save-state.error {
   color: #ff9a92;

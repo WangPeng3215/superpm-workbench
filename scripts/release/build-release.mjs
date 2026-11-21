@@ -382,7 +382,7 @@ async function stageInstall(work, options, appStage, runtime) {
         platform: "win32-x64",
         schemaVersion: appStage.schema,
         builtAt: new Date().toISOString(),
-        updaterVersion: "1.1.2",
+        updaterVersion: "1.1.3",
       },
       null,
       2,
@@ -471,7 +471,7 @@ function writeManifest(out, options, manifest, full, update) {
     platform: "win32-x64",
     releasedAt: new Date().toISOString(),
     schemaVersion: manifest.schemaVersion,
-    minUpdaterVersion: "1.1.2",
+    minUpdaterVersion: "1.1.3",
     notes: options.notes || `superPM Workbench v${options.version}`,
     full: {
       file: full.file,
@@ -566,14 +566,15 @@ async function main() {
   );
   writeFileSync(
     join(repairStage, "使用说明.txt"),
-    `superPM MCP 更新器修复包 v${options.version}
+    `superPM 更新器修复包 v${options.version}（更新器 1.1.3）
 
 1. 在所有 AI 客户端中断开 superPM MCP 连接，停止 HTTP 服务，确认没有更新正在运行。
 2. 备份安装目录中的 bin/updater.mjs，将本包 updater.mjs 复制到该位置。
 3. 在安装目录执行：
-   Update.cmd --manifest https://github.com/${options.repo}/releases/latest/download/update-manifest.json --force
+   Update.cmd --manifest https://github.com/${options.repo}/releases/download/${options.tag}/update-manifest.json --force
 
 --force 允许结束经过身份核验的 MCP 进程，默认先等待 15 秒。
+此修复包含 HTTP/MCP 进程身份核验、实际数据目录备份与校验回滚、命令输出完整读取。
 增量更新只替换 app，不会替换旧 updater.mjs；完整安装包已包含此修复。
 手动替换 updater.mjs 不刷新 install.json 的更新器版本，请使用上面的命令行更新。完整包会同步安装元数据。
 若仍失败，请查看实际数据根 logs/update.log 和 updates/last-update.json。
@@ -582,7 +583,7 @@ async function main() {
   );
   const repairFile = `superpm-mcp-updater-repair-${options.version}.zip`;
   const repairPath = join(out, repairFile);
-  console.log("[release] 生成 MCP 更新器修复包…");
+  console.log("[release] 生成更新器修复包…");
   const repair = await createZip(repairPath, repairStage, "");
   const skillFile = `superpm-skill-${options.version}.zip`;
   const skillPath = join(out, skillFile);

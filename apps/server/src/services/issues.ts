@@ -2,7 +2,9 @@ import type Database from "better-sqlite3";
 import { z } from "zod";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { ownerFilterSql } from "../db/scope.js";
+import { currentUserScope } from "../db/scope.js";
+import { assertRequirementAccess } from "./requirement-access.js";
+import { assertResourceVersion, contentVersion } from "./requirement-files.js";
 import {
   issueAssetLinkSchema,
   issueCommentSchema,
@@ -26,7 +28,13 @@ import { RequirementDirectoryResolver } from "./requirement-directory.js";
 
 // 正文保存端点的入参校验（与通用更新分离：正文只写 md 文件，不进数据库列）
 const issueDescriptionSaveSchema = z
-  .object({ content: z.string().max(200000) })
+  .object({
+    content: z.string().max(200000),
+    expectedVersion: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/)
+      .optional(),
+  })
   .strict();
 
 export interface IssueListQuery {
@@ -56,6 +64,7 @@ interface LinkRow {
 
 interface IssueRow {
   id: number;
+  version: number;
   requirement_id: number;
   stage: Issue["stage"];
   issue_key: string | null;
@@ -82,6 +91,7 @@ interface ActivityRow {
 function toIssue(row: IssueRow, description: string): Issue {
   return {
     id: row.id,
+    version: row.version,
     requirementId: row.requirement_id,
     stage: row.stage,
     issueKey: row.issue_key,
@@ -133,7 +143,7 @@ function issueDescriptionFile(
 ): string | null {
   if (create)
     return join(
-      resolver.resolve(requirementId, "issues", true),
+      resolver.resolve(requirementId, "issues", true, "contribute"),
       `${issueId}.md`,
     );
   // 读取不得隐式建目录或补映射：目录未初始化时按"无正文"处理
@@ -252,33 +262,46 @@ export class IssueService {
     return { ...issue, activities };
   }
   create(requirementId: number, input: unknown) {
-    const requirement = this.requirements.get(requirementId);
-    const data = issueCreateSchema.parse(input);
-    const now = new Date().toISOString();
-    return this.db.transaction(() => {
-      const result = this.db
-        .prepare(
-          "INSERT INTO issues(requirement_id, stage, title, issue_type, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'pending', ?, ?)",
-        )
-        .run(
-          requirementId,
-          data.stage ?? requirement.currentStage,
-          data.title,
-          data.type ?? null,
-          now,
-          now,
-        );
-      const issueId = Number(result.lastInsertRowid);
-      // 正文直接落盘为 md 文件；写盘失败随事务回滚，不产生半成品问题
-      this.writeDescription(requirementId, issueId, data.description);
-      // 创建即写入一条系统记录，保证时间线完整（统一约定）
-      this.db
-        .prepare(
-          "INSERT INTO issue_activities(issue_id, activity_type, content, actor_type, actor_name, created_at) VALUES (?, 'system', ?, ?, ?, ?)",
-        )
-        .run(issueId, "创建问题", "system", "local-user", now);
-      return this.row(requirementId, issueId);
-    })();
+    return this.db
+      .transaction(() => {
+        assertRequirementAccess(this.db, requirementId, "contribute");
+        const requirement = this.requirements.get(requirementId);
+        const data = issueCreateSchema.parse(input);
+        const now = new Date().toISOString();
+        return this.db.transaction(() => {
+          const result = this.db
+            .prepare(
+              "INSERT INTO issues(user_id, requirement_id, stage, title, issue_type, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)",
+            )
+            .run(
+              currentUserScope()?.userId ?? 0,
+              requirementId,
+              data.stage ?? requirement.currentStage,
+              data.title,
+              data.type ?? null,
+              now,
+              now,
+            );
+          const issueId = Number(result.lastInsertRowid);
+          // 正文直接落盘为 md 文件；写盘失败随事务回滚，不产生半成品问题
+          this.writeDescription(requirementId, issueId, data.description);
+          // 创建即写入一条系统记录，保证时间线完整（统一约定）
+          this.db
+            .prepare(
+              "INSERT INTO issue_activities(user_id, issue_id, activity_type, content, actor_type, actor_name, created_at) VALUES (?, ?, 'system', ?, ?, ?, ?)",
+            )
+            .run(
+              currentUserScope()?.userId ?? 0,
+              issueId,
+              "创建问题",
+              "system",
+              this.trustedActor(requirementId, LOCAL_ACTOR).actorName,
+              now,
+            );
+          return this.row(requirementId, issueId);
+        })();
+      })
+      .immediate();
   }
   update(
     requirementId: number,
@@ -286,129 +309,254 @@ export class IssueService {
     input: unknown,
     actor: IssueActor = LOCAL_ACTOR,
   ) {
-    const issue = this.row(requirementId, issueId);
-    const patch = issueUpdateSchema.parse(input);
-    const nextSolution = patch.solution ?? issue.solution;
-    // 「已解决」必须有正式结论；暂不处理不要求解决说明
-    if (patch.status === "resolved" && !nextSolution.trim())
-      throw new DomainError(
-        "VALIDATION_ERROR",
-        "请先填写解决方案/最终结论，再将问题标记为已解决",
-        400,
-      );
-    const now = new Date().toISOString();
-    return this.db.transaction(() => {
-      // solution 变更：更新快照列并追加一条 solution 历史
-      if (patch.solution !== undefined && patch.solution !== issue.solution) {
-        this.db
-          .prepare(
-            "INSERT INTO issue_activities(issue_id, activity_type, content, actor_type, actor_name, created_at) VALUES (?, 'solution', ?, ?, ?, ?)",
-          )
-          .run(issueId, patch.solution, actor.actorType, actor.actorName, now);
-      }
-      // 状态变更：只允许在已解决时保留解决时间，离开已解决即清空
-      const nextStatus = patch.status ?? issue.status;
-      if (patch.status && patch.status !== issue.status) {
-        this.db
-          .prepare(
-            "INSERT INTO issue_activities(issue_id, activity_type, content, old_status, new_status, actor_type, actor_name, created_at) VALUES (?, 'status_change', '', ?, ?, ?, ?, ?)",
-          )
-          .run(
-            issueId,
-            issue.status,
-            patch.status,
-            actor.actorType,
-            actor.actorName,
-            now,
-          );
-      }
-      const resolvedAt =
-        nextStatus === "resolved"
-          ? issue.status === "resolved"
-            ? (issue.resolvedAt ?? now)
-            : now
-          : null;
-      // 标题/类型/阶段/状态/方案一次写回；描述单独落盘为 md 文件
-      this.db
-        .prepare(
-          "UPDATE issues SET title=?, stage=?, issue_type=?, status=?, solution=?, resolved_at=?, updated_at=? WHERE id=?",
-        )
-        .run(
-          patch.title ?? issue.title,
-          patch.stage ?? issue.stage,
-          patch.type === undefined ? issue.type : patch.type,
-          nextStatus,
-          nextSolution || null,
-          resolvedAt,
-          now,
-          issueId,
+    return this.db
+      .transaction(() => {
+        assertRequirementAccess(this.db, requirementId, "edit");
+        const trustedActor = this.trustedActor(requirementId, actor);
+        const issue = this.row(requirementId, issueId);
+        const patch = issueUpdateSchema.parse(input);
+        assertResourceVersion(
+          this.db,
+          requirementId,
+          issue.version,
+          patch.expectedVersion,
+          issue,
         );
-      if (
-        patch.description !== undefined &&
-        patch.description !== issue.description
-      )
-        this.writeDescription(requirementId, issueId, patch.description);
-      return this.row(requirementId, issueId);
-    })();
+        const nextSolution = patch.solution ?? issue.solution;
+        // 「已解决」必须有正式结论；暂不处理不要求解决说明
+        if (patch.status === "resolved" && !nextSolution.trim())
+          throw new DomainError(
+            "VALIDATION_ERROR",
+            "请先填写解决方案/最终结论，再将问题标记为已解决",
+            400,
+          );
+        const now = new Date().toISOString();
+        return this.db.transaction(() => {
+          // solution 变更：更新快照列并追加一条 solution 历史
+          if (
+            patch.solution !== undefined &&
+            patch.solution !== issue.solution
+          ) {
+            this.db
+              .prepare(
+                "INSERT INTO issue_activities(user_id, issue_id, activity_type, content, actor_type, actor_name, created_at) VALUES (?, ?, 'solution', ?, ?, ?, ?)",
+              )
+              .run(
+                currentUserScope()?.userId ?? 0,
+                issueId,
+                patch.solution,
+                trustedActor.actorType,
+                trustedActor.actorName,
+                now,
+              );
+          }
+          // 状态变更：只允许在已解决时保留解决时间，离开已解决即清空
+          const nextStatus = patch.status ?? issue.status;
+          if (patch.status && patch.status !== issue.status) {
+            this.db
+              .prepare(
+                "INSERT INTO issue_activities(user_id, issue_id, activity_type, content, old_status, new_status, actor_type, actor_name, created_at) VALUES (?, ?, 'status_change', '', ?, ?, ?, ?, ?)",
+              )
+              .run(
+                currentUserScope()?.userId ?? 0,
+                issueId,
+                issue.status,
+                patch.status,
+                trustedActor.actorType,
+                trustedActor.actorName,
+                now,
+              );
+          }
+          const resolvedAt =
+            nextStatus === "resolved"
+              ? issue.status === "resolved"
+                ? (issue.resolvedAt ?? now)
+                : now
+              : null;
+          // 标题/类型/阶段/状态/方案一次写回；描述单独落盘为 md 文件
+          this.db
+            .prepare(
+              "UPDATE issues SET title=?, stage=?, issue_type=?, status=?, solution=?, resolved_at=?, version=version+1, updated_at=? WHERE id=?",
+            )
+            .run(
+              patch.title ?? issue.title,
+              patch.stage ?? issue.stage,
+              patch.type === undefined ? issue.type : patch.type,
+              nextStatus,
+              nextSolution || null,
+              resolvedAt,
+              now,
+              issueId,
+            );
+          if (
+            patch.description !== undefined &&
+            patch.description !== issue.description
+          )
+            this.writeDescription(requirementId, issueId, patch.description);
+          return this.row(requirementId, issueId);
+        })();
+      })
+      .immediate();
   }
   // 正文直读：返回 md 文件原始内容（缺失视为空串）
   getDescription(requirementId: number, issueId: number) {
     const issue = this.row(requirementId, issueId);
-    return { content: issue.description };
+    return {
+      content: issue.description,
+      version: contentVersion(issue.description),
+    };
   }
   // 正文直写：保存 md 文件并刷新 updated_at
   saveDescription(requirementId: number, issueId: number, input: unknown) {
-    this.row(requirementId, issueId);
-    const { content } = issueDescriptionSaveSchema.parse(input);
-    const now = new Date().toISOString();
-    return this.db.transaction(() => {
-      this.writeDescription(requirementId, issueId, content);
-      this.db
-        .prepare("UPDATE issues SET updated_at=? WHERE id=?")
-        .run(now, issueId);
-      return { updatedAt: now };
-    })();
+    return this.db
+      .transaction(() => {
+        assertRequirementAccess(this.db, requirementId, "edit");
+        const issue = this.row(requirementId, issueId);
+        const { content, expectedVersion } =
+          issueDescriptionSaveSchema.parse(input);
+        assertResourceVersion(
+          this.db,
+          requirementId,
+          contentVersion(issue.description),
+          expectedVersion,
+          { content: issue.description },
+        );
+        const now = new Date().toISOString();
+        return this.db.transaction(() => {
+          this.db
+            .prepare(
+              "UPDATE issues SET version=version+1, updated_at=? WHERE id=?",
+            )
+            .run(now, issueId);
+          this.writeDescription(requirementId, issueId, content);
+          return { updatedAt: now, version: contentVersion(content) };
+        })();
+      })
+      .immediate();
   }
   comment(
     requirementId: number,
     issueId: number,
     input: unknown,
     actor: IssueActor = LOCAL_ACTOR,
+    idempotencyKey?: string,
   ) {
-    this.row(requirementId, issueId);
+    const requirement = assertRequirementAccess(
+      this.db,
+      requirementId,
+      "contribute",
+    );
     const { content } = issueCommentSchema.parse(input);
-    const now = new Date().toISOString();
-    this.db
-      .prepare(
-        "INSERT INTO issue_activities(issue_id, activity_type, content, actor_type, actor_name, created_at) VALUES (?, 'comment', ?, ?, ?, ?)",
-      )
-      .run(issueId, content, actor.actorType, actor.actorName, now);
-    this.db
-      .prepare("UPDATE issues SET updated_at=? WHERE id=?")
-      .run(now, issueId);
-    return this.detail(requirementId, issueId);
+    if (requirement.project_id !== null && !idempotencyKey?.trim())
+      throw new DomainError(
+        "IDEMPOTENCY_KEY_REQUIRED",
+        "共享讨论必须提供 Idempotency-Key",
+        400,
+      );
+    if (
+      idempotencyKey &&
+      (idempotencyKey.length > 200 || /[\r\n]/.test(idempotencyKey))
+    )
+      throw new DomainError("VALIDATION_ERROR", "Idempotency-Key 无效", 400);
+    return this.db
+      .transaction(() => {
+        assertRequirementAccess(this.db, requirementId, "contribute");
+        this.row(requirementId, issueId);
+        const userId = currentUserScope()?.userId ?? 0;
+        const command = "issue.comment";
+        const requestHash = contentVersion(
+          JSON.stringify({ requirementId, issueId, content }),
+        );
+        const useCommand =
+          requirement.project_id !== null && idempotencyKey !== undefined;
+        if (useCommand) {
+          const previous = this.db
+            .prepare(
+              "SELECT request_hash FROM project_commands WHERE actor_user_id=? AND command=? AND idempotency_key=?",
+            )
+            .get(userId, command, idempotencyKey) as
+            { request_hash: string } | undefined;
+          if (previous) {
+            if (previous.request_hash !== requestHash)
+              throw new DomainError(
+                "IDEMPOTENCY_CONFLICT",
+                "同一幂等键不能用于不同讨论",
+                409,
+              );
+            return this.detail(requirementId, issueId);
+          }
+        }
+        const now = new Date().toISOString();
+        const trustedActor = this.trustedActor(requirementId, actor);
+        const result = this.db
+          .prepare(
+            "INSERT INTO issue_activities(user_id, issue_id, activity_type, content, actor_type, actor_name, created_at) VALUES (?, ?, 'comment', ?, ?, ?, ?)",
+          )
+          .run(
+            userId,
+            issueId,
+            content,
+            trustedActor.actorType,
+            trustedActor.actorName,
+            now,
+          );
+        this.db
+          .prepare("UPDATE issues SET updated_at=? WHERE id=?")
+          .run(now, issueId);
+        if (useCommand)
+          this.db
+            .prepare(
+              "INSERT INTO project_commands(project_id,actor_user_id,command,idempotency_key,request_hash,response,created_at) VALUES (?,?,?,?,?,?,?)",
+            )
+            .run(
+              requirement.project_id,
+              userId,
+              command,
+              idempotencyKey,
+              requestHash,
+              JSON.stringify({ activityId: Number(result.lastInsertRowid) }),
+              now,
+            );
+        return this.detail(requirementId, issueId);
+      })
+      .immediate();
   }
-  remove(requirementId: number, issueId: number) {
-    // 软删除：仅标记索引行；问题与产出物的关联行随之清理（md 文件与 images/ 图片保留）
-    this.row(requirementId, issueId);
-    this.db.transaction(() => {
-      this.db
-        .prepare("UPDATE issues SET is_deleted=1, updated_at=? WHERE id=?")
-        .run(new Date().toISOString(), issueId);
-      this.db
-        .prepare("DELETE FROM issue_artifact_links WHERE issue_id=?")
-        .run(issueId);
-    })();
+  remove(requirementId: number, issueId: number, expectedVersion?: number) {
+    return this.db
+      .transaction(() => {
+        assertRequirementAccess(this.db, requirementId, "edit");
+        const issue = this.row(requirementId, issueId);
+        assertResourceVersion(
+          this.db,
+          requirementId,
+          issue.version,
+          expectedVersion,
+          issue,
+        );
+        // 软删除：仅标记索引行；问题与产出物的关联行随之清理（md 文件与 images/ 图片保留）
+        this.row(requirementId, issueId);
+        this.db.transaction(() => {
+          this.db
+            .prepare(
+              "UPDATE issues SET is_deleted=1, version=version+1, updated_at=? WHERE id=?",
+            )
+            .run(new Date().toISOString(), issueId);
+          this.db
+            .prepare("DELETE FROM issue_artifact_links WHERE issue_id=?")
+            .run(issueId);
+        })();
+      })
+      .immediate();
   }
   // 关联列表：join artifact_nodes 投影名称/类型/相对路径（节点硬删除后关联行级联清理，天然无悬空）
   listAssets(requirementId: number, issueId: number): IssueAssetListResult {
     this.row(requirementId, issueId);
-    const owner = ownerFilterSql("link");
+
     const rows = this.db
       .prepare(
-        `SELECT link.issue_id, link.artifact_id AS asset_id, link.relation_type, link.created_at AS link_created_at, node.id AS node_id, node.node_type AS node_type, node.name AS node_name, node.relative_path AS node_relative_path FROM issue_artifact_links AS link JOIN artifact_nodes AS node ON node.id = link.artifact_id AND node.user_id = link.user_id WHERE link.issue_id=?${owner.sql} ORDER BY link.created_at DESC, link.artifact_id DESC`,
+        `SELECT link.issue_id, link.artifact_id AS asset_id, link.relation_type, link.created_at AS link_created_at, node.id AS node_id, node.node_type AS node_type, node.name AS node_name, node.relative_path AS node_relative_path FROM issue_artifact_links AS link JOIN artifact_nodes AS node ON node.id = link.artifact_id WHERE link.issue_id=? AND node.requirement_id=? ORDER BY link.created_at DESC, link.artifact_id DESC`,
       )
-      .all(...([issueId, ...owner.params] as number[])) as LinkRow[];
+      .all(issueId, requirementId) as LinkRow[];
     const items = rows.map((row) => ({
       issueId: row.issue_id,
       assetId: row.asset_id,
@@ -425,59 +573,75 @@ export class IssueService {
   }
   // 建立关联：问题与 artifact 节点必须同属一个需求；重复关联被拒绝；文件夹与文件均可
   linkAsset(requirementId: number, issueId: number, input: unknown) {
-    this.row(requirementId, issueId);
-    const data = issueAssetLinkSchema.parse(input);
-    const node = this.db
-      .prepare(
-        "SELECT id, node_type, name, relative_path FROM artifact_nodes WHERE id=? AND requirement_id=?",
-      )
-      .get(data.assetId, requirementId) as
-      | {
-          id: number;
-          node_type: IssueAssetLink["asset"]["nodeType"];
-          name: string;
-          relative_path: string;
-        }
-      | undefined;
-    if (!node)
-      throw new DomainError("NOT_FOUND", "产出物不存在或不属于该需求", 404);
-    const existing = this.db
-      .prepare(
-        "SELECT 1 FROM issue_artifact_links WHERE issue_id=? AND artifact_id=?",
-      )
-      .get(issueId, data.assetId);
-    if (existing)
-      throw new DomainError("CONFLICT", "该产出物已与当前问题关联", 409);
-    const now = new Date().toISOString();
-    this.db
-      .prepare(
-        "INSERT INTO issue_artifact_links(issue_id, artifact_id, relation_type, created_at) VALUES (?, ?, ?, ?)",
-      )
-      .run(issueId, data.assetId, data.relationType, now);
-    return {
-      issueId,
-      assetId: data.assetId,
-      relationType: data.relationType,
-      createdAt: now,
-      // 关联建立时问题与资源同需求；跨阶段/跨目录引用合理，不限制节点层级
-      asset: {
-        id: node.id,
-        nodeType: node.node_type,
-        name: node.name,
-        relativePath: node.relative_path,
-      },
-    } satisfies IssueAssetLink;
+    return this.db
+      .transaction(() => {
+        assertRequirementAccess(this.db, requirementId, "contribute");
+        this.row(requirementId, issueId);
+        const data = issueAssetLinkSchema.parse(input);
+        const node = this.db
+          .prepare(
+            "SELECT id, node_type, name, relative_path FROM artifact_nodes WHERE id=? AND requirement_id=?",
+          )
+          .get(data.assetId, requirementId) as
+          | {
+              id: number;
+              node_type: IssueAssetLink["asset"]["nodeType"];
+              name: string;
+              relative_path: string;
+            }
+          | undefined;
+        if (!node)
+          throw new DomainError("NOT_FOUND", "产出物不存在或不属于该需求", 404);
+        const existing = this.db
+          .prepare(
+            "SELECT 1 FROM issue_artifact_links WHERE issue_id=? AND artifact_id=?",
+          )
+          .get(issueId, data.assetId);
+        if (existing)
+          throw new DomainError("CONFLICT", "该产出物已与当前问题关联", 409);
+        const now = new Date().toISOString();
+        this.db
+          .prepare(
+            "INSERT INTO issue_artifact_links(user_id, issue_id, artifact_id, relation_type, created_at) VALUES (?, ?, ?, ?, ?)",
+          )
+          .run(
+            currentUserScope()?.userId ?? 0,
+            issueId,
+            data.assetId,
+            data.relationType,
+            now,
+          );
+        return {
+          issueId,
+          assetId: data.assetId,
+          relationType: data.relationType,
+          createdAt: now,
+          // 关联建立时问题与资源同需求；跨阶段/跨目录引用合理，不限制节点层级
+          asset: {
+            id: node.id,
+            nodeType: node.node_type,
+            name: node.name,
+            relativePath: node.relative_path,
+          },
+        } satisfies IssueAssetLink;
+      })
+      .immediate();
   }
   // 取消关联：仅移除关联行，绝不触碰产出物本体与物理文件
   unlinkAsset(requirementId: number, issueId: number, assetId: number) {
-    this.row(requirementId, issueId);
-    const result = this.db
-      .prepare(
-        "DELETE FROM issue_artifact_links WHERE issue_id=? AND artifact_id=?",
-      )
-      .run(issueId, assetId);
-    if (result.changes === 0)
-      throw new DomainError("NOT_FOUND", "关联关系不存在", 404);
+    return this.db
+      .transaction(() => {
+        assertRequirementAccess(this.db, requirementId, "contribute");
+        this.row(requirementId, issueId);
+        const result = this.db
+          .prepare(
+            "DELETE FROM issue_artifact_links WHERE issue_id=? AND artifact_id=?",
+          )
+          .run(issueId, assetId);
+        if (result.changes === 0)
+          throw new DomainError("NOT_FOUND", "关联关系不存在", 404);
+      })
+      .immediate();
   }
   // 读取正文 md 文件；工作区未配置或文件缺失时返回空串（只读，不建目录）
   private readDescription(requirementId: number, issueId: number): string {
@@ -504,6 +668,16 @@ export class IssueService {
     );
     if (!file) return;
     writeFileSync(file, content, "utf8");
+  }
+  private trustedActor(requirementId: number, actor: IssueActor): IssueActor {
+    if (assertRequirementAccess(this.db, requirementId).project_id === null)
+      return actor;
+    const userId = currentUserScope()?.userId;
+    const user = this.db
+      .prepare("SELECT display_name FROM users WHERE id=?")
+      .get(userId) as { display_name: string } | undefined;
+    if (!user) throw new DomainError("NOT_FOUND", "操作者不存在", 404);
+    return { actorType: "user", actorName: user.display_name };
   }
   private row(requirementId: number, issueId: number) {
     this.requirements.get(requirementId);

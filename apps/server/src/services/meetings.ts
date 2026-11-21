@@ -1,4 +1,5 @@
 import type Database from "better-sqlite3";
+import { requirementVisibilitySql } from "./requirement-access.js";
 import { ownerFilterSql } from "../db/scope.js";
 import {
   meetingCreateSchema,
@@ -261,7 +262,7 @@ export class MeetingService {
       .prepare(
         `SELECT mr.meeting_id, r.id, r.requirement_no, r.name
          FROM meeting_requirements mr
-         JOIN requirements r ON r.id = mr.requirement_id AND r.user_id = mr.user_id
+         JOIN requirements r ON r.id = mr.requirement_id AND (${requirementVisibilitySql("r")})
          WHERE mr.meeting_id IN (${placeholders}) AND r.deleted_at IS NULL${owner.sql}
          ORDER BY mr.created_at ASC, r.id ASC`,
       )
@@ -283,8 +284,8 @@ export class MeetingService {
     const placeholders = ids.map(() => "?").join(", ");
     const rows = this.db
       .prepare(
-        `SELECT id FROM requirements
-         WHERE deleted_at IS NULL AND id IN (${placeholders})`,
+        `SELECT r.id FROM requirements r
+         WHERE r.deleted_at IS NULL AND r.id IN (${placeholders}) AND (${requirementVisibilitySql("r")})`,
       )
       .all(...ids) as { id: number }[];
     if (rows.length !== ids.length)

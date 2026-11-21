@@ -2,6 +2,8 @@
 
 面向使用发布包部署的 Windows x64 环境。开发环境运行方式见根目录 `README.md`。
 
+**1.3.0 升级要求：更新器至少为 1.1.3。** 旧安装的 1.1.2 及更早更新器会被清单阻止，不能直接执行此次数据库迁移。请先按下文“1.2.0 → 1.3.0”使用完整包更新程序，或使用本版本的更新器修复包后通过命令行更新。
+
 ## 1. 安装包结构
 
 ```text
@@ -16,7 +18,7 @@ superpm-workbench-<version>-win-x64/
   runtime/node.exe         自带 Node 22 运行时
   runtime/LICENSE          Node 许可证
   app/                     可替换程序目录（不保存用户数据）
-  install.json             安装版本、schema 与更新器版本（当前应用 1.2.0，更新器 1.1.2）
+  install.json             安装版本、schema 与更新器版本（当前应用 1.3.0，更新器 1.1.3）
   README.txt
 ```
 
@@ -340,6 +342,32 @@ Update.cmd --manifest https://github.com/WangPeng3215/superpm-workbench/releases
 
 已安装 1.1.2 且更新器为 1.1.2 的设备可在「系统设置 → 版本与更新」增量升级，启动时自动执行 schema 21 迁移。若设备的更新器仍为 1.1.0，请先下载本 Release 的完整安装包覆盖安装，或按本 Release 内 `superpm-mcp-updater-repair-1.2.0.zip` 中的说明修复 `bin/updater.mjs` 后更新；程序替换不会覆盖数据根。详情页签布局保存在浏览器本机存储，清除该站点的本地存储后将无法恢复先前的页签布局。
 
+### 1.2.0 → 1.3.0
+
+1.3.0 新增项目管理：成员与角色、项目需求、跨日任务、交付范围与验收、结项和项目资料。已有私人需求不会自动共享，个人会议和每日安排也不会因关联需求而自动进入项目。数据库由 schema 21 升至 27，依次新增 `0022_projects.sql`—`0027_project_documents.sql`；更新不删除旧需求、不重建用户工作区。MCP 工具数量不变，当前 stdio 入口不开放项目域。功能与限制见 [1.3.0 发布说明](releases/1.3.0.md)。
+
+**此次必须先取得更新器 1.1.3，不能让旧更新器直接执行增量升级。** 本版本修复 HTTP 停机进程核验、实际数据目录与配置继承、备份校验和失败回滚；清单要求 `minUpdaterVersion: "1.1.3"`。普通增量包仅含 `app/`，不会替换安装目录 `bin/`。
+
+推荐使用完整包完成一次程序更新：
+
+1. 保存未保存内容，在所有 AI 客户端中断开 superPM MCP，运行旧安装的 `Stop.cmd`，确认没有更新任务正在执行。用 `SuperPM.cmd --home` 记录实际数据根，独立备份该数据根与旧程序；保留自定义数据路径及 `.env` 设置。
+2. 解压 `superpm-workbench-1.3.0-win-x64.zip`，用其中的程序文件覆盖原安装目录，或使用新程序目录并同步 MCP 启动路径。保持原 `SUPERPM_HOME`／配置指针及相对路径的解析位置；不要复制、删除或迁移数据根、`workspace/` 或个人原型。完整包会同时更新 `bin/updater.mjs` 和 `install.json`。
+3. 运行 `SuperPM.cmd`，首次启动自动执行尚未应用的迁移；登录后检查项目入口、原需求与文档，以及「版本与更新」中的应用 `1.3.0`、更新器 `1.1.3`。随后重连 MCP 客户端。不要用旧程序直接打开已经迁移至 schema 27 的数据库。
+
+也可保留原安装布局，先修复更新器再执行带备份和失败回滚的增量更新：
+
+1. 完成上面的保存、停机和备份。下载本版本 `superpm-mcp-updater-repair-1.3.0.zip`。
+2. 备份原 `bin/updater.mjs`，将修复包内已打包的 `updater.mjs` 复制到该位置。不能复制仓库源码代替。
+3. 在安装目录执行固定版本清单，避免误取后续版本：
+
+```powershell
+Update.cmd --manifest https://github.com/WangPeng3215/superpm-workbench/releases/download/v1.3.0/update-manifest.json
+```
+
+仅在明确允许结束残余 MCP 时加 `--force`。**手工替换更新器不会刷新 `install.json` 的更新器版本**；命令行使用实际更新器版本校验，而应用内仍可能按旧元数据提示不足。需要同步安装元数据时使用完整包，不要把诊断显示的旧版本当作修复脚本未生效的依据。
+
+更新器按进程环境 > 数据根 `.env` > 原 app `.env` 的优先级沿用实际数据库与工作区，保留相对／绝对设置形式。回滚前验证备份，缺少或损坏时报告 `rollback-failed` 并阻止旧程序自动启动；此时保留日志、备份和失败目录，按手动恢复流程处理。
+
 常用参数：
 
 | 参数                    | 作用                                  |
@@ -412,13 +440,15 @@ D:\Apps\superPM\runtime\node.exe D:\Apps\superPM\app\apps\server\dist\backup-cli
 ```text
 release/superpm-workbench-<version>-win-x64.zip
 release/superpm-workbench-<version>-update-win-x64.zip
+release/superpm-mcp-updater-repair-<version>.zip
+release/superpm-skill-<version>.zip
 release/update-manifest.json
 ```
 
 离线或本地发布可手动执行：
 
 ```powershell
-node scripts/release/build-release.mjs --version 0.2.0 --notes "本次更新说明"
+node scripts/release/build-release.mjs --version 1.3.0 --out release/1.3.0 --notes-file docs/releases/1.3.0.md
 ```
 
 冒烟测试会解压完整包、使用自带运行时启动服务、检查健康状态与运行时状态、运行 MCP、验证更新锁拒绝、创建并校验备份、通过安装包内 `Stop.cmd` 停止服务并确认 `server.json` 清理。任一环节失败时构建失败，产物不应发布。
@@ -429,11 +459,14 @@ node scripts/release/build-release.mjs --version 0.2.0 --notes "本次更新说�
 
 ```powershell
 node scripts/release/rehearse-update.mjs `
-  --from release/0.2.0/superpm-workbench-0.2.0-win-x64.zip `
-  --manifest release/0.3.0/update-manifest.json
+  --from release/1.2.0/superpm-workbench-1.2.0-win-x64.zip `
+  --manifest release/1.3.0/update-manifest.json `
+  --updater-repair release/1.3.0/superpm-mcp-updater-repair-1.3.0.zip
 ```
 
 默认覆盖 `happy,digest,download,verify,backup,swap,migrate,health`。每个场景都会验证业务数据与工作区文件在升级或回滚后保持完整，失败场景还要求旧版本自动恢复运行、更新锁释放。脚本同时校验 `updates/update-progress.json` 与 `/api/update/status` 的阶段进度；如果源安装包自带的更新器不支持进度文件，则跳过进度断言，只验证兼容升级、`last-update.json` 与回滚结果。
+
+`--updater-repair` 用于最低更新器版本提升的发布：先确认旧安装更新器被新门槛拒绝，再仅在本场景临时安装中替换真实修复包内的更新器，执行相同升级与回滚检查。它不会更新开发者或用户的真实安装。
 
 数据根迁移与 bootstrap 演练：
 
@@ -448,7 +481,7 @@ node scripts/release/rehearse-move-home.mjs
 ## 8. 已知边界
 
 - 更新包尚未做数字签名；SHA-256 与 HTTPS 只能防传输损坏和错误来源，不能替代发布者签名。签名校验在后续阶段评估。
-- 更新器不支持自升级。清单中的 `minUpdaterVersion` 高于本地更新器时，必须重新下载完整安装包。
+- 更新器不支持自升级。清单中的 `minUpdaterVersion` 高于本地更新器时，须使用完整安装包，或按本版本修复包说明替换更新器后通过命令行更新；普通应用增量包不能完成更新器 bootstrap。
 - 发布源使用 GitHub Release；无自建更新服务器。
 - 应用内更新仅在发布安装包中可用；开发环境使用 `Update.cmd` 或完整安装包。服务重启期间页面会短暂离线，更新结果以 `updates/last-update.json` 和新版本号为准。
 - 数据根迁移只复制数据库、工作区、`.env` 与 `backups/`；`logs/`、`runtime/`、`updates/` 由新数据根重新生成。旧目录中的日志与更新缓存不会迁移，需要时请从旧目录留存。

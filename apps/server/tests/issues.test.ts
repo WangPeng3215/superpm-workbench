@@ -272,7 +272,10 @@ describe("issues API with real SQLite", () => {
       `/api/requirements/${requirement.id}/issues/${issue.id}/description`,
     );
     expect(got.statusCode).toBe(200);
-    expect(got.json()).toEqual({ content: "间距偏差 4px" });
+    expect(got.json()).toMatchObject({
+      content: "间距偏差 4px",
+      version: expect.stringMatching(/^[0-9a-f]{64}$/),
+    });
     const put = await app.inject({
       method: "PUT",
       url: `/api/requirements/${requirement.id}/issues/${issue.id}/description`,

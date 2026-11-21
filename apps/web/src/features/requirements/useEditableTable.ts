@@ -1,12 +1,13 @@
 import {
   computed,
   onMounted,
+  onActivated,
   onBeforeUnmount,
   reactive,
   ref,
   watch,
 } from "vue";
-import { onBeforeRouteLeave } from "vue-router";
+import { onBeforeRouteLeave, useRoute } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import {
   dateFields,
@@ -20,19 +21,50 @@ import {
   type StageHistory,
 } from "@superpm/shared";
 import { requirementApi } from "../../api/requirements";
-import { errorMessage } from "../../api/client";
+import { projectApi } from "../../api/projects";
+import { ApiError, errorMessage } from "../../api/client";
+import { authStore } from "../../stores/auth";
+import { registerEditingSession } from "../../stores/editing-sessions";
 import {
-  createAutoSave,
-  type AutoSave,
-  type AutoSaveState,
-} from "../meetings/autosave";
+  scopedRequirementQuery,
+  canManageRequirement,
+  projectEditingCheck,
+} from "./scope";
+import {
+  readTableDraft,
+  stageReasonRequired,
+  tableDraftKey,
+} from "./table-draft";
+import {
+  createVersionedAutoSave,
+  type VersionedSaveState,
+} from "../editing/versioned-autosave";
+import type { AutoSave } from "../meetings/autosave";
 import {
   columnDefaults,
   restoreColumns,
   columnStorageKey,
   type TableColumn,
 } from "./table-config";
-export function useEditableTable() {
+export function useEditableTable(
+  scope: { projectId?: number; readOnly?: () => boolean } = {},
+) {
+  const path = useRoute().path;
+  const accountId = authStore.user?.id;
+  const storageKey = accountId
+    ? tableDraftKey(accountId, scope.projectId)
+    : undefined;
+  const storageError = ref("");
+  let rowVersion = 1,
+    savedStage: Stage = "analysis",
+    stageNote = "";
+  let recoveredConflict = false,
+    restoreAttempted = false,
+    restoring = false,
+    disposed = false;
+  let permissionBlocked = false;
+  let permissionTimer: ReturnType<typeof setInterval> | undefined;
+  let unregisterSession: (() => void) | undefined;
   const list = ref<RequirementListResult>({
     items: [],
     total: 0,
@@ -45,7 +77,67 @@ export function useEditableTable() {
     pinning = ref<number>(),
     loadError = ref(""),
     formError = ref("");
-  const saveState = ref<AutoSaveState>("idle");
+  const projectCapabilities = ref<Record<number, boolean>>({});
+  const canEditRow = (row: Requirement) =>
+    canManageRequirement(
+      row.projectId,
+      projectCapabilities.value,
+      scope.readOnly?.(),
+    );
+  async function confirmProjectEdit(
+    projectId: number | null | undefined,
+    clearInvalidDraft = false,
+  ) {
+    if (scope.readOnly?.()) return false;
+    if (!projectId) return true;
+    try {
+      const response = await projectApi.get(projectId);
+      projectCapabilities.value[projectId] =
+        response.capabilities.canManageRequirements;
+      if (
+        !response.capabilities.canManageRequirements &&
+        editing.value &&
+        form.projectId === projectId
+      )
+        invalidate();
+      if (clearInvalidDraft && !response.capabilities.canManageRequirements)
+        clearDraft();
+      if (response.capabilities.canManageRequirements && permissionBlocked) {
+        permissionBlocked = false;
+        formError.value = "";
+        if (editing.value && !recoveredConflict && dirty.value)
+          autoSave?.schedule();
+      }
+      return response.capabilities.canManageRequirements;
+    } catch (e) {
+      projectCapabilities.value[projectId] = false;
+      if (editing.value && form.projectId === projectId) pauseProjectEditing(e);
+      if (
+        e instanceof ApiError &&
+        [403, 404].includes(e.status) &&
+        form.projectId === projectId
+      )
+        invalidate();
+      if (
+        clearInvalidDraft &&
+        e instanceof ApiError &&
+        [403, 404].includes(e.status)
+      )
+        clearDraft();
+      ElMessage.error(errorMessage(e));
+      return false;
+    }
+  }
+  const saveState = ref<VersionedSaveState>("idle");
+  function pauseProjectEditing(error: unknown) {
+    permissionBlocked = true;
+    autoSave?.cancel();
+    saveState.value =
+      error instanceof ApiError && error.status === 401
+        ? "unauthorized"
+        : "error";
+    formError.value = "无法确认项目编辑权限，自动保存已暂停，本地草稿已保留。";
+  }
   const filters = reactive<RequirementListQuery>({
     q: "",
     page: 1,
@@ -58,13 +150,69 @@ export function useEditableTable() {
   const editingId = ref<number | null>(null),
     editing = ref(false),
     initial = ref("");
-  let autoSave: AutoSave | undefined;
+  let autoSave:
+    | (Pick<AutoSave, "schedule" | "flush" | "retry" | "dispose"> & {
+        cancel: () => void;
+      })
+    | undefined;
   const blank = (): RequirementCreateParsed =>
     requirementCreateSchema.parse({
       name: "临时名称",
       proposedAt: new Date().toLocaleDateString("sv-SE"),
     });
   const form = reactive<RequirementCreateParsed>({ ...blank(), name: "" });
+  function clearDraft() {
+    if (!storageKey) return;
+    try {
+      sessionStorage.removeItem(storageKey);
+    } catch {}
+  }
+  function persistDraft() {
+    if (!storageKey || restoring || !editing.value) return;
+    try {
+      if (dirty.value)
+        sessionStorage.setItem(
+          storageKey,
+          JSON.stringify({
+            requirementId: editingId.value,
+            version: editingId.value === null ? null : rowVersion,
+            values: { ...form },
+            ...(stageNote ? { stageNote } : {}),
+          }),
+        );
+      else clearDraft();
+    } catch {
+      storageError.value =
+        "浏览器无法保存会话草稿，请勿刷新页面，并确认修改已保存到服务。";
+    }
+  }
+  async function updateField(key: string, value: unknown) {
+    if (
+      key === "currentStage" &&
+      editingId.value !== null &&
+      stageReasonRequired(savedStage, value as Stage)
+    ) {
+      try {
+        const result = await ElMessageBox.prompt(
+          "跳阶段或回退阶段需要说明原因。",
+          "阶段变更原因",
+          {
+            inputType: "textarea",
+            inputValue: stageNote,
+            inputValidator: (text: string) =>
+              !!text?.trim() || "请填写阶段变更原因",
+            confirmButtonText: "确认变更",
+            cancelButtonText: "取消",
+          },
+        );
+        if (!editing.value || disposed) return;
+        stageNote = result.value.trim();
+      } catch {
+        return;
+      }
+    } else if (key === "currentStage") stageNote = "";
+    Object.assign(form, { [key]: value });
+  }
   const columns = ref(restoreColumns()),
     showColumns = ref(false),
     dragged = ref<string>();
@@ -111,8 +259,50 @@ export function useEditableTable() {
     loading.value = true;
     loadError.value = "";
     try {
-      const result = await requirementApi.list(filters);
+      const result = await requirementApi.list(
+        scopedRequirementQuery(filters, scope.projectId),
+      );
+      const projectIds = [
+        ...new Set(
+          result.items
+            .map((row) => row.projectId)
+            .filter((id): id is number => id !== null),
+        ),
+      ];
+      const denied = new Set<number>();
+      const readOnly = new Set<number>();
+      await Promise.all(
+        projectIds.map(async (projectId) => {
+          try {
+            const capability = (await projectApi.get(projectId)).capabilities
+              .canManageRequirements;
+            projectCapabilities.value[projectId] = capability;
+            if (projectEditingCheck(capability).discardDraft)
+              readOnly.add(projectId);
+          } catch (error) {
+            projectCapabilities.value[projectId] = false;
+            if (
+              projectEditingCheck(
+                undefined,
+                error instanceof ApiError ? error : {},
+              ).discardDraft
+            )
+              denied.add(projectId);
+            else if (editing.value && form.projectId === projectId)
+              pauseProjectEditing(error);
+          }
+        }),
+      );
       if (revision !== loadRevision) return;
+      result.items = result.items.filter(
+        (row) => !row.projectId || !denied.has(row.projectId),
+      );
+      if (
+        editing.value &&
+        form.projectId &&
+        (denied.has(form.projectId) || readOnly.has(form.projectId))
+      )
+        invalidate();
       list.value = result;
       const last = Math.max(
         1,
@@ -122,7 +312,12 @@ export function useEditableTable() {
         filters.page = last;
         await load();
       }
+      if (!restoreAttempted) await restoreDraft();
     } catch (e) {
+      if (e instanceof ApiError && [403, 404].includes(e.status)) {
+        stopEditing();
+        list.value.items = [];
+      }
       if (revision === loadRevision) loadError.value = errorMessage(e);
     } finally {
       if (revision === loadRevision) loading.value = false;
@@ -156,7 +351,17 @@ export function useEditableTable() {
         editingId.value === null ? form : { ...form, name: form.name.trim() },
       ) !== initial.value,
   );
-  watch(form, () => autoSave?.schedule(), { flush: "sync" });
+  let applyingSave = false;
+  watch(
+    form,
+    () => {
+      if (!applyingSave && !restoring) {
+        persistDraft();
+        if (!recoveredConflict && !permissionBlocked) autoSave?.schedule();
+      }
+    },
+    { flush: "sync" },
+  );
   async function mayDiscard() {
     if (saving.value) return false;
     if (!dirty.value) return true;
@@ -178,16 +383,35 @@ export function useEditableTable() {
   async function cancel() {
     if (await mayDiscard()) stopEditing();
   }
-  function stopEditing() {
+  function stopEditing(removeDraft = true) {
     autoSave?.dispose();
     autoSave = undefined;
     editing.value = false;
     editingId.value = null;
     formError.value = "";
     saveState.value = "idle";
+    recoveredConflict = false;
+    permissionBlocked = false;
+    stageNote = "";
+    if (removeDraft) clearDraft();
+  }
+  function invalidate() {
+    detailRevision++;
+    if (form.projectId)
+      list.value.items = list.value.items.filter(
+        (row) => row.projectId !== form.projectId,
+      );
+    stopEditing();
+    Object.assign(form, blank(), { name: "" });
+    selected.value = undefined;
+    showDrawer.value = false;
+    loadError.value = "编辑权限已失效，已清理本页草稿，请重新读取。";
   }
   async function finishEditing() {
     if (!editing.value) return true;
+    if (recoveredConflict) return false;
+    if (form.projectId && !(await confirmProjectEdit(form.projectId)))
+      return false;
     const current = autoSave;
     if (current) {
       if (!(await current.flush()) || autoSave !== current) return false;
@@ -199,14 +423,37 @@ export function useEditableTable() {
     parentId: number | null = null,
     preset?: Partial<RequirementCreateParsed>,
   ) {
+    const projectId =
+      scope.projectId ??
+      (parentId
+        ? list.value.items.find((root) => root.id === parentId)?.projectId
+        : filters.projectId) ??
+      null;
+    if (!(await confirmProjectEdit(projectId))) return;
     if (!(await finishEditing())) return;
-    Object.assign(form, blank(), { name: "", parentId }, preset);
+    Object.assign(
+      form,
+      blank(),
+      {
+        name: "",
+        parentId,
+        projectId:
+          scope.projectId ??
+          (parentId
+            ? list.value.items.find((root) => root.id === parentId)?.projectId
+            : filters.projectId) ??
+          null,
+      },
+      preset,
+    );
     editingId.value = null;
     editing.value = true;
     initial.value = JSON.stringify(form);
     formError.value = "";
+    persistDraft();
   }
   async function edit(row: Requirement) {
+    if (!(await confirmProjectEdit(row.projectId))) return;
     if (isEditing(row) || !(await finishEditing())) return;
     let saved = requirementCreateSchema.parse(
       Object.fromEntries(
@@ -219,26 +466,54 @@ export function useEditableTable() {
     Object.assign(form, saved);
     editingId.value = row.id;
     editing.value = true;
+    rowVersion = row.version;
+    savedStage = row.currentStage;
+    recoveredConflict = false;
+    stageNote = "";
     initial.value = JSON.stringify(form);
     formError.value = "";
-    autoSave = createAutoSave({
+    autoSave = createVersionedAutoSave({
+      initial: row,
       snapshot() {
+        if (permissionBlocked) return null;
         const result = requirementCreateSchema.safeParse(form);
-        return result.success ? result.data : null;
+        return result.success ? { ...form } : null;
       },
-      async persist(snapshot) {
-        const patch = Object.fromEntries(
-          (Object.keys(snapshot) as Array<keyof RequirementCreateParsed>)
-            .filter((key) => snapshot[key] !== saved[key])
-            .map((key) => [key, snapshot[key]]),
-        ) as RequirementUpdate;
+      async persist(changes, expectedVersion) {
+        const { projectId: _projectId, ...patch } = changes;
         if (Object.keys(patch).length) {
-          const updated = await requirementApi.update(row.id, patch);
-          saved = snapshot;
-          syncSavedRow(updated);
+          const updated = await requirementApi.update(row.id, {
+            ...patch,
+            ...(patch.currentStage &&
+            stageReasonRequired(savedStage, patch.currentStage)
+              ? { stageNote }
+              : {}),
+            expectedVersion,
+          });
+          return updated;
         }
-        initial.value = JSON.stringify(snapshot);
+        return row;
+      },
+      apply(updated, snapshot) {
+        rowVersion = updated.version;
+        savedStage = updated.currentStage;
+        syncSavedRow(updated);
+        const savedFields = Object.fromEntries(
+          Object.keys(requirementCreateSchema.shape).map((key) => [
+            key,
+            updated[key as keyof Requirement],
+          ]),
+        ) as RequirementCreateParsed;
+        applyingSave = true;
+        for (const key of Object.keys(
+          snapshot,
+        ) as (keyof RequirementCreateParsed)[])
+          if (form[key] === snapshot[key])
+            Object.assign(form, { [key]: savedFields[key] });
+        applyingSave = false;
+        initial.value = JSON.stringify(savedFields);
         formError.value = "";
+        persistDraft();
       },
       onStateChange(state) {
         saveState.value = state;
@@ -246,9 +521,83 @@ export function useEditableTable() {
           formError.value = "请填写有效的需求名称和提出时间";
       },
       onError(error) {
-        formError.value = errorMessage(error);
+        if (error instanceof ApiError && error.status === 409)
+          recoveredConflict = true;
+        formError.value =
+          error instanceof ApiError && error.status === 409
+            ? "内容已被其他成员修改。本地草稿已保留，请复制需要的内容后放弃修改并重新读取。"
+            : errorMessage(error);
+        if (error instanceof ApiError && [403, 404].includes(error.status)) {
+          invalidate();
+          list.value.items = [];
+          loadError.value = "访问权限已失效，请重新进入项目。";
+        }
       },
     });
+  }
+  async function restoreDraft() {
+    restoreAttempted = true;
+    if (!storageKey || editing.value || disposed) return;
+    let stored;
+    try {
+      stored = readTableDraft(
+        sessionStorage.getItem(storageKey),
+        scope.projectId,
+      );
+    } catch {
+      storageError.value = "浏览器无法读取会话草稿，请确认修改已保存到服务。";
+      return;
+    }
+    if (!stored) return;
+    const { requirementId, values, version } = stored;
+    if (!(await confirmProjectEdit(values.projectId, true))) return;
+    try {
+      const current =
+        requirementId === null ? null : await requirementApi.get(requirementId);
+      if (disposed) return;
+      if (current && current.projectId !== values.projectId) {
+        clearDraft();
+        return;
+      }
+      restoring = true;
+      if (current) {
+        const visible = list.value.items.some(
+          (root) =>
+            root.id === current.id ||
+            root.children.some((child) => child.id === current.id),
+        );
+        if (!visible) {
+          filters.q = current.requirementNo;
+          filters.page = 1;
+          await load();
+        }
+        await edit(current);
+      } else await create(values.parentId, { projectId: values.projectId });
+      if (!editing.value || disposed) return;
+      Object.assign(form, values);
+      stageNote = stored.stageNote ?? "";
+      if (current && current.version !== version) {
+        rowVersion = version!;
+        recoveredConflict = true;
+        saveState.value = "conflict";
+        formError.value =
+          "服务器内容已有更新。本地会话草稿已恢复，请复制需要的内容后放弃修改并重新读取。";
+      }
+    } catch (error) {
+      if (error instanceof ApiError && [403, 404].includes(error.status))
+        clearDraft();
+      else loadError.value = errorMessage(error);
+    } finally {
+      restoring = false;
+      persistDraft();
+      if (
+        editing.value &&
+        editingId.value !== null &&
+        !recoveredConflict &&
+        dirty.value
+      )
+        autoSave?.schedule();
+    }
   }
   function syncSavedRow(updated: Requirement) {
     for (const root of list.value.items) {
@@ -295,6 +644,7 @@ export function useEditableTable() {
         flattened.push({
           ...form,
           id: -1,
+          version: 1,
           requirementNo: "待生成",
           pinned: false,
           createdAt: "",
@@ -312,6 +662,7 @@ export function useEditableTable() {
       flattened.unshift({
         ...form,
         id: -1,
+        version: 1,
         requirementNo: "待生成",
         pinned: false,
         createdAt: "",
@@ -370,6 +721,7 @@ export function useEditableTable() {
     }
   }
   async function retrySave() {
+    if (!(await confirmProjectEdit(form.projectId))) return;
     await autoSave?.retry();
   }
   async function setPinned(row: Requirement) {
@@ -383,6 +735,7 @@ export function useEditableTable() {
     try {
       const updated = await requirementApi.update(row.id, {
         pinned: !row.pinned,
+        expectedVersion: row.version,
       });
       syncSavedRow(updated);
       if (!row.parentId && updated.pinned) filters.page = 1;
@@ -395,11 +748,34 @@ export function useEditableTable() {
   }
   async function changeStage(stage: Stage) {
     if (!selected.value || stageSaving.value) return;
+    let reason: string | undefined;
+    if (stageReasonRequired(selected.value.currentStage, stage)) {
+      try {
+        const result = await ElMessageBox.prompt(
+          "跳阶段或回退阶段需要说明原因。",
+          "阶段变更原因",
+          {
+            inputType: "textarea",
+            inputValidator: (text: string) =>
+              !!text?.trim() || "请填写阶段变更原因",
+            confirmButtonText: "确认变更",
+            cancelButtonText: "取消",
+          },
+        );
+        reason = result.value.trim();
+      } catch {
+        return;
+      }
+    }
     stageSaving.value = true;
     const id = selected.value.id;
     const revision = detailRevision;
     try {
-      const item = await requirementApi.update(id, { currentStage: stage });
+      const item = await requirementApi.update(id, {
+        currentStage: stage,
+        ...(reason ? { stageNote: reason } : {}),
+        expectedVersion: selected.value.version,
+      });
       const records = await requirementApi.history(id);
       if (detailRevision === revision && selected.value?.id === id) {
         selected.value = item;
@@ -414,6 +790,7 @@ export function useEditableTable() {
     }
   }
   async function remove(row: Requirement) {
+    if (!(await confirmProjectEdit(row.projectId))) return;
     if (!(await finishEditing())) return;
     try {
       await ElMessageBox.confirm(`确定软删除「${row.name}」吗？`, "删除需求", {
@@ -421,7 +798,7 @@ export function useEditableTable() {
         cancelButtonText: "取消",
         type: "warning",
       });
-      await requirementApi.remove(row.id);
+      await requirementApi.remove(row.id, row.version);
       if (selected.value?.id === row.id) showDrawer.value = false;
       await load();
     } catch (e) {
@@ -429,6 +806,52 @@ export function useEditableTable() {
     }
   }
   onBeforeRouteLeave(finishEditing);
+  let revalidating = false;
+  async function revalidate() {
+    if (disposed || document.hidden || revalidating) return;
+    revalidating = true;
+    try {
+      if (editing.value && !(await confirmProjectEdit(form.projectId))) return;
+      if (editing.value && editingId.value !== null) {
+        const currentId = editingId.value;
+        const current = await requirementApi.get(currentId);
+        if (
+          disposed ||
+          editingId.value !== currentId ||
+          saveState.value === "saving"
+        )
+          return;
+        if (current.version !== rowVersion && !recoveredConflict) {
+          if (dirty.value) {
+            autoSave?.cancel();
+            recoveredConflict = true;
+            saveState.value = "conflict";
+            formError.value =
+              "服务器内容已有更新。本地草稿已保留，请复制需要的内容后放弃修改并重新读取。";
+          } else {
+            stopEditing(false);
+            await edit(current);
+          }
+        }
+      }
+      await load();
+    } catch (error) {
+      if (error instanceof ApiError && [403, 404].includes(error.status))
+        invalidate();
+      else loadError.value = errorMessage(error);
+    } finally {
+      revalidating = false;
+    }
+  }
+  function onVisible() {
+    if (!document.hidden) void revalidate();
+  }
+  watch(
+    () => scope.readOnly?.(),
+    (value) => {
+      if (value && editing.value) invalidate();
+    },
+  );
   function beforeUnload(event: BeforeUnloadEvent) {
     if (dirty.value || saving.value || saveState.value === "saving") {
       event.preventDefault();
@@ -437,11 +860,34 @@ export function useEditableTable() {
   }
   onMounted(() => {
     load();
+    if (!scope.projectId)
+      unregisterSession = registerEditingSession(path, {
+        flush: finishEditing,
+        dispose: () => stopEditing(),
+        invalidate,
+        get projectId() {
+          return form.projectId;
+        },
+      });
+    permissionTimer = setInterval(() => void revalidate(), 30_000);
     window.addEventListener("beforeunload", beforeUnload);
+    document.addEventListener("visibilitychange", onVisible);
+  });
+  let initiallyActivated = false;
+  onActivated(() => {
+    if (initiallyActivated) void revalidate();
+    initiallyActivated = true;
   });
   onBeforeUnmount(() => {
+    persistDraft();
+    disposed = true;
+    loadRevision++;
+    detailRevision++;
     autoSave?.dispose();
+    unregisterSession?.();
+    if (permissionTimer) clearInterval(permissionTimer);
     window.removeEventListener("beforeunload", beforeUnload);
+    document.removeEventListener("visibilitychange", onVisible);
   });
   return {
     list,
@@ -451,6 +897,7 @@ export function useEditableTable() {
     pinning,
     loadError,
     formError,
+    storageError,
     filters,
     dateRanges,
     expandedDates,
@@ -476,6 +923,9 @@ export function useEditableTable() {
     setPinned,
     rows,
     isEditing,
+    canEditRow,
+    updateField,
+    invalidate,
     selected,
     history,
     showDrawer,

@@ -8,7 +8,47 @@ import type {
   IssueStatus,
   IssueType,
 } from "@superpm/shared";
-import { request } from "./client";
+import { ApiError, request } from "./client";
+import { authStore } from "../stores/auth";
+const pendingComments = new Map<string, string>();
+async function appendComment(
+  id: number,
+  issueId: number,
+  content: string,
+  idempotencyKey?: string,
+) {
+  const signature = JSON.stringify([
+    authStore.user?.id ?? null,
+    id,
+    issueId,
+    content,
+  ]);
+  const key =
+    idempotencyKey ?? pendingComments.get(signature) ?? crypto.randomUUID();
+  if (!idempotencyKey) pendingComments.set(signature, key);
+  try {
+    const result = await request<IssueDetail>(
+      `/requirements/${id}/issues/${issueId}/activities`,
+      {
+        method: "POST",
+        headers: { "Idempotency-Key": key },
+        body: JSON.stringify({ content }),
+      },
+    );
+    if (!idempotencyKey) pendingComments.delete(signature);
+    return result;
+  } catch (error) {
+    if (
+      !idempotencyKey &&
+      error instanceof ApiError &&
+      error.status >= 400 &&
+      error.status < 500 &&
+      error.status !== 408
+    )
+      pendingComments.delete(signature);
+    throw error;
+  }
+}
 
 export interface IssueListParams {
   stage?: IssueStage;
@@ -23,6 +63,7 @@ export interface IssueCreatePayload {
   type?: IssueType | null;
 }
 export interface IssueUpdatePayload {
+  expectedVersion?: number;
   title?: string;
   description?: string;
   stage?: IssueStage;
@@ -56,23 +97,32 @@ export const issueApi = {
     }),
   // 问题正文（md 文件）直读/直写
   getDescription: (id: number, issueId: number) =>
-    request<{ content: string }>(
+    request<{ content: string; version: string }>(
       `/requirements/${id}/issues/${issueId}/description`,
     ),
-  saveDescription: (id: number, issueId: number, content: string) =>
+  saveDescription: (
+    id: number,
+    issueId: number,
+    content: string,
+    expectedVersion?: string,
+  ) =>
     request<{ updatedAt: string }>(
       `/requirements/${id}/issues/${issueId}/description`,
-      { method: "PUT", body: JSON.stringify({ content }) },
+      { method: "PUT", body: JSON.stringify({ content, expectedVersion }) },
     ),
-  comment: (id: number, issueId: number, content: string) =>
-    request<IssueDetail>(
-      `/requirements/${id}/issues/${issueId}/activities`,
-      { method: "POST", body: JSON.stringify({ content }) },
+  comment: (
+    id: number,
+    issueId: number,
+    content: string,
+    idempotencyKey?: string,
+  ) => appendComment(id, issueId, content, idempotencyKey),
+  remove: (id: number, issueId: number, expectedVersion?: number) =>
+    request<void>(
+      `/requirements/${id}/issues/${issueId}${expectedVersion === undefined ? "" : `?expectedVersion=${expectedVersion}`}`,
+      {
+        method: "DELETE",
+      },
     ),
-  remove: (id: number, issueId: number) =>
-    request<void>(`/requirements/${id}/issues/${issueId}`, {
-      method: "DELETE",
-    }),
   listAssets: (id: number, issueId: number) =>
     request<IssueAssetListResult>(
       `/requirements/${id}/issues/${issueId}/assets`,

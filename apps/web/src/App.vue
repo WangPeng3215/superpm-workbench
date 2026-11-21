@@ -16,16 +16,25 @@ import type { PendingOldData } from "@superpm/shared/data-root-contract";
 import { request } from "./api/client";
 import { changePassword, logout } from "./api/auth";
 import { clearAuthUser } from "./stores/auth";
-import { clearTabs, restoreTabs, syncRoute } from "./stores/tabs";
+import { clearTabs, restoreTabs, syncRoute, tabsStore } from "./stores/tabs";
 import AppSidebar from "./components/layout/AppSidebar.vue";
 import AppTopbar from "./components/layout/AppTopbar.vue";
 import GlobalToolbox from "./features/online-tools/GlobalToolbox.vue";
 import PendingCleanupActions from "./features/settings/PendingCleanupActions.vue";
+import {
+  clearEditingSessions,
+  flushEditingSessions,
+} from "./stores/editing-sessions";
 
 const route = useRoute();
 const router = useRouter();
 const connected = ref(false);
 const bareLayout = computed(() => Boolean(route.meta.public));
+const cacheTabs = computed(() =>
+  tabsStore.tabs.filter((tab) =>
+    /^\/(requirements|projects)\/\d+$/.test(tab.path),
+  ),
+);
 
 // ===== 迁移后旧数据提示（每次进入应用最多提示一次）=====
 const pendingCleanup = ref<PendingOldData | null>(null);
@@ -69,6 +78,7 @@ watch(
 );
 
 const navigation = [
+  { path: "/projects", label: "项目管理", icon: ProjectOutlined },
   { path: "/requirements", label: "需求列表", icon: ProjectOutlined },
   { path: "/optimization-points", label: "优化点", icon: BulbOutlined },
   { path: "/tasks", label: "每日任务", icon: CalendarOutlined },
@@ -95,11 +105,16 @@ async function confirmLogout() {
   } catch {
     return; // 用户取消
   }
+  if (!(await flushEditingSessions())) {
+    ElMessage.warning("仍有未保存内容，请处理保存错误或版本冲突后再退出。");
+    return;
+  }
   try {
     await logout();
   } catch {
     // 会话已失效等情况也继续清理本地状态
   }
+  clearEditingSessions();
   clearAuthUser();
   await router.push("/login");
 }
@@ -166,10 +181,10 @@ async function submitChangePassword() {
       <main class="page-content">
         <RouterView v-slot="{ Component, route: viewRoute }">
           <!-- 需求详情按路由路径缓存：切换其他功能再返回时保留页签与已打开文档 -->
-          <KeepAlive :max="10">
+          <KeepAlive v-for="tab in cacheTabs" :key="tab.key" :max="1">
             <component
               :is="Component"
-              v-if="viewRoute.meta.keepAlive"
+              v-if="viewRoute.meta.keepAlive && viewRoute.path === tab.path"
               :key="viewRoute.fullPath"
             />
           </KeepAlive>

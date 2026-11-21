@@ -7,6 +7,7 @@ import {
   cpSync,
   createWriteStream,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -34,9 +35,10 @@ import {
   resolveDataRoot,
 } from "@superpm/shared/data-root";
 import yauzl from "yauzl";
-import { stopMcpProcesses } from "@superpm/shared/mcp-runtime";
+import { parse as parseEnv } from "dotenv";
+import { processIdentity, stopMcpProcesses } from "@superpm/shared/mcp-runtime";
 
-const UPDATER_VERSION = "1.1.2";
+const UPDATER_VERSION = "1.1.3";
 const MANIFEST_MAX_BYTES = 1024 * 1024;
 const ARCHIVE_MAX_BYTES = 1024 * 1024 * 1024;
 const ARCHIVE_MAX_ENTRIES = 200000;
@@ -237,8 +239,50 @@ function appendUpdateLog(home, message) {
   }
 }
 
+function serverProcessMatch(context, state, identity) {
+  if (!identity) return null;
+  const started = Date.parse(identity.startedAt);
+  const registered = Date.parse(state.startedAt);
+  if (
+    Number.isFinite(started) &&
+    Number.isFinite(registered) &&
+    started > registered
+  )
+    return false;
+  if (identity.executable && !samePath(identity.executable, context.node))
+    return false;
+  if (
+    !Number.isFinite(started) ||
+    !Number.isFinite(registered) ||
+    !identity.executable ||
+    !identity.commandLine
+  )
+    return null;
+  // 启动器传入绝对入口。只匹配 Node 的脚本参数，不能把其他程序的后续参数当成服务入口。
+  const args = Array.from(
+    identity.commandLine.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g),
+    (match) => match[1] ?? match[2] ?? match[3],
+  );
+  const entry = args[1];
+  if (!entry || entry.startsWith("-") || !isAbsolute(entry)) return null;
+  return samePath(
+    entry,
+    join(context.appRoot, "apps", "server", "dist", "index.js"),
+  );
+}
+
 async function stopServer(context, state, force) {
   if (!state || !isAlive(state.pid)) return false;
+  const original = processIdentity(state.pid);
+  const match = serverProcessMatch(context, state, original);
+  if (match === false || !isAlive(state.pid)) {
+    context.log(`服务登记已失效，跳过 PID ${state.pid}`);
+    return false;
+  }
+  if (match !== true || state.pid === process.pid)
+    throw new Error(
+      `无法核验服务进程 ${state.pid} 的身份，未发送停止请求；请先手动停止服务后重试`,
+    );
   context.log(`正在请求服务停止（PID ${state.pid}）`);
   try {
     await fetch(`http://127.0.0.1:${state.port}/api/shutdown`, {
@@ -249,14 +293,23 @@ async function stopServer(context, state, force) {
   } catch {
     context.log("服务未响应停止请求，等待进程退出");
   }
-  const deadline = Date.now() + 10000;
+  const deadline = Date.now() + context.options.timeoutMs;
   while (Date.now() < deadline) {
     if (!isAlive(state.pid)) return true;
     await sleep(250);
   }
+  if (!isAlive(state.pid)) return true;
+  // 请求期间也可能退出并复用 PID，强杀前必须重新查询并匹配同一个进程。
+  const current = processIdentity(state.pid);
+  const currentMatch = serverProcessMatch(context, state, current);
+  if (currentMatch === false || !isAlive(state.pid)) return true;
+  if (currentMatch !== true || current.startedAt !== original.startedAt)
+    throw new Error(
+      `无法核验服务进程 ${state.pid} 的身份，未强制结束；请先手动停止服务后重试`,
+    );
   if (!force)
     throw new Error(
-      `服务进程 ${state.pid} 未在 10 秒内退出；可重试或加 --force 强制结束`,
+      `服务进程 ${state.pid} 未在 ${context.options.timeoutMs / 1000} 秒内退出；可重试或加 --force 强制结束`,
     );
   killProcess(state.pid, context);
   for (let index = 0; index < 20 && isAlive(state.pid); index++)
@@ -621,7 +674,7 @@ function runNode(context, script, args, options = {}) {
       clearTimeout(timer);
       fail(error);
     });
-    child.on("exit", (code) => {
+    child.on("close", (code) => {
       clearTimeout(timer);
       if (code === 0) done({ stdout, stderr });
       else
@@ -635,8 +688,7 @@ function runNode(context, script, args, options = {}) {
 }
 
 function createBackup(context) {
-  const database = join(context.home, "data", "superpm.sqlite");
-  if (!existsSync(database)) return null;
+  if (!existsSync(context.databasePath)) return null;
   return runNode(
     context,
     join(context.appRoot, "apps", "server", "dist", "backup-cli.js"),
@@ -646,50 +698,128 @@ function createBackup(context) {
     const output = JSON.parse(stdout.trim().split("\n").pop());
     if (!output?.ok || !output.backup?.id)
       throw new Error("更新前备份未返回有效结果");
-    return {
+    const root = join(context.home, "backups");
+    const directory = resolve(root, output.backup.id);
+    if (!isInside(root, directory) || samePath(root, directory))
+      throw new Error("更新前备份返回非法目录");
+    const backup = {
       id: output.backup.id,
-      directory: join(context.home, "backups", output.backup.id),
+      directory,
       meta: output.backup,
     };
+    readBackupSnapshot(backup);
+    return backup;
   });
 }
 
-function restoreBackup(context, backup) {
-  if (!backup) return;
+function readBackupSnapshot(backup) {
+  if (!backup)
+    throw new Error("没有更新前备份，无法安全恢复更新前数据；旧程序未重新启动");
   const meta = backup.meta;
-  const sourceDatabase = join(
-    backup.directory,
-    ...String(meta.database.file).split("/"),
-  );
-  const database = join(context.home, "data", "superpm.sqlite");
+  const restored = readJson(join(backup.directory, "meta.json"));
+  if (JSON.stringify(restored) !== JSON.stringify(meta))
+    throw new Error("更新前备份元数据发生变化，拒绝恢复");
+  const sourceDatabase = resolve(backup.directory, meta.database.file);
+  if (
+    !isInside(backup.directory, sourceDatabase) ||
+    samePath(backup.directory, sourceDatabase)
+  )
+    throw new Error("更新前备份数据库路径超出备份目录");
   if (!existsSync(sourceDatabase))
     throw new Error(`更新前备份数据库缺失：${sourceDatabase}`);
+  const snapshot = readFileSync(sourceDatabase);
+  if (
+    createHash("sha256").update(snapshot).digest("hex") !== meta.database.sha256
+  )
+    throw new Error("更新前备份数据库摘要不一致，拒绝恢复");
+  const backupWorkspace = join(backup.directory, "workspace");
+  if (!existsSync(backupWorkspace))
+    throw new Error("更新前备份工作区缺失，拒绝恢复");
+  let files = 0;
+  let bytes = 0;
+  const visit = (directory) => {
+    for (const name of readdirSync(directory)) {
+      const path = join(directory, name);
+      const info = lstatSync(path);
+      if (info.isSymbolicLink()) continue;
+      if (info.isDirectory()) visit(path);
+      else {
+        files += 1;
+        bytes += info.size;
+      }
+    }
+  };
+  visit(backupWorkspace);
+  if (files !== meta.workspace.files || bytes !== meta.workspace.bytes)
+    throw new Error("更新前备份工作区文件统计与元数据不一致，拒绝恢复");
+  const config = join(backup.directory, "config.env");
+  if (meta.configFile && !existsSync(config))
+    throw new Error("更新前备份配置缺失，拒绝恢复");
+  return { snapshot, backupWorkspace, config };
+}
+
+function restoreBackup(context, backup) {
+  const { snapshot, backupWorkspace, config } = readBackupSnapshot(backup);
+  // 目标路径在替换程序前解析并冻结，不能按默认目录或新版配置重新推算。
+  const database = context.databasePath;
   mkdirSync(dirname(database), { recursive: true });
   for (const suffix of ["", "-wal", "-shm"])
     rmSync(`${database}${suffix}`, { force: true });
-  copyFileSync(sourceDatabase, database);
-  const workspace = join(context.home, "workspace");
-  const backupWorkspace = join(backup.directory, "workspace");
-  if (existsSync(backupWorkspace)) {
-    if (existsSync(workspace)) {
-      const aside = `${workspace}.update-failed-${Date.now()}`;
-      renameSync(workspace, aside);
-      context.log(`更新失败时的数据工作区已保留：${aside}`);
-    }
-    cpSync(backupWorkspace, workspace, {
-      recursive: true,
-      force: true,
-      dereference: false,
-    });
+  writeFileSync(database, snapshot);
+  const workspace = context.workspacePath;
+  if (existsSync(workspace)) {
+    const aside = `${workspace}.update-failed-${Date.now()}`;
+    renameSync(workspace, aside);
+    context.log(`更新失败时的数据工作区已保留：${aside}`);
   }
-  const config = join(backup.directory, "config.env");
-  if (existsSync(config)) copyFileSync(config, join(context.home, ".env"));
-  const restored = readJson(join(backup.directory, "meta.json"));
-  if (
-    restored?.database?.sha256 &&
-    restored.database.sha256 !== meta.database.sha256
-  )
-    throw new Error("更新前备份元数据发生变化，拒绝恢复");
+  mkdirSync(dirname(workspace), { recursive: true });
+  cpSync(backupWorkspace, workspace, {
+    recursive: true,
+    force: true,
+    dereference: false,
+  });
+  const homeConfig = join(context.home, ".env");
+  if (backup.meta.configFile) copyFileSync(config, homeConfig);
+  else if (existsSync(homeConfig)) {
+    const aside = `${homeConfig}.update-failed-${Date.now()}`;
+    renameSync(homeConfig, aside);
+    context.log(`更新失败时的配置已保留：${aside}`);
+  }
+}
+
+function preserveStorageSettings(context) {
+  // 正式更新包不携带旧 app/.env，将旧程序的回退值留在数据根。
+  // 保留相对路径以兼容数据根移动；进程覆盖只影响本次启动。
+  const appConfig = join(context.appRoot, ".env");
+  const nextAppEnv = existsSync(appConfig)
+    ? parseEnv(readFileSync(appConfig))
+    : {};
+  const settings = [
+    ["SUPERPM_DATA_DIR", "data"],
+    ["SUPERPM_WORKSPACE_DIR", "workspace"],
+  ];
+  const additions = settings
+    .filter(
+      ([key]) =>
+        !Object.hasOwn(context.homeEnv, key) &&
+        (Object.hasOwn(context.appEnv, key) || Object.hasOwn(nextAppEnv, key)),
+    )
+    .map(([key, fallback]) => {
+      const value = context.appEnv[key] || fallback;
+      return `${key}=${JSON.stringify(value.replaceAll("\\", "/"))}`;
+    });
+  if (!additions.length) return;
+  const path = join(context.home, ".env");
+  const original = existsSync(path) ? readFileSync(path, "utf8") : "";
+  const temporary = `${path}.${process.pid}.tmp`;
+  try {
+    writeFileSync(temporary, `${original}\n${additions.join("\n")}\n`, {
+      mode: 0o600,
+    });
+    renameSync(temporary, path);
+  } finally {
+    rmSync(temporary, { force: true });
+  }
 }
 
 async function startServer(context, port) {
@@ -899,6 +1029,24 @@ async function main() {
     if (options.json) console.error(`[updater] ${message}`);
     else console.log(`[updater] ${message}`);
   };
+  const envFile = (path) =>
+    existsSync(path) ? parseEnv(readFileSync(path)) : {};
+  const appEnv = envFile(join(installRoot, "app", ".env"));
+  const homeEnv = envFile(join(home, ".env"));
+  // 与应用 loadEnv 保持相同优先级：进程 > 数据根 .env > 程序根 .env。
+  // 将解析结果传给备份、迁移和重启，避免替换程序后读取到不同的数据目标。
+  const childEnv = {
+    ...appEnv,
+    ...homeEnv,
+    ...process.env,
+    SUPERPM_HOME: home,
+    ...(resolution.source ? { SUPERPM_HOME_SOURCE: resolution.source } : {}),
+    SUPERPM_INSTALL_ROOT: installRoot,
+    SUPERPM_LEGACY_ROOT: installRoot,
+  };
+  childEnv.SUPERPM_DATA_DIR = childEnv.SUPERPM_DATA_DIR || "data";
+  childEnv.SUPERPM_WORKSPACE_DIR =
+    childEnv.SUPERPM_WORKSPACE_DIR || "workspace";
   const context = {
     options,
     home,
@@ -918,13 +1066,14 @@ async function main() {
         )
       : process.execPath,
     appRoot: join(installRoot, "app"),
-    childEnv: {
-      ...process.env,
-      SUPERPM_HOME: home,
-      ...(resolution.source ? { SUPERPM_HOME_SOURCE: resolution.source } : {}),
-      SUPERPM_INSTALL_ROOT: installRoot,
-      SUPERPM_LEGACY_ROOT: installRoot,
-    },
+    appEnv,
+    homeEnv,
+    childEnv,
+    databasePath: join(
+      resolve(home, childEnv.SUPERPM_DATA_DIR || "data"),
+      "superpm.sqlite",
+    ),
+    workspacePath: resolve(home, childEnv.SUPERPM_WORKSPACE_DIR || "workspace"),
     log,
   };
 
@@ -1165,6 +1314,7 @@ async function main() {
       throw error;
     }
     context.appRoot = join(installRoot, "app");
+    preserveStorageSettings(context);
     log(`程序目录已替换为 v${targetVersion}`);
 
     writeProgress({

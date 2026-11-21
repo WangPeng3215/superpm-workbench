@@ -16,8 +16,15 @@ import { OnlineToolService } from "./online-tools.js";
 import { MeetingService } from "./meetings.js";
 import { NoteService } from "./notes.js";
 import { OptimizationPointService } from "./optimization-points.js";
+import { ProjectService } from "./projects.js";
+import { ProjectTaskService } from "./project-tasks.js";
+import { ProjectWorklogService } from "./project-worklog.js";
+import { DeliveryService } from "./deliveries.js";
+import { ProjectDocumentService } from "./project-documents.js";
 
 export interface ServiceContainerOptions {
+  /** Deterministic business clock for integration tests; omitted in production. */
+  dailyTaskNow?: () => Date;
   databasePath?: string;
   workspacePath?: string;
 }
@@ -27,6 +34,11 @@ export interface ServiceContainer {
   workspacePath: string;
   db: Database.Database;
   requirements: RequirementService;
+  projects: ProjectService;
+  projectTasks: ProjectTaskService;
+  projectWorklog: ProjectWorklogService;
+  deliveries: DeliveryService;
+  projectDocuments: ProjectDocumentService;
   auth: AuthService;
   directories: RequirementDirectoryResolver;
   workspace: StageWorkspaceService;
@@ -64,43 +76,67 @@ export function createServiceContainer(
   // 业务服务一律拿到「作用域代理」：语句在执行时按当前登录用户自动追加 user_id 条件。
   // 迁移、种子、MCP、定时补偿等系统路径不在作用域内，行为与改造前一致。
   const db = createScopedDatabase(rawDb);
-  const directories = new RequirementDirectoryResolver(db, workspacePath);
+  const directories = new RequirementDirectoryResolver(rawDb, workspacePath);
   // 注入目录解析器：建需与优化点转换共用 createWithWorkspace（含目录初始化）
   // 仓储层用原生连接：drizzle 生成语句并自带参数绑定，隔离条件在仓储内显式书写
-  const requirements = new RequirementService(db, directories, rawDb);
+  const requirements = new RequirementService(rawDb, directories, rawDb);
   const optimizationPoints = new OptimizationPointService(db, requirements);
   const auth = new AuthService(rawDb);
   auth.ensureSeed();
-  const issues = new IssueService(db, requirements, workspacePath, directories);
+  const issues = new IssueService(
+    rawDb,
+    requirements,
+    workspacePath,
+    directories,
+  );
   const artifacts = new ArtifactService(
-    db,
+    rawDb,
     workspacePath,
     requirements,
     directories,
   );
   // 升级后清理历史遗留的 WPS/Office ~$ 临时文件索引（只删索引，不动磁盘）
   artifacts.purgeTemporaryArtifacts();
-  const dailyTasks = new DailyTaskService(db);
+  const projects = new ProjectService(rawDb);
+  const projectTasks = new ProjectTaskService(rawDb);
+  const dailyTasks = new DailyTaskService(db, {
+    now: options.dailyTaskNow,
+    projectTaskAccess: (taskId, purpose) =>
+      projectTasks.assertDailyPlanAccess(taskId, purpose),
+  });
+  const projectWorklog = new ProjectWorklogService(
+    rawDb,
+    dailyTasks,
+    options.dailyTaskNow,
+  );
+  const files = new RequirementFileService(
+    rawDb,
+    workspacePath,
+    requirements,
+    directories,
+  );
+  const deliveries = new DeliveryService(rawDb, files);
+  const projectDocuments = new ProjectDocumentService(rawDb);
   let closed = false;
   return {
     databasePath,
     workspacePath,
     db,
     requirements,
+    projects,
+    projectTasks,
+    projectWorklog,
+    deliveries,
+    projectDocuments,
     auth,
     directories,
     workspace: new StageWorkspaceService(
-      db,
+      rawDb,
       workspacePath,
       requirements,
       directories,
     ),
-    files: new RequirementFileService(
-      db,
-      workspacePath,
-      requirements,
-      directories,
-    ),
+    files,
     issues,
     artifacts,
     progress: new RequirementProgressService(

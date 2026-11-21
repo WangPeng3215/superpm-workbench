@@ -39,20 +39,34 @@ import {
 } from "@superpm/shared";
 import { issueApi, type IssueUpdatePayload } from "../../api/issues";
 import { artifactApi } from "../../api/artifacts";
-import { errorMessage } from "../../api/client";
+import { requirementApi } from "../../api/requirements";
+import { ApiError, errorMessage } from "../../api/client";
 import FileTypeIcon from "../../components/FileTypeIcon.vue";
 import InlineRichTextEditor from "./InlineRichTextEditor.vue";
 import { toDisplayHtml, toStoredHtml } from "./doc-images";
 import { documentToEditorHtml, htmlToMarkdown } from "./doc-markdown";
+import { authStore } from "../../stores/auth";
+import { resolveResourceAccessFailure } from "./resource-access";
+import {
+  clearResourceDrafts,
+  readResourceDraft,
+  resourceDraftKey,
+  writeResourceDraft,
+  type ResourceDraftScope,
+} from "./resource-draft";
 
 // 问题记录（开发文档 V1.0）：左栏台账 + 右栏详情。
 // 标题/类型/阶段/状态/描述/结论全部自动保存；描述与结论各自保存为 Markdown，
 // 图片统一落到需求根目录 images/，编辑器内写相对路径。
 const props = defineProps<{
   requirementId: number;
+  projectId: number | null;
   currentStage?: IssueStage;
 }>();
-const emit = defineEmits<{ "open-requirement": [id: number] }>();
+const emit = defineEmits<{
+  "open-requirement": [id: number];
+  "access-lost": [];
+}>();
 
 interface Snapshot {
   title: string;
@@ -119,6 +133,8 @@ const snapshot = ref<Snapshot | null>(null);
 const saving = ref(false);
 const saveFailed = ref(false);
 const saveError = ref("");
+const saveFrozen = ref(false);
+const storageError = ref("");
 const lastSavedAt = ref<string | null>(null);
 const titleEl = ref<HTMLTextAreaElement>();
 const descEditor = ref<InstanceType<typeof InlineRichTextEditor>>();
@@ -127,6 +143,75 @@ let titleObserver: ResizeObserver | undefined;
 let detailSeq = 0;
 let saveTimer: number | undefined;
 let saveTask: Promise<boolean> | undefined;
+let invalidated = false;
+let hydrating = false;
+let draftVersion: number | undefined;
+const accountId = authStore.user?.id;
+const draftScope: ResourceDraftScope | undefined =
+  accountId === undefined
+    ? undefined
+    : {
+        accountId,
+        projectId: props.projectId,
+        requirementId: props.requirementId,
+        kind: "issue",
+      };
+function currentDraft(): Snapshot {
+  return {
+    title: titleDraft.value,
+    type: typeDraft.value,
+    stage: stageDraft.value,
+    status: statusDraft.value,
+    descHtml: descHtml.value,
+    solHtml: solHtml.value,
+  };
+}
+function isSnapshot(value: unknown): value is Snapshot {
+  if (!value || typeof value !== "object") return false;
+  const draft = value as Record<string, unknown>;
+  return (
+    typeof draft.title === "string" &&
+    draft.title.length <= 200 &&
+    typeof draft.descHtml === "string" &&
+    typeof draft.solHtml === "string" &&
+    (draft.type === null ||
+      (issueTypes as readonly unknown[]).includes(draft.type)) &&
+    (stages as readonly unknown[]).includes(draft.stage) &&
+    (issueStatuses as readonly unknown[]).includes(draft.status)
+  );
+}
+function applyDraft(draft: Snapshot) {
+  titleDraft.value = draft.title;
+  typeDraft.value = draft.type;
+  stageDraft.value = draft.stage;
+  statusDraft.value = draft.status;
+  descHtml.value = draft.descHtml;
+  solHtml.value = draft.solHtml;
+}
+function persistLocalDraft() {
+  if (
+    invalidated ||
+    hydrating ||
+    !detail.value ||
+    !snapshot.value ||
+    !draftScope ||
+    draftVersion === undefined
+  )
+    return;
+  try {
+    const key = resourceDraftKey(draftScope, detail.value.id);
+    if (!dirty.value && !saveFrozen.value) sessionStorage.removeItem(key);
+    else writeResourceDraft(sessionStorage, key, draftVersion, currentDraft());
+    storageError.value = "";
+  } catch {
+    storageError.value = "浏览器无法保存会话草稿；刷新或离开前请复制本地内容。";
+  }
+}
+watch(
+  [titleDraft, typeDraft, stageDraft, statusDraft, descHtml, solHtml],
+  persistLocalDraft,
+  { flush: "sync" },
+);
 
 // ===== 关联产出物 =====
 const assets = ref<IssueAssetLink[]>([]);
@@ -174,6 +259,7 @@ const showFullEmpty = computed(
   () =>
     !listLoading.value &&
     !listError.value &&
+    !detailError.value &&
     !hasFilters.value &&
     totalCount.value === 0,
 );
@@ -290,6 +376,7 @@ function htmlHasContent(html: string) {
 async function loadList(
   options: { quiet?: boolean; selectFirst?: boolean } = {},
 ) {
+  if (invalidated) return;
   const seq = ++listSeq;
   if (!options.quiet) {
     listLoading.value = true;
@@ -316,6 +403,7 @@ async function loadList(
     }
   } catch (error) {
     if (seq !== listSeq) return;
+    if (await handleAccessLoss(error, null)) return;
     const message = errorMessage(error);
     if (options.quiet) return;
     if (!issues.value.length) listError.value = message;
@@ -363,6 +451,7 @@ function clearFilters() {
 
 // ===== 详情加载 =====
 async function openIssue(id: number, options: { force?: boolean } = {}) {
+  if (invalidated) return;
   if (!options.force && selectedId.value === id && detail.value) {
     mobileDetailOpen.value = true;
     return;
@@ -389,13 +478,17 @@ async function openIssue(id: number, options: { force?: boolean } = {}) {
     await loadAssets();
   } catch (error) {
     if (seq !== detailSeq) return;
+    if (await handleAccessLoss(error, id)) return;
     detailError.value = errorMessage(error);
     ElMessage.error(detailError.value);
   } finally {
     if (seq === detailSeq) detailLoading.value = false;
   }
 }
-function hydrate(loaded: IssueDetail) {
+function hydrate(loaded: IssueDetail, discardDraft = false) {
+  hydrating = true;
+  clearSaveTimer();
+  saveFrozen.value = false;
   detail.value = loaded;
   titleDraft.value = loaded.title;
   typeDraft.value = loaded.type;
@@ -423,6 +516,38 @@ function hydrate(loaded: IssueDetail) {
   saveFailed.value = false;
   saveError.value = "";
   saving.value = false;
+  draftVersion = loaded.version;
+  try {
+    if (draftScope) {
+      const key = resourceDraftKey(draftScope, loaded.id);
+      if (discardDraft) sessionStorage.removeItem(key);
+      else {
+        const draft = readResourceDraft(
+          sessionStorage,
+          key,
+          loaded.version,
+          isSnapshot,
+        );
+        if (draft) {
+          applyDraft(draft.values);
+          draftVersion = Number(draft.version);
+          if (draft.conflict) {
+            saveFrozen.value = true;
+            saveFailed.value = true;
+            saveError.value =
+              "服务器问题已更新；会话草稿已恢复并暂停保存，请复制后读取最新内容。";
+          }
+        }
+      }
+    }
+    storageError.value = "";
+  } catch {
+    storageError.value = "浏览器无法读取会话草稿；离开前请复制本地内容。";
+  } finally {
+    hydrating = false;
+  }
+  persistLocalDraft();
+  if (dirty.value && !saveFrozen.value) scheduleSave();
   // 详情在窄屏可能下一帧才从隐藏切到显示，用 ResizeObserver 在真实布局后补量标题高度
   void nextTick(() => {
     resizeTitle();
@@ -473,11 +598,13 @@ function acknowledge(
   };
 }
 async function persist(): Promise<boolean> {
+  if (invalidated) return true;
+  if (saveFrozen.value) return false;
   const current = detail.value;
   if (!current) return true;
   const issueId = current.id;
   try {
-    while (dirty.value && detail.value?.id === issueId) {
+    while (!invalidated && dirty.value && detail.value?.id === issueId) {
       if (!titleDraft.value.trim()) {
         saveFailed.value = true;
         saveError.value = "问题标题不能为空";
@@ -499,11 +626,11 @@ async function persist(): Promise<boolean> {
       saveFailed.value = false;
       saveError.value = "";
       try {
-        const updated = await issueApi.update(
-          props.requirementId,
-          issueId,
-          patch,
-        );
+        const updated = await issueApi.update(props.requirementId, issueId, {
+          ...patch,
+          expectedVersion: detail.value?.version,
+        });
+        if (invalidated) return false;
         if (detail.value?.id !== issueId) return true;
         acknowledge(patch, sentDescHtml, sentSolHtml);
         detail.value = {
@@ -517,11 +644,17 @@ async function persist(): Promise<boolean> {
           solution: updated.solution,
           resolvedAt: updated.resolvedAt,
           updatedAt: updated.updatedAt,
+          version: updated.version,
         };
+        draftVersion = updated.version;
+        persistLocalDraft();
         lastSavedAt.value = updated.updatedAt;
         patchListRow(updated);
         scheduleQuietRefresh();
       } catch (error) {
+        if (await handleAccessLoss(error, issueId)) return false;
+        if (error instanceof ApiError && [401, 409].includes(error.status))
+          saveFrozen.value = true;
         if (detail.value?.id === issueId) {
           saveFailed.value = true;
           saveError.value = errorMessage(error);
@@ -536,11 +669,12 @@ async function persist(): Promise<boolean> {
 }
 function saveNow(): Promise<boolean> {
   clearSaveTimer();
+  if (invalidated) return Promise.resolve(true);
   if (!saveTask) {
     saveTask = (async () => {
       let saved = await persist();
       // 上一轮落盘期间产生的新修改（枚举切换不走防抖）在同一任务内继续保存
-      while (saved && dirty.value) saved = await persist();
+      while (saved && !invalidated && dirty.value) saved = await persist();
       return saved;
     })().finally(() => {
       saveTask = undefined;
@@ -550,7 +684,7 @@ function saveNow(): Promise<boolean> {
 }
 function scheduleSave() {
   clearSaveTimer();
-  if (!detail.value) return;
+  if (invalidated || saveFrozen.value || !detail.value) return;
   saveTimer = window.setTimeout(() => {
     saveTimer = undefined;
     void saveNow();
@@ -580,6 +714,7 @@ function patchListRow(updated: Issue) {
 // 页签切换/离开前调用：先等图片上传，再落盘所有未保存字段
 async function flush(): Promise<boolean> {
   clearSaveTimer();
+  if (invalidated) return true;
   if (!detail.value) return true;
   await Promise.allSettled([
     descEditor.value?.waitForUpload(),
@@ -591,7 +726,164 @@ async function flush(): Promise<boolean> {
   }
   return saveNow();
 }
-defineExpose({ flush });
+function invalidate() {
+  invalidated = true;
+  if (draftScope) {
+    try {
+      clearResourceDrafts(sessionStorage, draftScope);
+    } catch {
+      /* Storage may be unavailable. */
+    }
+  }
+  listSeq += 1;
+  detailSeq += 1;
+  clearSaveTimer();
+  if (refreshTimer) window.clearTimeout(refreshTimer);
+  if (searchTimer) window.clearTimeout(searchTimer);
+  detail.value = undefined;
+  snapshot.value = null;
+  issues.value = [];
+  assets.value = [];
+  artifactTree.value = [];
+  titleDraft.value = "";
+  descHtml.value = "";
+  solHtml.value = "";
+  createDesc.value = "";
+  createTitle.value = "";
+  linkDialogVisible.value = false;
+  createOpen.value = false;
+}
+async function handleAccessLoss(
+  error: unknown,
+  issueId: number | null | undefined = detail.value?.id ?? selectedId.value,
+  auxiliaryResource = false,
+) {
+  let result = await resolveResourceAccessFailure(error, () =>
+    requirementApi.get(props.requirementId),
+  );
+  if (result === "unrelated") return false;
+  if (result === "resource-missing" && auxiliaryResource) {
+    if (issueId == null) {
+      ElMessage.error(errorMessage(error));
+      return true;
+    }
+    try {
+      await issueApi.detail(props.requirementId, issueId);
+      if (!invalidated) ElMessage.error(errorMessage(error));
+      return true;
+    } catch (issueError) {
+      result = await resolveResourceAccessFailure(issueError, () =>
+        requirementApi.get(props.requirementId),
+      );
+      if (result === "unrelated") result = "unverified";
+    }
+  }
+  if (invalidated) return true;
+  if (result === "requirement-lost") {
+    invalidate();
+    emit("access-lost");
+    return true;
+  }
+  const currentResource =
+    issueId == null ||
+    detail.value?.id === issueId ||
+    selectedId.value === issueId;
+  if (result === "unverified") {
+    if (!currentResource) return true;
+    clearSaveTimer();
+    persistLocalDraft();
+    saveFrozen.value = true;
+    saveFailed.value = true;
+    saveError.value =
+      "暂时无法确认需求访问权限，已保留会话草稿并暂停保存，请稍后重试。";
+    if (!detail.value) detailError.value = saveError.value;
+    return true;
+  }
+  if (issueId == null) {
+    listError.value = errorMessage(error);
+    return true;
+  }
+  if (draftScope) {
+    try {
+      sessionStorage.removeItem(resourceDraftKey(draftScope, issueId));
+    } catch {
+      storageError.value = "无法清理该问题的会话草稿，请关闭当前标签页。";
+    }
+  }
+  const removed = issues.value.find((issue) => issue.id === issueId);
+  issues.value = issues.value.filter((issue) => issue.id !== issueId);
+  if (removed)
+    statusCounts.value = {
+      ...statusCounts.value,
+      [removed.status]: Math.max(0, statusCounts.value[removed.status] - 1),
+    };
+  if (!currentResource) {
+    ElMessage.error(errorMessage(error));
+    return true;
+  }
+  clearSaveTimer();
+  hydrating = true;
+  detail.value = undefined;
+  snapshot.value = null;
+  draftVersion = undefined;
+  titleDraft.value = "";
+  descHtml.value = "";
+  solHtml.value = "";
+  hydrating = false;
+  assets.value = [];
+  artifactTree.value = [];
+  linkDialogVisible.value = false;
+  detailError.value = errorMessage(error);
+  ElMessage.error(detailError.value);
+  return true;
+}
+
+defineExpose({ flush, invalidate });
+async function copyIssueDraft() {
+  try {
+    await navigator.clipboard.writeText(
+      JSON.stringify(
+        {
+          title: titleDraft.value,
+          description: descHtml.value,
+          solution: solHtml.value,
+          type: typeDraft.value,
+          stage: stageDraft.value,
+          status: statusDraft.value,
+        },
+        null,
+        2,
+      ),
+    );
+    ElMessage.success("问题草稿已复制");
+  } catch {
+    ElMessage.error("复制失败，请手动复制需要保留的内容。");
+  }
+}
+async function reloadIssue() {
+  const issueId = detail.value?.id;
+  if (!issueId) return;
+  try {
+    await ElMessageBox.confirm(
+      "读取最新问题会替换本地草稿，请先复制需要保留的内容。",
+      "读取最新内容",
+      {
+        confirmButtonText: "替换草稿",
+        cancelButtonText: "继续保留",
+        type: "warning",
+      },
+    );
+  } catch {
+    return;
+  }
+  try {
+    const loaded = await issueApi.detail(props.requirementId, issueId);
+    if (!invalidated && detail.value?.id === issueId) hydrate(loaded, true);
+  } catch (error) {
+    if (!(await handleAccessLoss(error, issueId)))
+      ElMessage.error(errorMessage(error));
+  }
+}
 
 // ===== 标题 / 枚举字段 =====
 function onTitleEnter() {
@@ -700,6 +992,7 @@ async function submitCreate() {
       stage: createStage.value,
       description: createDesc.value.trim(),
     });
+    if (invalidated) return;
     createOpen.value = false;
     ElMessage.success("问题已创建");
     statusFilter.value = "";
@@ -712,6 +1005,7 @@ async function submitCreate() {
     await loadList({ quiet: true });
     await openIssue(created.id, { force: true });
   } catch (error) {
+    if (await handleAccessLoss(error, detail.value?.id, true)) return;
     ElMessage.error(errorMessage(error));
   } finally {
     creating.value = false;
@@ -738,7 +1032,18 @@ async function removeIssue(issueId = detail.value?.id) {
   const deletingCurrent = detail.value?.id === issueId;
   if (deletingCurrent) clearSaveTimer();
   try {
-    await issueApi.remove(props.requirementId, issueId);
+    const expectedVersion = deletingCurrent
+      ? detail.value?.version
+      : issues.value.find((issue) => issue.id === issueId)?.version;
+    await issueApi.remove(props.requirementId, issueId, expectedVersion);
+    if (invalidated) return;
+    if (draftScope) {
+      try {
+        sessionStorage.removeItem(resourceDraftKey(draftScope, issueId));
+      } catch {
+        storageError.value = "无法清理已删除问题的会话草稿，请关闭当前标签页。";
+      }
+    }
     ElMessage.success("问题已删除");
     if (deletingCurrent) {
       detail.value = undefined;
@@ -749,6 +1054,7 @@ async function removeIssue(issueId = detail.value?.id) {
     }
     await loadList();
   } catch (error) {
+    if (await handleAccessLoss(error, issueId)) return;
     ElMessage.error(errorMessage(error));
   }
 }
@@ -767,6 +1073,7 @@ async function loadAssets() {
     const result = await issueApi.listAssets(props.requirementId, current.id);
     if (detail.value?.id === current.id) assets.value = result.items;
   } catch (error) {
+    if (await handleAccessLoss(error, current.id, true)) return;
     ElMessage.error(errorMessage(error));
   }
 }
@@ -777,6 +1084,7 @@ async function unlink(link: IssueAssetLink) {
     await issueApi.unlinkAsset(props.requirementId, current.id, link.assetId);
     await loadAssets();
   } catch (error) {
+    if (await handleAccessLoss(error, current.id, true)) return;
     ElMessage.error(errorMessage(error));
   }
 }
@@ -808,10 +1116,13 @@ async function openLinkDialog() {
   checkedIds.value = [];
   expandedIds.value = new Set();
   try {
-    artifactTree.value = await loadTreeLevel(null);
+    const loaded = await loadTreeLevel(null);
+    if (invalidated) return;
+    artifactTree.value = loaded;
     for (const item of artifactTree.value)
       if (item.nodeType === "folder") expandedIds.value.add(item.id);
   } catch (error) {
+    if (await handleAccessLoss(error, detail.value?.id, true)) return;
     ElMessage.error(errorMessage(error));
   } finally {
     treeLoading.value = false;
@@ -867,6 +1178,7 @@ async function confirmLink() {
     linkDialogVisible.value = false;
     await loadAssets();
   } catch (error) {
+    if (await handleAccessLoss(error, current.id, true)) return;
     ElMessage.error(errorMessage(error));
   } finally {
     linkSaving.value = false;
@@ -875,6 +1187,7 @@ async function confirmLink() {
 
 // ===== 生命周期 =====
 function onBeforeUnload(event: BeforeUnloadEvent) {
+  persistLocalDraft();
   if (!dirty.value) return;
   event.preventDefault();
   event.returnValue = "";
@@ -888,13 +1201,16 @@ onMounted(() => {
   void loadList();
 });
 onBeforeUnmount(() => {
+  persistLocalDraft();
+  invalidated = true;
+  listSeq += 1;
+  detailSeq += 1;
   window.removeEventListener("beforeunload", onBeforeUnload);
   window.removeEventListener("resize", onWindowResize);
   titleObserver?.disconnect();
   if (refreshTimer) window.clearTimeout(refreshTimer);
   if (searchTimer) window.clearTimeout(searchTimer);
   clearSaveTimer();
-  void flush();
 });
 </script>
 <template>
@@ -1069,6 +1385,12 @@ onBeforeUnmount(() => {
             列表
           </button>
 
+          <el-alert
+            v-if="storageError"
+            :title="storageError"
+            type="warning"
+            :closable="false"
+          />
           <div class="detail-title-row">
             <textarea
               ref="titleEl"
@@ -1095,7 +1417,7 @@ onBeforeUnmount(() => {
                 <span class="save-dot" aria-hidden="true"></span>
                 <span class="save-text">{{ saveLabel }}</span>
                 <button
-                  v-if="saveUi === 'failed'"
+                  v-if="saveUi === 'failed' && !saveFrozen"
                   class="retry-button"
                   type="button"
                   @click="saveNow()"
@@ -1103,6 +1425,12 @@ onBeforeUnmount(() => {
                   重试
                 </button>
               </span>
+              <el-button v-if="saveFrozen" size="small" @click="copyIssueDraft"
+                >复制草稿</el-button
+              >
+              <el-button v-if="saveFrozen" size="small" @click="reloadIssue"
+                >读取最新</el-button
+              >
               <el-dropdown trigger="click" @command="onDetailCommand">
                 <button
                   class="detail-more"

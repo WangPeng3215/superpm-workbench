@@ -1,4 +1,5 @@
 import {
+  blob,
   integer,
   sqliteTable,
   text,
@@ -9,6 +10,9 @@ import type {
   DailyTimeEntryEndReason,
   DailyTimeEntryStatus,
   IssueType,
+  ProjectTaskAction,
+  ProjectTaskStatus,
+  ProjectTaskType,
   Requirement,
   RequirementFile,
   Stage,
@@ -38,6 +42,11 @@ export const requirements = sqliteTable("requirements", {
   deletedAt: text("deleted_at"),
   // 归属用户（迁移 0020）：数据隔离与超管可见性的依据
   userId: integer("user_id").notNull().default(0),
+  projectId: integer("project_id"),
+  assigneeUserId: integer("assignee_user_id"),
+  developerUserId: integer("developer_user_id"),
+  acceptanceCriteria: text("acceptance_criteria").notNull().default(""),
+  version: integer("version").notNull().default(1),
 });
 export const stageHistory = sqliteTable("requirement_history", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -47,12 +56,14 @@ export const stageHistory = sqliteTable("requirement_history", {
   fromStage: text("from_stage").$type<Stage>().notNull(),
   toStage: text("to_stage").$type<Stage>().notNull(),
   actor: text("actor").notNull(),
+  actorUserId: integer("actor_user_id"),
   note: text("note").notNull(),
   createdAt: text("created_at").notNull(),
   userId: integer("user_id").notNull().default(0),
 });
 export const requirementFiles = sqliteTable("requirement_files", {
   id: integer("id").primaryKey({ autoIncrement: true }),
+  version: integer("version").notNull().default(1),
   requirementId: integer("requirement_id")
     .notNull()
     .references(() => requirements.id),
@@ -91,6 +102,7 @@ export const requirementFiles = sqliteTable("requirement_files", {
 // 问题表：stage 为产生阶段，所有需求阶段均可记录
 export const issues = sqliteTable("issues", {
   id: integer("id").primaryKey({ autoIncrement: true }),
+  version: integer("version").notNull().default(1),
   requirementId: integer("requirement_id")
     .notNull()
     .references(() => requirements.id),
@@ -186,6 +198,7 @@ export const appMeta = sqliteTable("app_meta", {
 // 需求知识库：文件/目录索引（迁移 0007）；磁盘是文件存在性的依据，本表只存元数据
 export const artifactNodes = sqliteTable("artifact_nodes", {
   id: integer("id").primaryKey({ autoIncrement: true }),
+  version: integer("version").notNull().default(1),
   requirementId: integer("requirement_id")
     .notNull()
     .references(() => requirements.id),
@@ -214,6 +227,7 @@ export const artifactNodes = sqliteTable("artifact_nodes", {
 // 需求知识库：外部链接（迁移 0007）；只存 SQLite 记录，不在磁盘创建同名文件
 export const artifactLinks = sqliteTable("artifact_links", {
   id: integer("id").primaryKey({ autoIncrement: true }),
+  version: integer("version").notNull().default(1),
   requirementId: integer("requirement_id")
     .notNull()
     .references(() => requirements.id),
@@ -231,6 +245,7 @@ export const requirementAudit = sqliteTable("requirement_audit", {
     .notNull()
     .references(() => requirements.id),
   action: text("action").notNull(),
+  actorUserId: integer("actor_user_id"),
   payload: text("payload").notNull(),
   createdAt: text("created_at").notNull(),
   userId: integer("user_id").notNull().default(0),
@@ -273,6 +288,7 @@ export const dailyTasks = sqliteTable("daily_tasks", {
   description: text("description").notNull().default(""),
   planDate: text("plan_date").notNull(),
   requirementId: integer("requirement_id").references(() => requirements.id),
+  projectTaskId: integer("project_task_id"),
   plannedStartAt: text("planned_start_at"),
   plannedEndAt: text("planned_end_at"),
   estimatedMinutes: integer("estimated_minutes").notNull(),
@@ -288,6 +304,8 @@ export const dailyTimeEntries = sqliteTable("daily_time_entries", {
   taskId: integer("task_id")
     .notNull()
     .references(() => dailyTasks.id),
+  projectId: integer("project_id"),
+  projectTaskId: integer("project_task_id"),
   startedAt: text("started_at").notNull(),
   endedAt: text("ended_at"),
   durationSeconds: integer("duration_seconds").notNull().default(0),
@@ -298,6 +316,92 @@ export const dailyTimeEntries = sqliteTable("daily_time_entries", {
   endReason: text("end_reason").$type<DailyTimeEntryEndReason>(),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
+});
+// 项目共享任务；授权始终由 active 项目成员关系判断，不使用个人 user_id 列。
+export const projectTasks = sqliteTable("project_tasks", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  projectId: integer("project_id").notNull(),
+  requirementId: integer("requirement_id"),
+  title: text("title").notNull(),
+  description: text("description").notNull().default(""),
+  type: text("type").$type<ProjectTaskType>().notNull(),
+  assigneeUserId: integer("assignee_user_id").notNull(),
+  confirmerUserId: integer("confirmer_user_id").notNull(),
+  dueDate: text("due_date"),
+  status: text("status").$type<ProjectTaskStatus>().notNull().default("pending"),
+  previousStatus: text("previous_status").$type<ProjectTaskStatus>(),
+  version: integer("version").notNull().default(1),
+  createdBy: integer("created_by").notNull(),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+export const projectTaskSubmissions = sqliteTable("project_task_submissions", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  taskId: integer("task_id").notNull().references(() => projectTasks.id),
+  submittedBy: integer("submitted_by").notNull(),
+  summary: text("summary").notNull().default(""),
+  evidenceJson: text("evidence_json").notNull().default("[]"),
+  createdAt: text("created_at").notNull(),
+});
+export const projectTaskReviews = sqliteTable("project_task_reviews", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  submissionId: integer("submission_id").notNull().unique().references(() => projectTaskSubmissions.id),
+  reviewerUserId: integer("reviewer_user_id").notNull(),
+  result: text("result").$type<"approved" | "returned">().notNull(),
+  reason: text("reason").notNull().default(""),
+  createdAt: text("created_at").notNull(),
+});
+export const projectTaskActions = sqliteTable("project_task_actions", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  taskId: integer("task_id").notNull().references(() => projectTasks.id),
+  action: text("action").$type<ProjectTaskAction | "created" | "edit">().notNull(),
+  actorUserId: integer("actor_user_id").notNull(),
+  actorNameSnapshot: text("actor_name_snapshot").notNull(),
+  reason: text("reason").notNull().default(""),
+  payloadJson: text("payload_json").notNull().default("{}"),
+  createdAt: text("created_at").notNull(),
+});
+export const deliveryAcceptanceRounds = sqliteTable("delivery_acceptance_rounds", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  deliveryId: integer("delivery_id").notNull(),
+  scopeVersionId: integer("scope_version_id").notNull(),
+  roundNo: integer("round_no").notNull(),
+  deliveryVersion: integer("delivery_version").notNull(),
+  status: text("status").$type<"pending" | "passed" | "failed" | "superseded">().notNull(),
+  deliveryNotes: text("delivery_notes").notNull().default(""),
+  submittedBy: integer("submitted_by").notNull(),
+  submittedAt: text("submitted_at").notNull(),
+  completedBy: integer("completed_by"),
+  completedAt: text("completed_at"),
+});
+export const deliveryAcceptanceEvidence = sqliteTable("delivery_acceptance_evidence", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  roundId: integer("round_id").notNull().references(() => deliveryAcceptanceRounds.id),
+  kind: text("kind").$type<"text" | "url" | "file">().notNull(),
+  sourceKind: text("source_kind").$type<"manual" | "external_url" | "requirement_file">().notNull(),
+  sourceResourceId: integer("source_resource_id"),
+  label: text("label").notNull(),
+  content: text("content"),
+  url: text("url"),
+  mimeType: text("mime_type"),
+  snapshotContent: blob("snapshot_content", { mode: "buffer" }),
+  immutable: integer("immutable", { mode: "boolean" }).notNull().default(false),
+  contentHash: text("content_hash"),
+  createdBy: integer("created_by").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+export const deliveryAcceptanceItems = sqliteTable("delivery_acceptance_items", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  roundId: integer("round_id").notNull().references(() => deliveryAcceptanceRounds.id),
+  scopeItemId: integer("scope_item_id").notNull(),
+  requirementId: integer("requirement_id").notNull(),
+  requirementNo: text("requirement_no").notNull(),
+  requirementName: text("requirement_name").notNull(),
+  acceptanceCriteria: text("acceptance_criteria").notNull().default(""),
+  result: text("result").$type<"passed" | "failed">().notNull(),
+  reason: text("reason").notNull().default(""),
+  recordedBy: integer("recorded_by").notNull(),
+  recordedAt: text("recorded_at").notNull(),
 });
 // 手动修正审计：只追加
 export const dailyTimeEntryAudits = sqliteTable("daily_time_entry_audits", {
