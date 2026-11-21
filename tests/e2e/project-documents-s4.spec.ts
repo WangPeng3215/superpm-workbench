@@ -77,9 +77,12 @@ test("复制私人会议后生成独立项目纪要并记录动态", async ({ pa
 
   const confirm = page.getByRole("dialog", { name: "复制为项目纪要" });
   await confirm.getByRole("button", { name: "确认复制", exact: true }).click();
+  await expect(confirm).toBeHidden();
+  await expect(picker).toBeHidden();
   await expect(
     page
       .getByRole("tabpanel", { name: "项目资料" })
+      .getByRole("listitem")
       .getByText(title, { exact: true }),
   ).toBeVisible();
   await page.getByRole("tab", { name: "项目动态", exact: true }).click();

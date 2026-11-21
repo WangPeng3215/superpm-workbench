@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as childProcess from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   existsSync,
@@ -24,6 +25,11 @@ import {
 } from "../src/services/updates";
 import { registerMcpProcess } from "../src/runtime/state";
 import { authedInject } from "./auth-helper";
+
+// 只固定进程身份查询的系统命令边界，保留真实 MCP 登记及更新流程。
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
+}));
 
 const directories: string[] = [];
 const apps: FastifyInstance[] = [];
@@ -142,6 +148,7 @@ async function expectDomainError(
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const app of apps.splice(0)) await app.close();
   for (const directory of directories)
     rmSync(directory, { recursive: true, force: true });
@@ -421,7 +428,23 @@ describe("更新安装", () => {
         heartbeatAt: "2026-01-01T00:00:00.000Z",
       }),
     );
+    const identity = {
+      startedAt: "2026-02-01T00:00:00.000Z",
+      executable: process.execPath,
+      commandLine: `"${process.execPath}" other-app.js`,
+    };
+    const inspect = vi
+      .spyOn(childProcess, "execFileSync")
+      .mockImplementation((_file, args) => {
+        if (process.platform === "win32") return JSON.stringify(identity);
+        const field = Array.isArray(args) ? args.at(-1) : undefined;
+        if (field === "lstart=") return identity.startedAt;
+        if (field === "comm=") return identity.executable;
+        if (field === "args=") return identity.commandLine;
+        throw new Error(`未预期的进程身份查询字段：${field}`);
+      });
     expect(service.status().mcpProcesses).toEqual([]);
+    expect(inspect).toHaveBeenCalled();
     expect(service.startInstall({ version: "0.3.0", force: false })).toEqual({
       accepted: true,
     });
@@ -432,6 +455,58 @@ describe("更新安装", () => {
     expect(launched).toHaveLength(1);
     expect(launched[0].args).not.toContain("--force");
   }, 45000);
+
+  it("历史 PID 身份查询超时时保留过期登记，阻止普通更新且不启动更新器", async () => {
+    const directory = tempDirectory();
+    const home = join(directory, "home");
+    const { calls, fetchImpl } = routeFetch(manifest());
+    const launchUpdater = vi.fn(() => ({ pid: 4321 }));
+    const service = createService(directory, {
+      home,
+      fetchImpl,
+      launchUpdater,
+    });
+    await service.check();
+    const registration = registerMcpProcess(home, {
+      version: "0.10.0",
+      schemaVersion: 12,
+      writeEnabled: false,
+    });
+    const old = "2026-01-01T00:00:00.000Z";
+    writeFileSync(
+      registration.path,
+      JSON.stringify({
+        ...registration.record,
+        startedAt: old,
+        heartbeatAt: old,
+      }),
+    );
+    const inspect = vi
+      .spyOn(childProcess, "execFileSync")
+      .mockImplementation(() => {
+        throw Object.assign(new Error("process identity query timed out"), {
+          code: "ETIMEDOUT",
+        });
+      });
+    expect(service.status().mcpProcesses).toEqual([
+      {
+        pid: process.pid,
+        version: "0.10.0",
+        startedAt: old,
+        heartbeatAt: old,
+        stale: true,
+      },
+    ]);
+    expect(inspect).toHaveBeenCalled();
+    await expectDomainError(
+      () => service.startInstall({ version: "0.3.0", force: false }),
+      "UPDATE_MCP_RUNNING",
+    );
+    expect(service.status().install).toBeNull();
+    expect(launchUpdater).not.toHaveBeenCalled();
+    expect(calls.filter((url) => url.endsWith(".zip"))).toHaveLength(0);
+    expect(existsSync(registration.path)).toBe(true);
+  });
 });
 
 describe("更新状态", () => {
